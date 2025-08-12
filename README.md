@@ -108,7 +108,7 @@ You can get the password to the editor using the command:
 bitswan workspace list --long --passwords
 ```
 
-You can put an editor behind a proxy like this
+You can use an OAuth2 authentication to access the editor
 
 ```sh
 bitswan workspace init --domain=bitswan.localhost --mkcerts dev-workspace --oauth-config <json-file>
