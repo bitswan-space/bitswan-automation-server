@@ -117,6 +117,24 @@ You can get the password to the editor using the command:
 bitswan workspace list --long --passwords
 ```
 
+You can use an OAuth2 authentication to access the editor
+
+```sh
+bitswan workspace init --domain=bitswan.localhost --mkcerts dev-workspace --oauth-config <json-file>
+```
+Example of json file
+```json
+{
+  "oauth_issuer_url": "<your-oauth-issuer-url>/realms/<yourrealm>",
+  "oauth_client_id": "<your-oauth=client-id>",
+  "oauth_client_secret": "<your-client-secret>",
+  "oauth_cookie_secret": "<your-cookie-secret>",
+  "oauth_email_domains": ["<you can use * to allow all domains>"],
+  "oauth_allowed_groups": ["<your-allowed-groups>"]
+}
+```
+
+
 ## Remote git repository
 
 If you wanna connect and persist your pipelines and GitOps configuration in remote git repository you can use `--remote` flag to specify your repository. `main` branch will be used to store pipelines code and each workspace will create it's own branch (e.g. `my-workspace`) to store their configurations.

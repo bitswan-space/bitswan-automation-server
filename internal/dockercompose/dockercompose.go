@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +24,7 @@ const (
 	Linux
 )
 
-func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string) (string, string, error) {
+func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, oauthConfig *oauth.Config) (string, string, error) {
 	sshDir := os.Getenv("HOME") + "/.ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -128,6 +129,30 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 				filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src/examples:/home/coder/workspace/examples:ro",
 				sshDir + ":/home/coder/.ssh:z",
 			},
+		}
+
+		if oauthConfig != nil {
+			oauthEnvVars := []string{
+				"OAUTH_ENABLED=true", // This is the trigger entrypoint script
+				"OAUTH2_PROXY_PROVIDER=keycloak-oidc",
+				"OAUTH2_PROXY_CLIENT_ID=" + oauthConfig.ClientId,
+				"OAUTH2_PROXY_CLIENT_SECRET=" + oauthConfig.ClientSecret,
+				"OAUTH2_PROXY_COOKIE_SECRET=" + oauthConfig.CookieSecret,
+				"OAUTH2_PROXY_OIDC_ISSUER_URL=" + oauthConfig.IssuerUrl,
+				"OAUTH2_PROXY_REDIRECT_URL=https://" + fmt.Sprintf("%s-editor", workspaceName) + "." + domain + "/oauth2/callback",
+				"OAUTH2_PROXY_EMAIL_DOMAINS=" + strings.Join(oauthConfig.EmailDomains, ","),
+				"OAUTH2_PROXY_OIDC_GROUPS_CLAIM=group_membership",
+				"OAUTH2_PROXY_SCOPE=openid email profile group_membership",
+				"OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
+				"OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
+			}
+
+			if len(oauthConfig.AllowedGroups) > 0 {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_ALLOWED_GROUPS="+strings.Join(oauthConfig.AllowedGroups, ","))
+			}
+
+			bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), oauthEnvVars...)
+
 		}
 
 		dockerCompose["services"].(map[string]interface{})["bitswan-editor"] = bitswanEditor
