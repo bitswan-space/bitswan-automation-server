@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
+	"strings"
+	"gopkg.in/yaml.v3"
 )
 
 type Route struct {
@@ -51,63 +54,34 @@ type TLSFileLoad struct {
 }
 
 func RegisterServiceWithCaddy(serviceName, workspaceName, domain, upstream string) error {
-	caddyAPIRoutesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/routes/..."
-
-	// Create the route for the service
-	route := Route{
-		ID: fmt.Sprintf("%s_%s", workspaceName, serviceName),
-		Match: []Match{
-			{
-				Host: []string{fmt.Sprintf("%s-%s.%s", workspaceName, serviceName, domain)},
-			},
-		},
-		Handle: []Handle{
-			{
-				Handler: "subroute",
-				Routes: []Route{
-					{
-						Handle: []Handle{
-							{
-								Handler: "reverse_proxy",
-								Upstreams: []Upstream{
-									{
-										Dial: upstream,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		Terminal: true,
-	}
-
-	// Marshal the route into JSON
-	jsonPayload, err := json.Marshal([]Route{route})
-	if err != nil {
-		return fmt.Errorf("failed to marshal route payload: %w", err)
-	}
-
-	// Send the payload to the Caddy API
-	_, err = sendRequest("POST", caddyAPIRoutesBaseUrl, jsonPayload)
-	if err != nil {
-		return fmt.Errorf("failed to add %s route to Caddy: %w", serviceName, err)
-	}
-
-	return nil
+	// Construct the hostname using the existing pattern
+	hostname := fmt.Sprintf("%s-%s.%s", workspaceName, serviceName, domain)
+	
+	// Use the new AddRoute function
+	return AddRoute(hostname, upstream)
 }
 
-func UnregisterCaddyService(serviceName, workspaceName string) error {
-	// Construct the URL for the specific service
-	url := fmt.Sprintf("http://localhost:2019/id/%s_%s", workspaceName, serviceName)
-
-	// Send a DELETE request to the Caddy API
-	if _, err := sendRequest("DELETE", url, nil); err != nil {
-		return fmt.Errorf("failed to unregister Caddy service '%s': %w", serviceName, err)
+func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
+	// First try the new approach using hostname if domain is provided
+	if domain != "" {
+		hostname := fmt.Sprintf("%s-%s.%s", workspaceName, serviceName, domain)
+		err := RemoveRoute(hostname)
+		if err == nil {
+			return nil
+		}
+		// If new approach fails, print warning and try old approach
+		fmt.Printf("Warning: failed to remove route using hostname %s, trying legacy format: %v\n", hostname, err)
 	}
-
-	fmt.Printf("Successfully unregistered Caddy service: %s\n", serviceName)
+	
+	// Fall back to old approach using the legacy ID format
+	legacyID := fmt.Sprintf("%s_%s", workspaceName, serviceName)
+	url := fmt.Sprintf("http://localhost:2019/id/%s", legacyID)
+	
+	if _, err := sendRequest("DELETE", url, nil); err != nil {
+		return fmt.Errorf("failed to unregister service '%s' using both new and legacy formats: %w", serviceName, err)
+	}
+	
+	fmt.Printf("Successfully unregistered service using legacy format: %s\n", serviceName)
 	return nil
 }
 
@@ -191,15 +165,147 @@ func InitCaddy() error {
 }
 
 func DeleteCaddyRecords(workspaceName string) error {
-	services := []string{"gitops", "editor", "tlspolicy", "tlscerts"}
-
-	for _, service := range services {
-		if err := UnregisterCaddyService(service, workspaceName); err != nil {
-			return fmt.Errorf("failed to delete Caddy records for service '%s': %w", service, err)
+	// First, try to get the domain from workspace metadata
+	// We need to import the config package for this to work
+	// For now, we'll handle this differently by checking if we can delete by service routes first
+	
+	// Try to delete service routes (gitops, editor) by constructing likely hostnames
+	// We'll use a more robust approach by deleting directly by the old ID format for TLS items
+	
+	// Delete service routes that follow hostname pattern
+	serviceRoutes := []string{"gitops", "editor"}
+	
+	// For service routes, we need the domain. Let's try to get it from metadata
+	metadataPath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName + "/metadata.yaml"
+	
+	// Read domain from metadata if available
+	var domain string
+	if data, err := os.ReadFile(metadataPath); err == nil {
+		// Parse YAML to extract domain using yaml.v3
+		var md struct {
+			Domain string `yaml:"domain"`
+		}
+		if err := yaml.Unmarshal(data, &md); err == nil {
+			domain = md.Domain
+		} else {
+			fmt.Printf("Warning: failed to parse %s: %v\n", metadataPath, err)
 		}
 	}
-
+	
+	// Delete service routes if we have a domain
+	if domain != "" {
+		for _, service := range serviceRoutes {
+			hostname := fmt.Sprintf("%s-%s.%s", workspaceName, service, domain)
+			if err := RemoveRoute(hostname); err != nil {
+				// Don't fail completely if one service route fails - it might not exist
+				fmt.Printf("Warning: failed to remove route for %s: %v\n", hostname, err)
+			}
+		}
+	}
+	
+	// Delete TLS-related items using the old direct ID approach
+	tlsItems := []string{"tlspolicy", "tlscerts"}
+	for _, item := range tlsItems {
+		url := fmt.Sprintf("http://localhost:2019/id/%s_%s", workspaceName, item)
+		if _, err := sendRequest("DELETE", url, nil); err != nil {
+			// Don't fail completely if TLS items fail - they might not exist
+			fmt.Printf("Warning: failed to delete %s: %v\n", item, err)
+		}
+	}
+	
 	return nil
+}
+
+// sanitizeHostname converts a hostname to a safe ID by replacing dots and special chars with underscores
+func sanitizeHostname(hostname string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(hostname, ".", "_"), "-", "_")
+}
+
+// AddRoute adds a generic route for any hostname to upstream mapping
+func AddRoute(hostname, upstream string) error {
+	caddyAPIRoutesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/routes/..."
+
+	// Create a sanitized ID for the route based on hostname
+	routeID := sanitizeHostname(hostname)
+
+	// Create the route for the hostname
+	route := Route{
+		ID: routeID,
+		Match: []Match{
+			{
+				Host: []string{hostname},
+			},
+		},
+		Handle: []Handle{
+			{
+				Handler: "subroute",
+				Routes: []Route{
+					{
+						Handle: []Handle{
+							{
+								Handler: "reverse_proxy",
+								Upstreams: []Upstream{
+									{
+										Dial: upstream,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Terminal: true,
+	}
+
+	// Marshal the route into JSON
+	jsonPayload, err := json.Marshal([]Route{route})
+	if err != nil {
+		return fmt.Errorf("failed to marshal route payload: %w", err)
+	}
+
+	// Send the payload to the Caddy API
+	_, err = sendRequest("POST", caddyAPIRoutesBaseUrl, jsonPayload)
+	if err != nil {
+		return fmt.Errorf("failed to add route for %s to Caddy: %w", hostname, err)
+	}
+
+	fmt.Printf("Successfully added route: %s -> %s\n", hostname, upstream)
+	return nil
+}
+
+// RemoveRoute removes a route by hostname
+func RemoveRoute(hostname string) error {
+	// Create a sanitized ID for the route based on hostname
+	routeID := sanitizeHostname(hostname)
+	
+	// Construct the URL for the specific route
+	url := fmt.Sprintf("http://localhost:2019/id/%s", routeID)
+
+	// Send a DELETE request to the Caddy API
+	if _, err := sendRequest("DELETE", url, nil); err != nil {
+		return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
+	}
+
+	fmt.Printf("Successfully removed route: %s\n", hostname)
+	return nil
+}
+
+// ListRoutes retrieves and lists all current routes from Caddy
+func ListRoutes() ([]Route, error) {
+	url := "http://localhost:2019/config/apps/http/servers/srv0/routes"
+	
+	responseBody, err := sendRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get routes from Caddy API: %w", err)
+	}
+	
+	var routes []Route
+	if err := json.Unmarshal(responseBody, &routes); err != nil {
+		return nil, fmt.Errorf("failed to parse routes response: %w", err)
+	}
+	
+	return routes, nil
 }
 
 func sendRequest(method, url string, payload []byte) ([]byte, error) {
@@ -222,7 +328,7 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request", resp.StatusCode)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("Caddy API returned status code %d", resp.StatusCode)
 	}
 

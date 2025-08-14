@@ -180,7 +180,7 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 	return buf.String(), gitopsSecretToken, nil
 }
 
-func CreateCaddyDockerComposeFile(caddyPath, domain string) (string, error) {
+func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 	caddyVolumes := []string{
 		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
 		caddyPath + "/data:/data:z",

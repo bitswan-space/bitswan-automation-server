@@ -18,7 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bitswan-space/bitswan-workspaces/cmd/caddy"
+	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
@@ -460,7 +460,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	}
 
 	if !caddy_running {
-		err = caddy.InitCaddy(o.domain, o.verbose)
+		err = ingress.InitIngress(o.verbose)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
