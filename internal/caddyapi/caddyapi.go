@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"gopkg.in/yaml.v3"
 )
 
 type Route struct {
@@ -180,17 +181,14 @@ func DeleteCaddyRecords(workspaceName string) error {
 	// Read domain from metadata if available
 	var domain string
 	if data, err := os.ReadFile(metadataPath); err == nil {
-		// Simple YAML parsing to extract domain
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), "domain:") {
-				parts := strings.Split(line, ":")
-				if len(parts) >= 2 {
-					domain = strings.TrimSpace(strings.Join(parts[1:], ":"))
-					domain = strings.Trim(domain, `"'`) // Remove quotes if present
-					break
-				}
-			}
+		// Parse YAML to extract domain using yaml.v3
+		var md struct {
+			Domain string `yaml:"domain"`
+		}
+		if err := yaml.Unmarshal(data, &md); err == nil {
+			domain = md.Domain
+		} else {
+			fmt.Printf("Warning: failed to parse %s: %v\n", metadataPath, err)
 		}
 	}
 	
