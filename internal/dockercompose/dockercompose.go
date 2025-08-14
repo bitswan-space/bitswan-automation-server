@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +24,8 @@ const (
 	Linux
 )
 
-func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, gitopsDevSourceDir string) (string, string, error) {
+
+func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, oauthConfig *oauth.Config, gitopsDevSourceDir string) (string, string, error) {
 	sshDir := os.Getenv("HOME") + "/.ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -48,9 +50,9 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 		"hostname": workspaceName + "-gitops",
 		"networks": []string{"bitswan_network"},
 		"volumes": []string{
-			gitopsPath + "/gitops:/gitops/gitops",
-			gitopsPath + "/secrets:/gitops/secrets",
-			sshDir + ":/root/.ssh",
+			gitopsPath + "/gitops:/gitops/gitops:z",
+			gitopsPath + "/secrets:/gitops/secrets:z",
+			sshDir + ":/root/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
 		},
 		"environment": []string{
@@ -80,8 +82,8 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 
 	if hostOs == WindowsMac {
 		gitopsVolumes := []string{
-			gitConfig + ":/root/.gitconfig",
-			gitopsPath + "/workspace/.git:/workspace-repo/.git",
+			gitConfig + ":/root/.gitconfig:z",
+			gitopsPath + "/workspace/.git:/workspace-repo/.git:z",
 		}
 
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
@@ -128,12 +130,36 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 				"BITSWAN_GITOPS_DIR=/home/coder/workspace",
 			},
 			"volumes": []string{
-				gitopsPath + "/workspace:/home/coder/workspace/workspace",
-				gitopsPath + "/secrets:/home/coder/workspace/secrets",
-				gitopsPath + "/codeserver-config:/home/coder/.config/code-server/",
+				gitopsPath + "/workspace:/home/coder/workspace/workspace:z",
+				gitopsPath + "/secrets:/home/coder/workspace/secrets:z",
+				gitopsPath + "/codeserver-config:/home/coder/.config/code-server/:z",
 				filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src/examples:/home/coder/workspace/examples:ro",
-				sshDir + ":/home/coder/.ssh",
+				sshDir + ":/home/coder/.ssh:z",
 			},
+		}
+
+		if oauthConfig != nil {
+			oauthEnvVars := []string{
+				"OAUTH_ENABLED=true", // This is the trigger entrypoint script
+				"OAUTH2_PROXY_PROVIDER=keycloak-oidc",
+				"OAUTH2_PROXY_CLIENT_ID=" + oauthConfig.ClientId,
+				"OAUTH2_PROXY_CLIENT_SECRET=" + oauthConfig.ClientSecret,
+				"OAUTH2_PROXY_COOKIE_SECRET=" + oauthConfig.CookieSecret,
+				"OAUTH2_PROXY_OIDC_ISSUER_URL=" + oauthConfig.IssuerUrl,
+				"OAUTH2_PROXY_REDIRECT_URL=https://" + fmt.Sprintf("%s-editor", workspaceName) + "." + domain + "/oauth2/callback",
+				"OAUTH2_PROXY_EMAIL_DOMAINS=" + strings.Join(oauthConfig.EmailDomains, ","),
+				"OAUTH2_PROXY_OIDC_GROUPS_CLAIM=group_membership",
+				"OAUTH2_PROXY_SCOPE=openid email profile group_membership",
+				"OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
+				"OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
+			}
+
+			if len(oauthConfig.AllowedGroups) > 0 {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_ALLOWED_GROUPS="+strings.Join(oauthConfig.AllowedGroups, ","))
+			}
+
+			bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), oauthEnvVars...)
+
 		}
 
 		dockerCompose["services"].(map[string]interface{})["bitswan-editor"] = bitswanEditor
@@ -156,10 +182,10 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 
 func CreateCaddyDockerComposeFile(caddyPath, domain string) (string, error) {
 	caddyVolumes := []string{
-		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile",
-		caddyPath + "/data:/data",
-		caddyPath + "/config:/config",
-		caddyPath + "/certs:/tls",
+		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
+		caddyPath + "/data:/data:z",
+		caddyPath + "/config:/config:z",
+		caddyPath + "/certs:/tls:z",
 	}
 
 	// Construct the docker-compose data structure

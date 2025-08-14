@@ -8,3 +8,6 @@ manpages/
 dist/
 completions/
 .go
+
+# for Intellij PyCharm IDE
+/.idea/

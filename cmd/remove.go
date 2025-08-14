@@ -180,7 +180,11 @@ func removeGitops(workspaceName string) error {
 			skipAutomationRemoval = true
 			automationSet = nil // Clear the set since we couldn't fetch it
 		} else {
-			return fmt.Errorf("error retrieving automation list: %w", err)
+			// For any other error (including connection issues, malformed URLs, etc.), 
+			// just skip automation removal and continue with the process
+			fmt.Printf("Warning: Cannot connect to workspace to retrieve automations (%v). Continuing with removal process.\n", err)
+			skipAutomationRemoval = true
+			automationSet = nil // Clear the set since we couldn't fetch it
 		}
 	}
 

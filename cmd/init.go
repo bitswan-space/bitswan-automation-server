@@ -22,21 +22,23 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/spf13/cobra"
 )
 
 type initOptions struct {
-	remoteRepo        string
-	domain            string
-	certsDir          string
-	verbose           bool
-	mkCerts           bool
-	noIde             bool
-	setHosts          bool
-	local             bool
-	gitopsImage       string
-	editorImage       string
+	remoteRepo         string
+	domain             string
+	certsDir           string
+	verbose            bool
+	mkCerts            bool
+	noIde              bool
+	setHosts           bool
+	local              bool
+	gitopsImage        string
+	editorImage        string
 	gitopsDevSourceDir string
+	oauthConfigFile    string
 }
 
 type DockerNetwork struct {
@@ -89,7 +91,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
-
+	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
 	return cmd
 }
 
@@ -427,6 +429,15 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var oauthConfig *oauth.Config
+	if o.oauthConfigFile != "" {
+		oauthConfig, err = oauth.GetInitOauthConfig(o.oauthConfigFile)
+		if err != nil {
+			return fmt.Errorf("failed to get OAuth config: %w", err)
+		}
+		fmt.Println("OAuth config read successfully!")
+	}
+
 	// Init shared Caddy if not exists
 	caddyConfig := bitswanConfig + "caddy"
 
@@ -603,6 +614,17 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	secretsDir := gitopsConfig + "/secrets"
 	if err := os.MkdirAll(secretsDir, 0700); err != nil {
 		return fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+
+	if oauthConfig != nil {
+		oauthConfigFile := secretsDir + "/oauth-config.yaml"
+		oauthConfigYaml, err := yaml.Marshal(oauthConfig)
+		if err != nil {
+			return fmt.Errorf("failed to marshal OAuth config: %w", err)
+		}
+		if err := os.WriteFile(oauthConfigFile, oauthConfigYaml, 0600); err != nil {
+			return fmt.Errorf("failed to write oauth config file: %w", err)
+		}
 	}
 
 	hostOsTmp := runtime.GOOS
@@ -819,6 +841,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		mqttEnvVars,
 		aocEnvVars,
 		o.gitopsDevSourceDir,
+		oauthConfig,
 	)
 
 	if err != nil {
@@ -855,7 +878,6 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	// Get Bitswan Editor password from container
 	if !o.noIde {
 		fmt.Println("Downloading and installing editor...")
-		// Register GitOps service
 		if err := caddyapi.RegisterServiceWithCaddy("editor", workspaceName, o.domain, fmt.Sprintf("%s-editor:9999", workspaceName)); err != nil {
 			return fmt.Errorf("failed to register Editor service with caddy: %w", err)
 		}
@@ -863,19 +885,27 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		if err := dockercompose.WaitForEditorReady(workspaceName); err != nil {
 			panic(fmt.Errorf("failed to wait for editor to be ready: %w", err))
 		}
-		editorPassword, err := dockercompose.GetEditorPassword(workspaceName)
-		if err != nil {
-			panic(fmt.Errorf("Failed to get Bitswan Editor password: %w", err))
-		}
+
 		fmt.Println("------------BITSWAN EDITOR INFO------------")
 		fmt.Printf("Bitswan Editor URL: https://%s-editor.%s\n", workspaceName, o.domain)
-		fmt.Printf("Bitswan Editor Password: %s\n", editorPassword)
+
+		if oauthConfig == nil {
+			editorPassword, err := dockercompose.GetEditorPassword(workspaceName)
+			if err != nil {
+				return fmt.Errorf("failed to get Bitswan Editor password: %w", err)
+			}
+			fmt.Printf("Bitswan Editor Password: %s\n", editorPassword)
+		}
 	}
 
 	fmt.Println("------------GITOPS INFO------------")
 	fmt.Printf("GitOps ID: %s\n", workspaceName)
 	fmt.Printf("GitOps URL: https://%s-gitops.%s\n", workspaceName, o.domain)
 	fmt.Printf("GitOps Secret: %s\n", token)
+
+	if oauthConfig != nil {
+		fmt.Printf("OAuth is enabled for the Editor.\n")
+	}
 
 	return nil
 }

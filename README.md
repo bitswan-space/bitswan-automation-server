@@ -1,7 +1,7 @@
-# bitswan-workspaces
+# Bitswan Automation Server
 
 <div align="center">
-CLI app for managing bitswan automation server and workspace deployments
+CLI app and daemon for managing bitswan automation server and workspace deployments
 <br>
 <br>
 <img src="https://github.com/bitswan-space/bitswan-workspaces/actions/workflows/test.yml/badge.svg" alt="drawing"/>
@@ -16,6 +16,8 @@ CLI app for managing bitswan automation server and workspace deployments
 <!--ts-->
    * [bitswan-workspaces](#bitswan-workspaces)
    * [Features](#features)
+   * [Prerequisites](#prerequisites)
+   * [Installation](#installation) 
    * [Contribute](#contribute)
 
 <!--te-->
@@ -25,20 +27,27 @@ CLI app for managing bitswan automation server and workspace deployments
 - Deployments can either connect to the bitswan.space SaaS, use the on prem bitswan management tools or operate completely independently
 
 
+Prerequisites
+--------------
+Before installation, make sure you have installed `Docker` and `Docker compose`. Installation guides can be found on these links :
+
+- [Docker](https://docs.docker.com/engine/install/)
+- [Docker compose](https://docs.docker.com/compose/install/)
+
 # Installation
 ## Linux / WSL
 ```
-LATEST_VERSION=$(curl -s https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
 curl -L "https://github.com/bitswan-space/bitswan-workspaces/releases/download/${LATEST_VERSION}/bitswan-workspaces_${LATEST_VERSION}_linux_amd64.tar.gz" | tar -xz
 ```
 ## MacOS (Apple Sillicon M1+)
 ```
-LATEST_VERSION=$(curl -s https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
 curl -L "https://github.com/bitswan-space/bitswan-workspaces/releases/download/${LATEST_VERSION}/bitswan-workspaces_${LATEST_VERSION}_darwin_arm64.tar.gz" | tar -xz
 ```
 ## MacOS (Intel-based)
 ```
-LATEST_VERSION=$(curl -s https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
 curl -L "https://github.com/bitswan-space/bitswan-workspaces/releases/download/${LATEST_VERSION}/bitswan-workspaces_${LATEST_VERSION}_darwin_amd64.tar.gz" | tar -xz
 ```
 
@@ -107,6 +116,24 @@ You can get the password to the editor using the command:
 ```sh
 bitswan workspace list --long --passwords
 ```
+
+You can use an OAuth2 authentication to access the editor
+
+```sh
+bitswan workspace init --domain=bitswan.localhost --mkcerts dev-workspace --oauth-config <json-file>
+```
+Example of json file
+```json
+{
+  "oauth_issuer_url": "<your-oauth-issuer-url>/realms/<yourrealm>",
+  "oauth_client_id": "<your-oauth=client-id>",
+  "oauth_client_secret": "<your-client-secret>",
+  "oauth_cookie_secret": "<your-cookie-secret>",
+  "oauth_email_domains": ["<you can use * to allow all domains>"],
+  "oauth_allowed_groups": ["<your-allowed-groups>"]
+}
+```
+
 
 ## Remote git repository
 
