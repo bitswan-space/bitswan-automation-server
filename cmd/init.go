@@ -840,8 +840,8 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		o.noIde,
 		mqttEnvVars,
 		aocEnvVars,
-		o.gitopsDevSourceDir,
 		oauthConfig,
+		o.gitopsDevSourceDir,
 	)
 
 	if err != nil {
