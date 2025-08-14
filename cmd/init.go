@@ -37,6 +37,7 @@ type initOptions struct {
 	local              bool
 	gitopsImage        string
 	editorImage        string
+	gitopsDevSourceDir string
 	oauthConfigFile    string
 }
 
@@ -52,16 +53,17 @@ type DockerNetwork struct {
 }
 
 type MetadataInit struct {
-	Domain       string  `yaml:"domain"`
-	EditorURL    *string `yaml:"editor-url,omitempty"`
-	GitopsURL    string  `yaml:"gitops-url"`
-	GitopsSecret string  `yaml:"gitops-secret"`
-	WorkspaceId  *string `yaml:"workspace_id,omitempty"`
-	MqttUsername *int    `yaml:"mqtt_username,omitempty"`
-	MqttPassword *string `yaml:"mqtt_password,omitempty"`
-	MqttBroker   *string `yaml:"mqtt_broker,omitempty"`
-	MqttPort     *int    `yaml:"mqtt_port,omitempty"`
-	MqttTopic    *string `yaml:"mqtt_topic,omitempty"`
+	Domain             string  `yaml:"domain"`
+	EditorURL          *string `yaml:"editor-url,omitempty"`
+	GitopsURL          string  `yaml:"gitops-url"`
+	GitopsSecret       string  `yaml:"gitops-secret"`
+	WorkspaceId        *string `yaml:"workspace_id,omitempty"`
+	MqttUsername       *int    `yaml:"mqtt_username,omitempty"`
+	MqttPassword       *string `yaml:"mqtt_password,omitempty"`
+	MqttBroker         *string `yaml:"mqtt_broker,omitempty"`
+	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
+	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
+	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
 }
 
 func defaultInitOptions() *initOptions {
@@ -88,6 +90,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.local, "local", false, "Automatically use flag --set-hosts and --mkcerts. If no domain is set defaults to bs-<workspacename>.localhost")
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
+	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
 	return cmd
 }
@@ -328,7 +331,7 @@ func setHosts(workspaceName string, o *initOptions) error {
 }
 
 // After displaying the information, save it to metadata.yaml
-func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string) error {
+func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir string) error {
 	metadata := MetadataInit{
 		Domain:       domain,
 		GitopsURL:    fmt.Sprintf("https://%s-gitops.%s", workspaceName, domain),
@@ -370,6 +373,11 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 	if !noIde {
 		editorURL := fmt.Sprintf("https://%s-editor.%s", workspaceName, domain)
 		metadata.EditorURL = &editorURL
+	}
+
+	// Add GitOps dev source directory if provided
+	if gitopsDevSourceDir != "" {
+		metadata.GitopsDevSourceDir = &gitopsDevSourceDir
 	}
 
 	// Marshal to YAML
@@ -833,6 +841,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		mqttEnvVars,
 		aocEnvVars,
 		oauthConfig,
+		o.gitopsDevSourceDir,
 	)
 
 	if err != nil {
@@ -852,7 +861,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	fmt.Println("GitOps deployment set up successfully!")
 
 	// Save metadata to file
-	if err := saveMetadata(gitopsConfig, workspaceName, token, o.domain, o.noIde, &workspaceId, mqttEnvVars); err != nil {
+	if err := saveMetadata(gitopsConfig, workspaceName, token, o.domain, o.noIde, &workspaceId, mqttEnvVars, o.gitopsDevSourceDir); err != nil {
 		fmt.Printf("Warning: Failed to save metadata: %v\n", err)
 	}
 

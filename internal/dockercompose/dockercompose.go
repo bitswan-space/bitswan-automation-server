@@ -24,7 +24,8 @@ const (
 	Linux
 )
 
-func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, oauthConfig *oauth.Config) (string, string, error) {
+
+func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, oauthConfig *oauth.Config, gitopsDevSourceDir string) (string, string, error) {
 	sshDir := os.Getenv("HOME") + "/.ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -68,9 +69,15 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), aocEnvVars...)
 	}
 
-	// Append AOC env variables when workspace is registered as an automation server
+	// Append MQTT env variables when workspace is registered as an automation server
 	if len(mqttEnvVars) > 0 {
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), mqttEnvVars...)
+	}
+
+	// Add dev source directory volume mount and DEBUG env var if provided
+	if gitopsDevSourceDir != "" {
+		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsDevSourceDir+":/src:z")
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), "DEBUG=true")
 	}
 
 	if hostOs == WindowsMac {

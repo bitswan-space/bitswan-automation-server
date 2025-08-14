@@ -157,7 +157,12 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 		
 	// Rewrite the docker-compose file
 	noIde := metadata.EditorURL == nil
-	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, bitswanEditorImage, metadata.Domain, noIde, mqttEnvVars, aocEnvVars, oauthConfig)
+	var gitopsDevSourceDir string
+	if metadata.GitopsDevSourceDir != nil {
+		gitopsDevSourceDir = *metadata.GitopsDevSourceDir
+	}
+	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, bitswanEditorImage, metadata.Domain, noIde, mqttEnvVars, aocEnvVars, oauthConfig, gitopsDevSourceDir)
+  
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
