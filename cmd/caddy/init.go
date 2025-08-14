@@ -9,7 +9,6 @@ import (
 )
 
 func newInitCmd() *cobra.Command {
-	var domain string
 	var verbose bool
 
 	cmd := &cobra.Command{
@@ -19,17 +18,14 @@ func newInitCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Print deprecation warning to STDERR
 			fmt.Fprintln(os.Stderr, "WARNING: The 'caddy init' command is deprecated and will be removed in a future version. Please use 'ingress init' instead.")
-			if err := ingress.InitIngress(domain, verbose); err != nil {
+			if err := ingress.InitIngress(verbose); err != nil {
 				return fmt.Errorf("failed to initialize Caddy: %w", err)
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&domain, "domain", "", "The domain to use for the Caddyfile")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
-
-	cmd.MarkFlagRequired("domain")
 
 	return cmd
 }

@@ -15,7 +15,6 @@ import (
 )
 
 func newInitCmd() *cobra.Command {
-	var domain string
 	var verbose bool
 
 	cmd := &cobra.Command{
@@ -23,17 +22,14 @@ func newInitCmd() *cobra.Command {
 		Short: "Initializes an ingress proxy",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := InitIngress(domain, verbose); err != nil {
+			if err := InitIngress(verbose); err != nil {
 				return fmt.Errorf("failed to initialize ingress: %w", err)
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&domain, "domain", "", "The domain to use for the ingress configuration")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
-
-	cmd.MarkFlagRequired("domain")
 
 	return cmd
 }
@@ -106,7 +102,7 @@ func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
 	}
 }
 
-func InitIngress(domain string, verbose bool) error {
+func InitIngress(verbose bool) error {
 	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
 	caddyConfig := bitswanConfig + "caddy"
 	caddyCertsDir := caddyConfig + "/certs"
@@ -128,7 +124,7 @@ func InitIngress(domain string, verbose bool) error {
 		panic(fmt.Errorf("failed to write Caddyfile: %w", err))
 	}
 
-	caddyDockerCompose, err := dockercompose.CreateCaddyDockerComposeFile(caddyConfig, domain)
+	caddyDockerCompose, err := dockercompose.CreateCaddyDockerComposeFile(caddyConfig)
 	if err != nil {
 		panic(fmt.Errorf("failed to create ingress docker-compose file: %w", err))
 	}

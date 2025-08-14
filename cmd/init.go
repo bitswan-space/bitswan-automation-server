@@ -441,7 +441,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	}
 
 	if !caddy_running {
-		err = ingress.InitIngress(o.domain, o.verbose)
+		err = ingress.InitIngress(o.verbose)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
