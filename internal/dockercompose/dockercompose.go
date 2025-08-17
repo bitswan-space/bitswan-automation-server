@@ -1,16 +1,10 @@
 package dockercompose
 
 import (
-	"bufio"
 	"bytes"
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
-	"strings"
-	"time"
 
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
@@ -23,7 +17,7 @@ const (
 	Linux
 )
 
-func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string) (string, string, error) {
+func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, domain string, mqttEnvVars []string, aocEnvVars []string) (string, string, error) {
 	sshDir := os.Getenv("HOME") + "/.ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -110,32 +104,6 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 		},
 	}
 
-	if !noIde {
-		bitswanEditor := map[string]interface{}{
-			"image":    bitswanEditorImage,
-			"restart":  "always",
-			"hostname": workspaceName + "-editor",
-			"networks": []string{"bitswan_network"},
-			"environment": []string{
-				"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
-				"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
-				"BITSWAN_GITOPS_DIR=/home/coder/workspace",
-			},
-			"volumes": []string{
-				gitopsPath + "/workspace:/home/coder/workspace/workspace:z",
-				gitopsPath + "/secrets:/home/coder/workspace/secrets:z",
-				gitopsPath + "/codeserver-config:/home/coder/.config/code-server/:z",
-				filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src/examples:/home/coder/workspace/examples:ro",
-				sshDir + ":/home/coder/.ssh:z",
-			},
-		}
-
-		dockerCompose["services"].(map[string]interface{})["bitswan-editor"] = bitswanEditor
-		dockerCompose["volumes"] = map[string]interface{}{
-			"bitswan-editor-data": nil,
-		}
-	}
-
 	var buf bytes.Buffer
 
 	// Serialize the docker-compose data structure to YAML and write it to the file
@@ -189,70 +157,4 @@ func CreateCaddyDockerComposeFile(caddyPath, domain string) (string, error) {
 	return buf.String(), nil
 }
 
-type EditorConfig struct {
-	BindAddress string `yaml:"bind-addr"`
-	Auth        string `yaml:"auth"`
-	Password    string `yaml:"password"`
-	Cert        bool   `yaml:"cert"`
-}
 
-func GetEditorPassword(workspaceName string) (string, error) {
-	// Once the editor is ready, get the password
-	getBitswanEditorPasswordCom := exec.Command("docker", "exec", workspaceName+"-site-bitswan-editor-1", "cat", "/home/coder/.config/code-server/config.yaml")
-	out, err := getBitswanEditorPasswordCom.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get Bitswan Editor password: %w", err)
-	}
-
-	var editorConfig EditorConfig
-	if err := yaml.Unmarshal(out, &editorConfig); err != nil {
-		return "", fmt.Errorf("failed to unmarshal editor config: %w", err)
-	}
-
-	return editorConfig.Password, nil
-}
-
-func WaitForEditorReady(workspaceName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "docker", "compose", "-p", workspaceName+"-site", "logs", "-f", "bitswan-editor")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start docker compose logs command: %w", err)
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	readyChan := make(chan struct{})
-
-	go func() {
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "HTTP server listening on") {
-				close(readyChan)
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-readyChan:
-		// Server is ready, kill the log streaming process
-		if err := cmd.Process.Kill(); err != nil {
-			// Just log this error, don't fail the function
-			fmt.Printf("Warning: failed to kill log streaming process: %v\n", err)
-		}
-		return nil
-	case <-ctx.Done():
-		// Timeout or cancellation
-		if err := cmd.Process.Kill(); err != nil {
-			fmt.Printf("Warning: failed to kill log streaming process: %v\n", err)
-		}
-		return fmt.Errorf("timeout waiting for editor server to be ready")
-	}
-}

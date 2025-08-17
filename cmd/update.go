@@ -69,14 +69,7 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 		gitopsImage = "bitswan/gitops:" + gitopsLatestVersion
 	}
 
-	bitswanEditorImage := o.editorImage
-	if o.editorImage == "" {
-		bitswanEditorLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor/tags/")
-		if err != nil {
-			panic(fmt.Errorf("failed to get latest BitSwan Editor version: %w", err))
-		}
-		bitswanEditorImage = "bitswan/bitswan-editor:" + bitswanEditorLatestVersion
-	}
+
 
 	gitopsConfig := filepath.Join(bitswanPath, "workspaces/", workspaceName)
 
@@ -149,8 +142,7 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 	}
 
 	// Rewrite the docker-compose file
-	noIde := metadata.EditorURL == nil
-	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, bitswanEditorImage, metadata.Domain, noIde, mqttEnvVars, aocEnvVars)
+	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, metadata.Domain, mqttEnvVars, aocEnvVars)
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
