@@ -12,7 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
-	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/spf13/cobra"
 )
@@ -70,14 +69,7 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 		gitopsImage = "bitswan/gitops:" + gitopsLatestVersion
 	}
 
-	bitswanEditorImage := o.editorImage
-	if o.editorImage == "" {
-		bitswanEditorLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor/tags/")
-		if err != nil {
-			panic(fmt.Errorf("failed to get latest BitSwan Editor version: %w", err))
-		}
-		bitswanEditorImage = "bitswan/bitswan-editor:" + bitswanEditorLatestVersion
-	}
+
 
 	gitopsConfig := filepath.Join(bitswanPath, "workspaces/", workspaceName)
 
@@ -150,19 +142,13 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 	}
 
 
-	oauthConfig, err := oauth.GetOauthConfig(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to get OAuth config: %w", err)
-	}
-		
 	// Rewrite the docker-compose file
-	noIde := metadata.EditorURL == nil
 	var gitopsDevSourceDir string
 	if metadata.GitopsDevSourceDir != nil {
 		gitopsDevSourceDir = *metadata.GitopsDevSourceDir
 	}
-	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, bitswanEditorImage, metadata.Domain, noIde, mqttEnvVars, aocEnvVars, oauthConfig, gitopsDevSourceDir)
-  
+
+	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, metadata.Domain, mqttEnvVars, aocEnvVars, gitopsDevSourceDir)
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
