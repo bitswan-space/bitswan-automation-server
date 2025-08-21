@@ -66,7 +66,7 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + domain,
 			"BITSWAN_WORKSPACE_NAME=" + workspaceName,
-			"JUPYTER_SERVER_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1," + fmt.Sprintf("https://%s", domain),
+			"JUPYTER_SERVER_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1," + fmt.Sprintf("https://%s-editor.%s", workspaceName, domain),
 			"JUPYTER_SERVER_ENABLE_TOKEN_AUTH=true",
 			"JUPYTER_SERVER_DISABLE_XSRF_CHECK=false",
 			"JUPYTER_SERVER_ENABLE_REVERSE_PROXY=" + jupyterServerEnableReverseProxy,
