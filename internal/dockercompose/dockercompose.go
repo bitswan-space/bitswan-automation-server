@@ -25,7 +25,7 @@ const (
 )
 
 
-func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, oauthConfig *oauth.Config, gitopsDevSourceDir string) (string, string, error) {
+func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEditorImage, domain string, noIde bool, mqttEnvVars []string, aocEnvVars []string, oauthConfig *oauth.Config, gitopsDevSourceDir string, local bool) (string, string, error) {
 	sshDir := os.Getenv("HOME") + "/.ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -39,6 +39,11 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 		hostOs = Linux
 	default:
 		return "", "", fmt.Errorf("unsupported host OS: %s", hostOsTmp)
+	}
+
+	jupyterServerEnableReverseProxy := "false"
+	if !local {
+		jupyterServerEnableReverseProxy = "true"
 	}
 
 	// generate a random secret token
@@ -61,6 +66,10 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, bitswanEdit
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + domain,
 			"BITSWAN_WORKSPACE_NAME=" + workspaceName,
+			"JUPYTER_SERVER_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1," + fmt.Sprintf("https://%s", domain),
+			"JUPYTER_SERVER_ENABLE_TOKEN_AUTH=true",
+			"JUPYTER_SERVER_DISABLE_XSRF_CHECK=false",
+			"JUPYTER_SERVER_ENABLE_REVERSE_PROXY=" + jupyterServerEnableReverseProxy,
 		},
 	}
 
