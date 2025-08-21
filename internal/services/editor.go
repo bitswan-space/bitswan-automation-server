@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"gopkg.in/yaml.v3"
 )
@@ -394,4 +395,60 @@ func (e *EditorService) runCommand(cmd *exec.Cmd) error {
 		return fmt.Errorf("command failed: %w\nOutput: %s", err, string(output))
 	}
 	return nil
+}
+
+// UpdateImage updates the docker-compose-editor.yml file with a new image
+func (e *EditorService) UpdateImage(newImage string) error {
+	// Read the current docker-compose-editor.yml file
+	composePath := filepath.Join(e.WorkspacePath, "deployment", "docker-compose-editor.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fmt.Errorf("failed to read docker-compose-editor.yml: %w", err)
+	}
+	
+	// Parse the YAML
+	var compose map[string]interface{}
+	if err := yaml.Unmarshal(data, &compose); err != nil {
+		return fmt.Errorf("failed to parse docker-compose-editor.yml: %w", err)
+	}
+	
+	// Update the image in the bitswan-editor service
+	if services, ok := compose["services"].(map[string]interface{}); ok {
+		if editorService, ok := services["bitswan-editor"].(map[string]interface{}); ok {
+			editorService["image"] = newImage
+		} else {
+			return fmt.Errorf("bitswan-editor service not found in docker-compose-editor.yml")
+		}
+	} else {
+		return fmt.Errorf("services section not found in docker-compose-editor.yml")
+	}
+	
+	// Write the updated file back
+	updatedData, err := yaml.Marshal(compose)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated docker-compose: %w", err)
+	}
+	
+	if err := os.WriteFile(composePath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write updated docker-compose-editor.yml: %w", err)
+	}
+	
+	return nil
+}
+
+// UpdateToLatest updates the editor service to the latest version from DockerHub
+func (e *EditorService) UpdateToLatest() error {
+	// Get latest version from dockerhub
+	latestVersion, err := e.getLatestVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get latest version: %w", err)
+	}
+	
+	image := "bitswan/bitswan-editor:" + latestVersion
+	return e.UpdateImage(image)
+}
+
+// getLatestVersion gets the latest version from DockerHub
+func (e *EditorService) getLatestVersion() (string, error) {
+	return dockerhub.GetLatestEditorVersion()
 } 

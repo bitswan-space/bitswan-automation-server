@@ -24,6 +24,7 @@ func NewCouchDBCmd() *cobra.Command {
 	cmd.AddCommand(newCouchDBStatusCmd())
 	cmd.AddCommand(newCouchDBStartCmd())
 	cmd.AddCommand(newCouchDBStopCmd())
+	cmd.AddCommand(newCouchDBUpdateCmd())
 
 	return cmd
 }
@@ -82,6 +83,22 @@ func newCouchDBStopCmd() *cobra.Command {
 			return stopCouchDBContainer()
 		},
 	}
+}
+
+func newCouchDBUpdateCmd() *cobra.Command {
+	var couchdbImage string
+	
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update CouchDB service with new image",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return updateCouchDBService(couchdbImage)
+		},
+	}
+	
+	cmd.Flags().StringVar(&couchdbImage, "couchdb-image", "", "Custom image for CouchDB")
+	
+	return cmd
 }
 
 func enableCouchDBService() error {
@@ -247,4 +264,68 @@ func stopCouchDBContainer() error {
 	
 	// Stop the container
 	return couchdbService.StopContainer()
-} 
+}
+
+func updateCouchDBService(couchdbImage string) error {
+	// Get the active workspace
+	workspaceName, err := config.GetWorkspaceName()
+	if err != nil {
+		return fmt.Errorf("failed to get active workspace: %w", err)
+	}
+	
+	if workspaceName == "" {
+		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
+	}
+	
+	// Create CouchDB service manager
+	couchdbService, err := services.NewCouchDBService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create CouchDB service: %w", err)
+	}
+	
+	// Check if enabled
+	if !couchdbService.IsEnabled() {
+		return fmt.Errorf("CouchDB service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
+	}
+	
+	// Stop the current container
+	fmt.Println("Stopping current CouchDB container...")
+	if err := couchdbService.StopContainer(); err != nil {
+		return fmt.Errorf("failed to stop current CouchDB container: %w", err)
+	}
+	
+	// Update the service
+	if couchdbImage != "" {
+		// Use provided custom image
+		fmt.Printf("Updating CouchDB service with custom image: %s\n", couchdbImage)
+		if err := couchdbService.UpdateImage(couchdbImage); err != nil {
+			return fmt.Errorf("failed to update docker-compose file: %w", err)
+		}
+	} else {
+		// Update to latest version
+		fmt.Println("Updating CouchDB service to latest version...")
+		if err := couchdbService.UpdateToLatest(); err != nil {
+			return fmt.Errorf("failed to update to latest version: %w", err)
+		}
+	}
+	
+	// Start the container with new image
+	fmt.Println("Starting CouchDB container with new image...")
+	if err := couchdbService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start CouchDB container: %w", err)
+	}
+	
+	fmt.Println("✅ CouchDB service updated successfully!")
+	
+	// Show access information
+	if err := couchdbService.ShowAccessInfo(); err == nil {
+		// Try to get and show credentials
+		if err := couchdbService.ShowCredentials(); err == nil {
+			fmt.Println("Updated credentials:")
+		}
+	}
+	
+	return nil
+}
+
+ 

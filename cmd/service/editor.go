@@ -25,6 +25,7 @@ func NewEditorCmd() *cobra.Command {
 	cmd.AddCommand(newEditorStatusCmd())
 	cmd.AddCommand(newEditorStartCmd())
 	cmd.AddCommand(newEditorStopCmd())
+	cmd.AddCommand(newEditorUpdateCmd())
 
 	return cmd
 }
@@ -91,6 +92,22 @@ func newEditorStopCmd() *cobra.Command {
 			return stopEditorContainer()
 		},
 	}
+}
+
+func newEditorUpdateCmd() *cobra.Command {
+	var editorImage string
+	
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update Editor service with new image",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return updateEditorService(editorImage)
+		},
+	}
+	
+	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
+	
+	return cmd
 }
 
 func enableEditorService(editorImage, oauthConfigFile string) error {
@@ -330,4 +347,80 @@ func stopEditorContainer() error {
 	
 	// Stop the container
 	return editorService.StopContainer()
-} 
+}
+
+func updateEditorService(editorImage string) error {
+	// Get the active workspace
+	workspaceName, err := config.GetWorkspaceName()
+	if err != nil {
+		return fmt.Errorf("failed to get active workspace: %w", err)
+	}
+	
+	if workspaceName == "" {
+		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
+	}
+	
+	// Create Editor service manager
+	editorService, err := services.NewEditorService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create Editor service: %w", err)
+	}
+	
+	// Check if enabled
+	if !editorService.IsEnabled() {
+		return fmt.Errorf("Editor service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
+	}
+	
+	// Get metadata to verify workspace is properly initialized
+	_, err = editorService.GetMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to read workspace metadata. Make sure workspace is properly initialized: %w", err)
+	}
+	
+	// Stop the current container
+	fmt.Println("Stopping current editor container...")
+	if err := editorService.StopContainer(); err != nil {
+		return fmt.Errorf("failed to stop current editor container: %w", err)
+	}
+	
+	// Update the service
+	if editorImage != "" {
+		// Use provided custom image
+		fmt.Printf("Updating Editor service with custom image: %s\n", editorImage)
+		if err := editorService.UpdateImage(editorImage); err != nil {
+			return fmt.Errorf("failed to update docker-compose file: %w", err)
+		}
+	} else {
+		// Update to latest version
+		fmt.Println("Updating Editor service to latest version...")
+		if err := editorService.UpdateToLatest(); err != nil {
+			return fmt.Errorf("failed to update to latest version: %w", err)
+		}
+	}
+	
+	// Start the container with new image
+	fmt.Println("Starting editor container with new image...")
+	if err := editorService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start editor container: %w", err)
+	}
+	
+	// Wait for editor to be ready
+	fmt.Println("Waiting for editor to be ready...")
+	if err := editorService.WaitForEditorReady(); err != nil {
+		return fmt.Errorf("editor failed to start properly: %w", err)
+	}
+	
+	fmt.Println("✅ Editor service updated successfully!")
+	
+	// Show access information
+	if err := editorService.ShowAccessInfo(); err == nil {
+		// Try to get and show password
+		if password, err := editorService.GetEditorPassword(); err == nil {
+			fmt.Printf("Editor Password: %s\n", password)
+		}
+	}
+	
+	return nil
+}
+
+ 

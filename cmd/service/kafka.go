@@ -24,6 +24,7 @@ func NewKafkaCmd() *cobra.Command {
 	cmd.AddCommand(newKafkaStatusCmd())
 	cmd.AddCommand(newKafkaStartCmd())
 	cmd.AddCommand(newKafkaStopCmd())
+	cmd.AddCommand(newKafkaUpdateCmd())
 
 	return cmd
 }
@@ -82,6 +83,24 @@ func newKafkaStopCmd() *cobra.Command {
 			return stopKafkaContainer()
 		},
 	}
+}
+
+func newKafkaUpdateCmd() *cobra.Command {
+	var kafkaImage string
+	var zookeeperImage string
+	
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update Kafka service with new images",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return updateKafkaService(kafkaImage, zookeeperImage)
+		},
+	}
+	
+	cmd.Flags().StringVar(&kafkaImage, "kafka-image", "", "Custom image for Kafka")
+	cmd.Flags().StringVar(&zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
+	
+	return cmd
 }
 
 func enableKafkaService() error {
@@ -248,4 +267,83 @@ func stopKafkaContainer() error {
 	
 	// Stop the containers
 	return kafkaService.StopContainer()
-} 
+}
+
+func updateKafkaService(kafkaImage, zookeeperImage string) error {
+	// Get the active workspace
+	workspaceName, err := config.GetWorkspaceName()
+	if err != nil {
+		return fmt.Errorf("failed to get active workspace: %w", err)
+	}
+	
+	if workspaceName == "" {
+		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
+	}
+	
+	// Create Kafka service manager
+	kafkaService, err := services.NewKafkaService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create Kafka service: %w", err)
+	}
+	
+	// Check if enabled
+	if !kafkaService.IsEnabled() {
+		return fmt.Errorf("Kafka service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
+	}
+	
+	// Stop the current containers
+	fmt.Println("Stopping current Kafka containers...")
+	if err := kafkaService.StopContainer(); err != nil {
+		return fmt.Errorf("failed to stop current Kafka containers: %w", err)
+	}
+	
+	// Update the service
+	if kafkaImage != "" || zookeeperImage != "" {
+		// Use provided custom images
+		bitswanKafkaImage := kafkaImage
+		if bitswanKafkaImage == "" {
+			// For now, use latest when no custom image provided
+			bitswanKafkaImage = "bitswan/bitswan-kafka:latest"
+		}
+		
+		bitswanZookeeperImage := zookeeperImage
+		if bitswanZookeeperImage == "" {
+			// For now, use latest when no custom image provided
+			bitswanZookeeperImage = "bitswan/bitswan-zookeeper:latest"
+		}
+		
+		fmt.Printf("Updating Kafka service with custom images:\n")
+		fmt.Printf("  Kafka: %s\n", bitswanKafkaImage)
+		fmt.Printf("  Zookeeper: %s\n", bitswanZookeeperImage)
+		
+		if err := kafkaService.UpdateImages(bitswanKafkaImage, bitswanZookeeperImage); err != nil {
+			return fmt.Errorf("failed to update docker-compose file: %w", err)
+		}
+	} else {
+		// Update to latest versions
+		fmt.Println("Updating Kafka service to latest versions...")
+		if err := kafkaService.UpdateToLatest(); err != nil {
+			return fmt.Errorf("failed to update to latest versions: %w", err)
+		}
+	}
+	
+	// Start the containers with new images
+	fmt.Println("Starting Kafka containers with new images...")
+	if err := kafkaService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start Kafka containers: %w", err)
+	}
+	
+	fmt.Println("✅ Kafka service updated successfully!")
+	
+	// Show access information
+	if err := kafkaService.ShowAccessInfo(); err == nil {
+		// Try to get and show credentials
+		if err := kafkaService.ShowCredentials(); err == nil {
+			fmt.Println("Updated credentials:")
+		}
+	}
+	
+	return nil
+}
+
+ 
