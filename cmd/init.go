@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
+	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/spf13/cobra"
 )
 
@@ -51,6 +51,8 @@ type DockerNetwork struct {
 	Labels    string `json:"Labels"`
 	Scope     string `json:"Scope"`
 }
+
+
 
 type MetadataInit struct {
 	Domain             string  `yaml:"domain"`
@@ -627,31 +629,6 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	hostOsTmp := runtime.GOOS
-
-	if !o.noIde {
-		// Create codeserver config directory
-		codeserverConfigDir := gitopsConfig + "/codeserver-config"
-		if err := os.MkdirAll(codeserverConfigDir, 0700); err != nil {
-			return fmt.Errorf("failed to create codeserver config directory: %w", err)
-		}
-
-		if hostOsTmp == "linux" {
-			chownCom := exec.Command("sudo", "chown", "-R", "1000:1000", secretsDir)
-			if err := runCommandVerbose(chownCom, o.verbose); err != nil {
-				return fmt.Errorf("failed to change ownership of secrets folder: %w", err)
-			}
-			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", codeserverConfigDir)
-			if err := runCommandVerbose(chownCom, o.verbose); err != nil {
-				return fmt.Errorf("failed to change ownership of codeserver config folder: %w", err)
-			}
-			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", gitopsWorkspace)
-			if err := runCommandVerbose(chownCom, o.verbose); err != nil {
-				return fmt.Errorf("failed to change ownership of workspace folder: %w", err)
-			}
-		}
-	}
-
 	// Set hosts to /etc/hosts file
 	if o.setHosts {
 		err := setHosts(workspaceName, o)
@@ -835,12 +812,9 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		gitopsConfig,
 		workspaceName,
 		gitopsImage,
-		bitswanEditorImage,
 		o.domain,
-		o.noIde,
 		mqttEnvVars,
 		aocEnvVars,
-		oauthConfig,
 		o.gitopsDevSourceDir,
 	)
 
@@ -875,22 +849,38 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("BitSwan GitOps initialized successfully!")
 
-	// Get Bitswan Editor password from container
+	// Setup editor service if not disabled
 	if !o.noIde {
-		fmt.Println("Downloading and installing editor...")
-		if err := caddyapi.RegisterServiceWithCaddy("editor", workspaceName, o.domain, fmt.Sprintf("%s-editor:9999", workspaceName)); err != nil {
-			return fmt.Errorf("failed to register Editor service with caddy: %w", err)
+		fmt.Println("Setting up editor service...")
+		
+		// Create editor service
+		editorService, err := services.NewEditorService(workspaceName)
+		if err != nil {
+			return fmt.Errorf("failed to create editor service: %w", err)
 		}
-		// First, wait for the editor service to be ready by streaming logs
-		if err := dockercompose.WaitForEditorReady(workspaceName); err != nil {
+		
+		// Enable the editor service
+		if err := editorService.Enable(token, bitswanEditorImage, o.domain, oauthConfig); err != nil {
+			return fmt.Errorf("failed to enable editor service: %w", err)
+		}
+		
+		// Start the editor container
+		if err := editorService.StartContainer(); err != nil {
+			return fmt.Errorf("failed to start editor container: %w", err)
+		}
+		
+		fmt.Println("Downloading and installing editor...")
+		
+		// Wait for the editor service to be ready by streaming logs
+		if err := editorService.WaitForEditorReady(); err != nil {
 			panic(fmt.Errorf("failed to wait for editor to be ready: %w", err))
 		}
-
+		
 		fmt.Println("------------BITSWAN EDITOR INFO------------")
 		fmt.Printf("Bitswan Editor URL: https://%s-editor.%s\n", workspaceName, o.domain)
 
 		if oauthConfig == nil {
-			editorPassword, err := dockercompose.GetEditorPassword(workspaceName)
+			editorPassword, err := editorService.GetEditorPassword()
 			if err != nil {
 				return fmt.Errorf("failed to get Bitswan Editor password: %w", err)
 			}
@@ -909,3 +899,5 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
+
+

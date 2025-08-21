@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
 )
@@ -380,4 +381,60 @@ func (c *CouchDBService) ShowCredentials() error {
 	}
 	
 	return nil
+}
+
+// UpdateImage updates the docker-compose-couchdb.yml file with a new image
+func (c *CouchDBService) UpdateImage(newImage string) error {
+	// Read the current docker-compose-couchdb.yml file
+	composePath := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fmt.Errorf("failed to read docker-compose-couchdb.yml: %w", err)
+	}
+	
+	// Parse the YAML
+	var compose map[string]interface{}
+	if err := yaml.Unmarshal(data, &compose); err != nil {
+		return fmt.Errorf("failed to parse docker-compose-couchdb.yml: %w", err)
+	}
+	
+	// Update the image in the couchdb service
+	if services, ok := compose["services"].(map[string]interface{}); ok {
+		if couchdbService, ok := services["couchdb"].(map[string]interface{}); ok {
+			couchdbService["image"] = newImage
+		} else {
+			return fmt.Errorf("couchdb service not found in docker-compose-couchdb.yml")
+		}
+	} else {
+		return fmt.Errorf("services section not found in docker-compose-couchdb.yml")
+	}
+	
+	// Write the updated file back
+	updatedData, err := yaml.Marshal(compose)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated docker-compose: %w", err)
+	}
+	
+	if err := os.WriteFile(composePath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write updated docker-compose-couchdb.yml: %w", err)
+	}
+	
+	return nil
+}
+
+// UpdateToLatest updates the CouchDB service to the latest version from DockerHub
+func (c *CouchDBService) UpdateToLatest() error {
+	// Get latest version from dockerhub
+	latestVersion, err := c.getLatestVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get latest version: %w", err)
+	}
+	
+	image := "bitswan/bitswan-couchdb:" + latestVersion
+	return c.UpdateImage(image)
+}
+
+// getLatestVersion gets the latest version from DockerHub
+func (c *CouchDBService) getLatestVersion() (string, error) {
+	return dockerhub.GetLatestCouchDBVersion()
 } 
