@@ -842,6 +842,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		aocEnvVars,
 		oauthConfig,
 		o.gitopsDevSourceDir,
+		o.local,
 	)
 
 	if err != nil {

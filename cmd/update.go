@@ -12,14 +12,15 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
-	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/spf13/cobra"
 )
 
 type updateOptions struct {
 	gitopsImage string
 	editorImage string
+	local       bool
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -43,6 +44,7 @@ func newUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
+	cmd.Flags().BoolVar(&o.local, "local", false, "Run the workspace in local mode")
 
 	return cmd
 }
@@ -154,15 +156,15 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to get OAuth config: %w", err)
 	}
-		
+
 	// Rewrite the docker-compose file
 	noIde := metadata.EditorURL == nil
 	var gitopsDevSourceDir string
 	if metadata.GitopsDevSourceDir != nil {
 		gitopsDevSourceDir = *metadata.GitopsDevSourceDir
 	}
-	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, bitswanEditorImage, metadata.Domain, noIde, mqttEnvVars, aocEnvVars, oauthConfig, gitopsDevSourceDir)
-  
+	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, bitswanEditorImage, metadata.Domain, noIde, mqttEnvVars, aocEnvVars, oauthConfig, gitopsDevSourceDir, o.local)
+
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
