@@ -17,6 +17,7 @@ func NewServiceCmd() *cobra.Command {
 	// Add service-specific subcommands
 	cmd.AddCommand(NewCouchDBCmd())
 	cmd.AddCommand(NewKafkaCmd())
+	cmd.AddCommand(NewEditorCmd())
 
 	return cmd
 } 

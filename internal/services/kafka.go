@@ -12,6 +12,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
 )
@@ -521,4 +522,80 @@ func (k *KafkaService) ShowCredentials() error {
 	}
 	
 	return nil
+}
+
+// UpdateImages updates the docker-compose-kafka.yml file with new images
+func (k *KafkaService) UpdateImages(kafkaImage, zookeeperImage string) error {
+	// Read the current docker-compose-kafka.yml file
+	composePath := filepath.Join(k.WorkspacePath, "deployment", "docker-compose-kafka.yml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		return fmt.Errorf("failed to read docker-compose-kafka.yml: %w", err)
+	}
+	
+	// Parse the YAML
+	var compose map[string]interface{}
+	if err := yaml.Unmarshal(data, &compose); err != nil {
+		return fmt.Errorf("failed to parse docker-compose-kafka.yml: %w", err)
+	}
+	
+	// Update the images in the services
+	if services, ok := compose["services"].(map[string]interface{}); ok {
+		// Update Kafka image
+		if kafkaService, ok := services["kafka"].(map[string]interface{}); ok {
+			kafkaService["image"] = kafkaImage
+		} else {
+			return fmt.Errorf("kafka service not found in docker-compose-kafka.yml")
+		}
+		
+		// Update Zookeeper image
+		if zookeeperService, ok := services["zookeeper"].(map[string]interface{}); ok {
+			zookeeperService["image"] = zookeeperImage
+		} else {
+			return fmt.Errorf("zookeeper service not found in docker-compose-kafka.yml")
+		}
+	} else {
+		return fmt.Errorf("services section not found in docker-compose-kafka.yml")
+	}
+	
+	// Write the updated file back
+	updatedData, err := yaml.Marshal(compose)
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated docker-compose: %w", err)
+	}
+	
+	if err := os.WriteFile(composePath, updatedData, 0644); err != nil {
+		return fmt.Errorf("failed to write updated docker-compose-kafka.yml: %w", err)
+	}
+	
+	return nil
+}
+
+// UpdateToLatest updates the Kafka service to the latest versions from DockerHub
+func (k *KafkaService) UpdateToLatest() error {
+	// Get latest versions from dockerhub
+	kafkaVersion, err := k.getLatestKafkaVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get latest Kafka version: %w", err)
+	}
+	
+	zookeeperVersion, err := k.getLatestZookeeperVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get latest Zookeeper version: %w", err)
+	}
+	
+	kafkaImage := "bitswan/bitswan-kafka:" + kafkaVersion
+	zookeeperImage := "bitswan/bitswan-zookeeper:" + zookeeperVersion
+	
+	return k.UpdateImages(kafkaImage, zookeeperImage)
+}
+
+// getLatestKafkaVersion gets the latest Kafka version from DockerHub
+func (k *KafkaService) getLatestKafkaVersion() (string, error) {
+	return dockerhub.GetLatestKafkaVersion()
+}
+
+// getLatestZookeeperVersion gets the latest Zookeeper version from DockerHub
+func (k *KafkaService) getLatestZookeeperVersion() (string, error) {
+	return dockerhub.GetLatestZookeeperVersion()
 } 

@@ -37,3 +37,23 @@ func GetLatestDockerHubVersion(url string) (string, error) {
 	}
 	return "latest", errors.New("No valid version found")
 }
+
+// GetLatestEditorVersion gets the latest version of the bitswan-editor image
+func GetLatestEditorVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor/tags/")
+}
+
+// GetLatestKafkaVersion gets the latest version of the bitswan-kafka image
+func GetLatestKafkaVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-kafka/tags/")
+}
+
+// GetLatestZookeeperVersion gets the latest version of the bitswan-zookeeper image
+func GetLatestZookeeperVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-zookeeper/tags/")
+}
+
+// GetLatestCouchDBVersion gets the latest version of the bitswan-couchdb image
+func GetLatestCouchDBVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-couchdb/tags/")
+}

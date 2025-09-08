@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
+	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -55,9 +55,12 @@ func newListCmd() *cobra.Command {
 
 					if showPasswords {
 						// Get VSCode server password
-						vscodePassword, _ := dockercompose.GetEditorPassword(workspaceName)
-						if vscodePassword != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "  VSCode Password: %s\n", vscodePassword)
+						editorService, err := services.NewEditorService(workspaceName)
+						if err == nil {
+							vscodePassword, _ := editorService.GetEditorPassword()
+							if vscodePassword != "" {
+								fmt.Fprintf(cmd.OutOrStdout(), "  VSCode Password: %s\n", vscodePassword)
+							}
 						}
 
 						// Get GitOps secret
