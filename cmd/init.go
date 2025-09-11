@@ -780,14 +780,15 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Println("Automation server config not found, skipping workspace registration.")
 	}
 
-	compose, token, err := dockercompose.CreateDockerComposeFile(
-		gitopsConfig,
-		workspaceName,
-		gitopsImage,
-		o.domain,
-		mqttEnvVars,
-		aocEnvVars,
-	)
+	config := &dockercompose.DockerComposeConfig{
+		GitopsPath:    gitopsConfig,
+		WorkspaceName: workspaceName,
+		GitopsImage:   gitopsImage,
+		Domain:        o.domain,
+		MqttEnvVars:   mqttEnvVars,
+		AocEnvVars:    aocEnvVars,
+	}
+	compose, token, err := config.CreateDockerComposeFile()
 
 	if err != nil {
 		panic(fmt.Errorf("Failed to create docker-compose file: %w", err))

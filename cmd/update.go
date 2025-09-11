@@ -142,7 +142,15 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 	}
 
 	// Rewrite the docker-compose file
-	compose, _, err := dockercompose.CreateDockerComposeFile(gitopsConfig, workspaceName, gitopsImage, metadata.Domain, mqttEnvVars, aocEnvVars)
+	config := &dockercompose.DockerComposeConfig{
+		GitopsPath:    gitopsConfig,
+		WorkspaceName: workspaceName,
+		GitopsImage:   gitopsImage,
+		Domain:        metadata.Domain,
+		MqttEnvVars:   mqttEnvVars,
+		AocEnvVars:    aocEnvVars,
+	}
+	compose, _, err := config.CreateDockerComposeFile()
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
