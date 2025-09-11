@@ -30,7 +30,7 @@ type DockerComposeConfig struct {
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
 func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, error) {
-	sshDir := os.Getenv("HOME") + "/.ssh"
+	sshDir := config.GitopsPath + "/ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
 	hostOsTmp := runtime.GOOS
@@ -100,13 +100,6 @@ func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, er
 	} else if hostOs == Linux {
 		gitopsService["privileged"] = true
 		gitopsService["pid"] = "host"
-
-		gitopsEnvVars := []string{
-			"HOST_PATH=$PATH",
-			"HOST_HOME=$HOME",
-			"HOST_USER=$USER",
-		}
-		gitopsService["environment"] = append(gitopsService["environment"].([]string), gitopsEnvVars...)
 	}
 
 	// Construct the docker-compose data structure

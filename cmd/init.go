@@ -23,6 +23,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
+	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
 	"github.com/spf13/cobra"
 )
 
@@ -555,7 +556,40 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	// Initialize Bitswan workspace
 	gitopsWorkspace := gitopsConfig + "/workspace"
 	if o.remoteRepo != "" {
+		// Generate SSH key pair for the workspace before cloning
+		fmt.Println("Generating SSH key pair for workspace...")
+		sshKeyPair, err := ssh.GenerateSSHKeyPair(gitopsConfig)
+		if err != nil {
+			return fmt.Errorf("failed to generate SSH key pair: %w", err)
+		}
+		fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
+
+		// Display the public key and wait for user confirmation
+		fmt.Println("\n" + strings.Repeat("=", 60))
+		fmt.Println("IMPORTANT: SSH Key Setup Required")
+		fmt.Println(strings.Repeat("=", 60))
+		fmt.Printf("Your SSH public key is:\n\n%s\n", sshKeyPair.PublicKey)
+		fmt.Println("\nPlease add this key as a deploy key to your repository:")
+		fmt.Printf("Repository: %s\n", o.remoteRepo)
+		fmt.Println("\nSteps:")
+		fmt.Println("1. Go to your repository settings")
+		fmt.Println("2. Navigate to Deploy keys section")
+		fmt.Println("3. Add a new deploy key")
+		fmt.Println("4. Paste the public key above")
+		fmt.Println("5. Give it a descriptive name (e.g., 'bitswan-workspace')")
+		fmt.Println("6. Make sure to check 'Allow write access' if you plan to push changes")
+		fmt.Println("\nPress ENTER to continue once you've added the deploy key...")
+		
+		// Wait for user input
+		var input string
+		fmt.Scanln(&input)
+
+		// Clone using SSH key
 		com := exec.Command("git", "clone", o.remoteRepo, gitopsWorkspace) //nolint:gosec
+		
+		// Set up SSH to use the generated key
+		com.Env = append(os.Environ(), 
+			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPair.PrivateKeyPath))
 
 		fmt.Println("Cloning remote repository...")
 		if err := runCommandVerbose(com, o.verbose); err != nil {
@@ -602,9 +636,15 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 			panic(fmt.Errorf("Failed to create empty commit: %w", err))
 		}
 
-		// Push to remote
+		// Push to remote using SSH key
 		setUpstreamCom := exec.Command("git", "push", "-u", "origin", workspaceName)
 		setUpstreamCom.Dir = gitopsWorktree
+		
+		// Set up SSH to use the generated key for push operations
+		sshKeyPath := filepath.Join(gitopsConfig, "ssh", "id_ed25519")
+		setUpstreamCom.Env = append(os.Environ(), 
+			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPath))
+		
 		if err := runCommandVerbose(setUpstreamCom, o.verbose); err != nil {
 			panic(fmt.Errorf("Failed to set upstream: %w", err))
 		}
@@ -628,6 +668,18 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to write oauth config file: %w", err)
 		}
 	}
+
+	// Generate SSH key pair for the workspace (if not already generated for remote repo)
+	if o.remoteRepo == "" {
+		fmt.Println("Generating SSH key pair for workspace...")
+		sshKeyPair, err := ssh.GenerateSSHKeyPair(gitopsConfig)
+		if err != nil {
+			return fmt.Errorf("failed to generate SSH key pair: %w", err)
+		}
+		fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
+	}
+
+
 
 	// Set hosts to /etc/hosts file
 	if o.setHosts {

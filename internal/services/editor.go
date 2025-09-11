@@ -43,7 +43,7 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config) (string, error) {
 	gitopsPath := e.WorkspacePath
 	workspaceName := e.WorkspaceName
-	sshDir := os.Getenv("HOME") + "/.ssh"
+	sshDir := gitopsPath + "/ssh"
 
 	bitswanEditor := map[string]interface{}{
 		"image":    bitswanEditorImage,
