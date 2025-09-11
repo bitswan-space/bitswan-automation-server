@@ -17,8 +17,19 @@ const (
 	Linux
 )
 
+// DockerComposeConfig holds the configuration required for creating a docker-compose file
+type DockerComposeConfig struct {
+	GitopsPath   string
+	WorkspaceName string
+	GitopsImage  string
+	Domain       string
+	MqttEnvVars  []string
+	AocEnvVars   []string
+	GitopsDevSourceDir string
+}
 
-func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, domain string, mqttEnvVars []string, aocEnvVars []string, gitopsDevSourceDir string) (string, string, error) {
+// CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
+func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, error) {
 	sshDir := os.Getenv("HOME") + "/.ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -38,52 +49,52 @@ func CreateDockerComposeFile(gitopsPath, workspaceName, gitopsImage, domain stri
 	gitopsSecretToken := uniuri.NewLen(64)
 
 	gitopsService := map[string]interface{}{
-		"image":    gitopsImage,
+		"image":    config.GitopsImage,
 		"restart":  "always",
-		"hostname": workspaceName + "-gitops",
+		"hostname": config.WorkspaceName + "-gitops",
 		"networks": []string{"bitswan_network"},
 		"volumes": []string{
-			gitopsPath + "/gitops:/gitops/gitops:z",
-			gitopsPath + "/secrets:/gitops/secrets:z",
+			config.GitopsPath + "/gitops:/gitops/gitops:z",
+			config.GitopsPath + "/secrets:/gitops/secrets:z",
 			sshDir + ":/root/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
-			"BITSWAN_GITOPS_DIR_HOST=" + gitopsPath,
+			"BITSWAN_GITOPS_DIR_HOST=" + config.GitopsPath,
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
-			"BITSWAN_GITOPS_DOMAIN=" + domain,
-			"BITSWAN_WORKSPACE_NAME=" + workspaceName,
+			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
+			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 		},
 	}
 
 	// Append AOC env variables when workspace is registered as an automation server
-	if len(aocEnvVars) > 0 {
-		gitopsService["environment"] = append(gitopsService["environment"].([]string), aocEnvVars...)
+	if len(config.AocEnvVars) > 0 {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), config.AocEnvVars...)
 	}
 
 	// Append MQTT env variables when workspace is registered as an automation server
-	if len(mqttEnvVars) > 0 {
-		gitopsService["environment"] = append(gitopsService["environment"].([]string), mqttEnvVars...)
+	if len(config.MqttEnvVars) > 0 {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), config.MqttEnvVars...)
 	}
 
 	// Add dev source directory volume mount and DEBUG env var if provided
-	if gitopsDevSourceDir != "" {
-		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsDevSourceDir+":/src:z")
+	if config.GitopsDevSourceDir != "" {
+		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), config.GitopsDevSourceDir+":/src:z")
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), "DEBUG=true")
 	}
 
 	if hostOs == WindowsMac {
 		gitopsVolumes := []string{
 			gitConfig + ":/root/.gitconfig:z",
-			gitopsPath + "/workspace/.git:/workspace-repo/.git:z",
+			config.GitopsPath + "/workspace/.git:/workspace-repo/.git:z",
 		}
 
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
 
 		// Rewrite .git in worktree because it's calling git command inside the container (only for Windows and Mac)
 		gitdir := "gitdir: /workspace-repo/.git/worktrees/gitops"
-		if err := os.WriteFile(gitopsPath+"/gitops/.git", []byte(gitdir), 0644); err != nil {
+		if err := os.WriteFile(config.GitopsPath+"/gitops/.git", []byte(gitdir), 0644); err != nil {
 			return "", "", fmt.Errorf("failed to rewrite gitops worktree .git file: %w", err)
 		}
 	} else if hostOs == Linux {
