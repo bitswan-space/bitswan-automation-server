@@ -22,6 +22,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
+	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
 	"github.com/spf13/cobra"
 )
 
@@ -598,6 +599,14 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	if err := os.MkdirAll(secretsDir, 0700); err != nil {
 		return fmt.Errorf("failed to create secrets directory: %w", err)
 	}
+
+	// Generate SSH key pair for the workspace
+	fmt.Println("Generating SSH key pair for workspace...")
+	sshKeyPair, err := ssh.GenerateSSHKeyPair(gitopsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to generate SSH key pair: %w", err)
+	}
+	fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
 
 
 
