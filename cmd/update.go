@@ -18,7 +18,6 @@ import (
 
 type updateOptions struct {
 	gitopsImage string
-	editorImage string
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -41,7 +40,6 @@ func newUpdateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
-	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 
 	return cmd
 }

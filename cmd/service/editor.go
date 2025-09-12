@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,7 @@ func NewEditorCmd() *cobra.Command {
 	cmd.AddCommand(newEditorStatusCmd())
 	cmd.AddCommand(newEditorStartCmd())
 	cmd.AddCommand(newEditorStopCmd())
+	cmd.AddCommand(newEditorUpdateCmd())
 
 	return cmd
 }
@@ -316,4 +318,110 @@ func stopEditorContainer() error {
 	
 	// Stop the container
 	return editorService.StopContainer()
+}
+
+func newEditorUpdateCmd() *cobra.Command {
+	var editorImage string
+	
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update Editor service with latest image",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return updateEditorService(editorImage)
+		},
+	}
+	
+	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
+	
+	return cmd
+}
+
+func updateEditorService(editorImage string) error {
+	// Get the active workspace
+	workspaceName, err := config.GetWorkspaceName()
+	if err != nil {
+		return fmt.Errorf("failed to get active workspace: %w", err)
+	}
+	
+	if workspaceName == "" {
+		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
+	}
+	
+	// Create Editor service manager
+	editorService, err := services.NewEditorService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create Editor service: %w", err)
+	}
+	
+	// Check if enabled
+	if !editorService.IsEnabled() {
+		return fmt.Errorf("Editor service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
+	}
+	
+	// Get metadata to retrieve gitops secret and domain
+	metadata, err := editorService.GetMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to read workspace metadata. Make sure workspace is properly initialized: %w", err)
+	}
+	
+	gitopsSecretToken := metadata.GitopsSecret
+	domain := metadata.Domain
+	
+	// Use provided image or get latest from dockerhub
+	bitswanEditorImage := editorImage
+	if bitswanEditorImage == "" {
+		// Get latest version from dockerhub
+		latestVersion, err := getLatestEditorVersion()
+		if err != nil {
+			return fmt.Errorf("failed to get latest editor version: %w", err)
+		}
+		bitswanEditorImage = "bitswan/bitswan-editor:" + latestVersion
+	}
+	
+	fmt.Printf("Updating Editor service with image: %s\n", bitswanEditorImage)
+	
+	// Stop the current container if running
+	if editorService.IsContainerRunning() {
+		fmt.Println("Stopping current editor container...")
+		if err := editorService.StopContainer(); err != nil {
+			return fmt.Errorf("failed to stop current editor container: %w", err)
+		}
+	}
+	
+	// Update the docker-compose file with new image
+	if err := editorService.UpdateImage(gitopsSecretToken, bitswanEditorImage, domain); err != nil {
+		return fmt.Errorf("failed to update editor image: %w", err)
+	}
+	
+	// Start the updated container
+	fmt.Println("Starting updated editor container...")
+	if err := editorService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start updated editor container: %w", err)
+	}
+	
+	// Wait for editor to be ready
+	fmt.Println("Waiting for editor to be ready...")
+	if err := editorService.WaitForEditorReady(); err != nil {
+		return fmt.Errorf("editor failed to start properly: %w", err)
+	}
+	
+	fmt.Println("✅ Editor service updated successfully!")
+	
+	// Show access information
+	if err := editorService.ShowAccessInfo(); err == nil {
+		// Try to get and show password
+		if password, err := editorService.GetEditorPassword(); err == nil {
+			fmt.Printf("Editor Password: %s\n", password)
+		}
+	}
+	
+	return nil
+}
+
+func getLatestEditorVersion() (string, error) {
+	latestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor/tags/")
+	if err != nil {
+		return "", fmt.Errorf("failed to get latest BitSwan Editor version: %w", err)
+	}
+	return latestVersion, nil
 } 

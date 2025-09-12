@@ -362,6 +362,23 @@ func (e *EditorService) GetMetadata() (*Metadata, error) {
 	return &metadata, nil
 }
 
+// UpdateImage updates the editor service with a new image
+func (e *EditorService) UpdateImage(gitopsSecretToken, bitswanEditorImage, domain string) error {
+	// Generate new docker-compose content with updated image
+	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain)
+	if err != nil {
+		return fmt.Errorf("failed to create updated docker-compose content: %w", err)
+	}
+	
+	// Save updated docker-compose file
+	if err := e.SaveDockerCompose(dockerComposeContent); err != nil {
+		return fmt.Errorf("failed to save updated docker-compose file: %w", err)
+	}
+	
+	fmt.Printf("Editor service image updated to: %s\n", bitswanEditorImage)
+	return nil
+}
+
 // runCommand executes a command with error handling
 func (e *EditorService) runCommand(cmd *exec.Cmd) error {
 	output, err := cmd.CombinedOutput()
