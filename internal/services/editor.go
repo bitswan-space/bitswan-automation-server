@@ -399,6 +399,14 @@ func (e *EditorService) runCommand(cmd *exec.Cmd) error {
 
 // UpdateImage updates the docker-compose-editor.yml file with a new image
 func (e *EditorService) UpdateImage(newImage string) error {
+	if newImage == "" {
+		latestVersion, err := e.getLatestVersion()
+		if err != nil {
+			return fmt.Errorf("failed to get latest version: %w", err)
+		}
+		newImage = "bitswan/bitswan-editor:" + latestVersion
+	}
+	
 	// Read the current docker-compose-editor.yml file
 	composePath := filepath.Join(e.WorkspacePath, "deployment", "docker-compose-editor.yml")
 	data, err := os.ReadFile(composePath)
@@ -438,14 +446,7 @@ func (e *EditorService) UpdateImage(newImage string) error {
 
 // UpdateToLatest updates the editor service to the latest version from DockerHub
 func (e *EditorService) UpdateToLatest() error {
-	// Get latest version from dockerhub
-	latestVersion, err := e.getLatestVersion()
-	if err != nil {
-		return fmt.Errorf("failed to get latest version: %w", err)
-	}
-	
-	image := "bitswan/bitswan-editor:" + latestVersion
-	return e.UpdateImage(image)
+	return e.UpdateImage("")
 }
 
 // getLatestVersion gets the latest version from DockerHub

@@ -385,6 +385,10 @@ func (c *CouchDBService) ShowCredentials() error {
 
 // UpdateImage updates the docker-compose-couchdb.yml file with a new image
 func (c *CouchDBService) UpdateImage(newImage string) error {
+	if newImage == "" {
+		return nil
+	}
+	
 	// Read the current docker-compose-couchdb.yml file
 	composePath := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
 	data, err := os.ReadFile(composePath)
@@ -424,14 +428,7 @@ func (c *CouchDBService) UpdateImage(newImage string) error {
 
 // UpdateToLatest updates the CouchDB service to the latest version from DockerHub
 func (c *CouchDBService) UpdateToLatest() error {
-	// Get latest version from dockerhub
-	latestVersion, err := c.getLatestVersion()
-	if err != nil {
-		return fmt.Errorf("failed to get latest version: %w", err)
-	}
-	
-	image := "bitswan/bitswan-couchdb:" + latestVersion
-	return c.UpdateImage(image)
+	return c.UpdateImage("")
 }
 
 // getLatestVersion gets the latest version from DockerHub
