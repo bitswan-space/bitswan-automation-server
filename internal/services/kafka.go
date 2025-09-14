@@ -181,10 +181,6 @@ func (k *KafkaService) CreateDockerCompose() (string, error) {
 			"kafka": map[string]interface{}{
 				"image":          "confluentinc/cp-kafka:7.5.0",
 				"container_name": containerName,
-				"ports": []string{
-					"9092:9092",
-					"9093:9093",
-				},
 				"environment": map[string]interface{}{
 					"KAFKA_NODE_ID":                                     1,
 					"KAFKA_PROCESS_ROLES":                               "broker,controller",
