@@ -30,6 +30,11 @@ type DockerComposeConfig struct {
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
 func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, error) {
+	return config.CreateDockerComposeFileWithSecret("")
+}
+
+// CreateDockerComposeFileWithSecret creates a docker-compose YAML content with an optional existing secret
+func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSecret string) (string, string, error) {
 	sshDir := config.GitopsPath + "/ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -45,8 +50,13 @@ func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, er
 		return "", "", fmt.Errorf("unsupported host OS: %s", hostOsTmp)
 	}
 
-	// generate a random secret token
-	gitopsSecretToken := uniuri.NewLen(64)
+	// Use existing secret if provided, otherwise generate a new one
+	var gitopsSecretToken string
+	if existingSecret != "" {
+		gitopsSecretToken = existingSecret
+	} else {
+		gitopsSecretToken = uniuri.NewLen(64)
+	}
 
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,

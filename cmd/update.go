@@ -348,7 +348,7 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 		AocEnvVars:    aocEnvVars,
 		GitopsDevSourceDir: gitopsDevSourceDir,
 	}
-	compose, _, err := config.CreateDockerComposeFile()
+	compose, _, err := config.CreateDockerComposeFileWithSecret(metadata.GitopsSecret)
 	if err != nil {
 		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
