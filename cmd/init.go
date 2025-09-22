@@ -408,18 +408,72 @@ type RepositoryInfo struct {
 
 // parseRepositoryURL parses a repository URL and extracts hostname, org, and repo
 func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
-	// Handle SSH URLs (git@hostname:org/repo.git)
-	if strings.HasPrefix(repoURL, "git@") {
-		// Remove git@ prefix
-		url := strings.TrimPrefix(repoURL, "git@")
-		// Split by colon to separate hostname from path
-		parts := strings.SplitN(url, ":", 2)
+	repoURL = strings.TrimSpace(repoURL)
+	if strings.HasPrefix(repoURL, "git://") {
+		url := strings.TrimPrefix(repoURL, "git://")
+		url = strings.TrimPrefix(url, "git@")
+
+		// Split by / to separate hostname:port from path
+		parts := strings.SplitN(url, "/", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid SSH URL format: %s", repoURL)
+			return nil, fmt.Errorf("invalid git:// URL format: %s", repoURL)
 		}
 
 		hostname := parts[0]
 		path := parts[1]
+
+		// Check if the path starts with a number (port number)
+		// If so, we need to find the next slash to get the actual path
+		if len(path) > 0 && path[0] >= '0' && path[0] <= '9' {
+			// This is a port number, find the next slash
+			slashIndex := strings.Index(path, "/")
+			if slashIndex == -1 {
+				return nil, fmt.Errorf("invalid git:// URL format - port number without path: %s", repoURL)
+			}
+			path = path[slashIndex+1:]
+		}
+
+		path = strings.TrimSuffix(path, ".git")
+
+		// Split path to get org/repo
+		pathParts := strings.Split(path, "/")
+		if len(pathParts) != 2 {
+			return nil, fmt.Errorf("invalid repository path format: %s", path)
+		}
+
+		return &RepositoryInfo{
+			Hostname: hostname,
+			Org:      pathParts[0],
+			Repo:     pathParts[1],
+			IsSSH:    true,
+		}, nil
+	}
+
+	// Handle SSH URLs (git@hostname:org/repo.git or git@hostname:port/org/repo.git)
+	if strings.HasPrefix(repoURL, "git@") {
+		// Remove git@ prefix
+		url := strings.TrimPrefix(repoURL, "git@")
+
+		// Find the last colon to separate hostname:port from path
+		// This handles cases like git@github.com:443/my/repository
+		lastColonIndex := strings.LastIndex(url, ":")
+		if lastColonIndex == -1 {
+			return nil, fmt.Errorf("invalid SSH URL format: %s", repoURL)
+		}
+
+		hostname := url[:lastColonIndex]
+		path := url[lastColonIndex+1:]
+
+		// Check if the path starts with a number (port number)
+		// If so, we need to find the next slash to get the actual path
+		if len(path) > 0 && path[0] >= '0' && path[0] <= '9' {
+			// This is a port number, find the next slash
+			slashIndex := strings.Index(path, "/")
+			if slashIndex == -1 {
+				return nil, fmt.Errorf("invalid SSH URL format - port number without path: %s", repoURL)
+			}
+			path = path[slashIndex+1:]
+		}
 
 		// Remove .git suffix if present
 		path = strings.TrimSuffix(path, ".git")
@@ -461,6 +515,48 @@ func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
 			Repo:     repo,
 			IsSSH:    false,
 		}, nil
+	}
+
+	// Try to handle malformed URLs by attempting to extract information
+	// This is a fallback for URLs that don't match standard patterns
+	// Look for patterns like "hostname.com/org/repo" or "hostname.com:port/org/repo"
+	if strings.Contains(repoURL, "/") && !strings.HasPrefix(repoURL, "git@") && !strings.HasPrefix(repoURL, "git://") && !strings.HasPrefix(repoURL, "https://") {
+		// Find the first slash to separate hostname from path
+		slashIndex := strings.Index(repoURL, "/")
+		if slashIndex > 0 {
+			hostname := repoURL[:slashIndex]
+			path := repoURL[slashIndex+1:]
+
+			// Check if hostname contains a port number (e.g., "hostname.com:443")
+			if colonIndex := strings.LastIndex(hostname, ":"); colonIndex > 0 {
+				// Verify that everything after the colon is numeric (port number)
+				portPart := hostname[colonIndex+1:]
+				isNumeric := true
+				for _, c := range portPart {
+					if c < '0' || c > '9' {
+						isNumeric = false
+						break
+					}
+				}
+				if isNumeric {
+					hostname = hostname[:colonIndex]
+				}
+			}
+
+			// Remove .git suffix if present
+			path = strings.TrimSuffix(path, ".git")
+
+			// Split path to get org/repo
+			pathParts := strings.Split(path, "/")
+			if len(pathParts) >= 2 {
+				return &RepositoryInfo{
+					Hostname: hostname,
+					Org:      pathParts[0],
+					Repo:     pathParts[1],
+					IsSSH:    false, // Default to HTTPS for malformed URLs
+				}, nil
+			}
+		}
 	}
 
 	return nil, fmt.Errorf("unsupported URL format: %s", repoURL)
