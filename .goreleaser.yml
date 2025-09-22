@@ -46,7 +46,7 @@ nfpms:
     builds:
       - bitswan
     vendor: bitswan-space
-    homepage: https://github.com/bitswan-space/bitswan-workspaces
+    homepage: https://github.com/bitswan-space/bitswan-automation-server
     maintainer: "LibertyAces Ltd. <support@libertyaces.com>"
     description: "A general purpose golang CLI template for Github and Gitlab"
     license: BSD
@@ -107,11 +107,11 @@ changelog:
 release:
   github:
     owner: bitswan-space
-    name: bitswan-workspaces
+    name: bitswan-automation-server
   draft: false
   prerelease: auto
   mode: replace
   header: |
     ## BitSwan GitOps CLI ({{ .Version }})
 
-    For more information, please see the [documentation](https://github.com/bitswan-space/bitswan-workspaces/blob/main/README.md).
+    For more information, please see the [documentation](https://github.com/bitswan-space/bitswan-automation-server/blob/main/README.md).
