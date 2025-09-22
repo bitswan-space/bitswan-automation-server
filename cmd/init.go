@@ -40,7 +40,7 @@ type initOptions struct {
 	editorImage        string
 	gitopsDevSourceDir string
 	oauthConfigFile    string
-	sshPort443         bool
+	sshPort            string
 }
 
 type DockerNetwork struct {
@@ -66,6 +66,13 @@ type MetadataInit struct {
 	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
 	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
 	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
+}
+
+type RepositoryInfo struct {
+	Hostname string
+	Org      string
+	Repo     string
+	IsSSH    bool
 }
 
 func defaultInitOptions() *initOptions {
@@ -94,7 +101,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
-	cmd.Flags().BoolVar(&o.sshPort443, "ssh-port-443", false, "Use SSH over port 443 with custom SSH config for repositories behind firewalls")
+	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
 	return cmd
 }
 
@@ -398,14 +405,6 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 	return nil
 }
 
-// RepositoryInfo contains parsed information from a repository URL
-type RepositoryInfo struct {
-	Hostname string
-	Org      string
-	Repo     string
-	IsSSH    bool
-}
-
 // parseRepositoryURL parses a repository URL and extracts hostname, org, and repo
 func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
 	repoURL = strings.TrimSpace(repoURL)
@@ -562,8 +561,29 @@ func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
 	return nil, fmt.Errorf("unsupported URL format: %s", repoURL)
 }
 
-// createSSHConfig creates an SSH config file for port 443 access
-func createSSHConfig(workspacePath, workspaceName string, repoInfo *RepositoryInfo) (string, error) {
+func validatePort(portStr string) (int, error) {
+	if portStr == "" {
+		return 0, fmt.Errorf("port cannot be empty")
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid port format '%s': %w", portStr, err)
+	}
+
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("port %d is out of valid range (1-65535)", port)
+	}
+
+	return port, nil
+}
+
+func createSSHConfig(workspacePath, workspaceName string, repoInfo *RepositoryInfo, port string) (string, error) {
+	portNum, err := validatePort(port)
+	if err != nil {
+		return "", fmt.Errorf("invalid port: %w", err)
+	}
+
 	sshDir := filepath.Join(workspacePath, "ssh")
 	configPath := filepath.Join(sshDir, "config")
 
@@ -585,9 +605,9 @@ func createSSHConfig(workspacePath, workspaceName string, repoInfo *RepositoryIn
   User git
   IdentityFile %s
   IdentitiesOnly yes
-  Port 443
+  Port %d
   AddKeysToAgent yes
-`, workspaceName, sshHostname, filepath.Join(workspacePath, "ssh", "id_ed25519"))
+`, workspaceName, sshHostname, filepath.Join(workspacePath, "ssh", "id_ed25519"), portNum)
 
 	// Write config file
 	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
@@ -794,10 +814,10 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		cloneURL = fmt.Sprintf("git@%s:%s/%s.git", repoInfo.Hostname, repoInfo.Org, repoInfo.Repo)
 		com := exec.Command("git", "clone", cloneURL, gitopsWorkspace) //nolint:gosec
 
-		// Set up SSH command based on whether port 443 flag is used
-		if o.sshPort443 {
-			// Create SSH config file for port 443 access
-			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo)
+		// Set up SSH command based on whether custom SSH port is specified
+		if o.sshPort != "" {
+			// Create SSH config file for custom port access
+			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo, o.sshPort)
 			if err != nil {
 				return fmt.Errorf("failed to create SSH config: %w", err)
 			}
@@ -866,16 +886,16 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		setUpstreamCom := exec.Command("git", "push", "-u", "origin", workspaceName)
 		setUpstreamCom.Dir = gitopsWorktree
 
-		// Set up SSH command based on whether port 443 flag is used
-		if o.sshPort443 {
+		// Set up SSH command based on whether custom SSH port is specified
+		if o.sshPort != "" {
 			// Parse repository URL to get hostname, org, and repo
 			repoInfo, err := parseRepositoryURL(o.remoteRepo)
 			if err != nil {
 				return fmt.Errorf("failed to parse repository URL: %w", err)
 			}
 
-			// Create SSH config file for port 443 access
-			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo)
+			// Create SSH config file for custom port access
+			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo, o.sshPort)
 			if err != nil {
 				return fmt.Errorf("failed to create SSH config: %w", err)
 			}
