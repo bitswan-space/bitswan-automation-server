@@ -775,7 +775,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Println(strings.Repeat("=", 60))
 		fmt.Printf("Your SSH public key is:\n\n%s\n", sshKeyPair.PublicKey)
 		fmt.Println("\nPlease add this key as a deploy key to your repository:")
-		fmt.Printf("Repository: %s\n", o.remoteRepo)
+		fmt.Printf("Repository: %s/%s\n", repoInfo.Org, repoInfo.Repo)
 		fmt.Println("\nSteps:")
 		fmt.Println("1. Go to your repository settings")
 		fmt.Println("2. Navigate to Deploy keys section")
@@ -789,8 +789,10 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		var input string
 		fmt.Scanln(&input)
 
+		var cloneURL string
 		// Clone using SSH key
-		com := exec.Command("git", "clone", o.remoteRepo, gitopsWorkspace) //nolint:gosec
+		cloneURL = fmt.Sprintf("git@%s:%s/%s.git", repoInfo.Hostname, repoInfo.Org, repoInfo.Repo)
+		com := exec.Command("git", "clone", cloneURL, gitopsWorkspace) //nolint:gosec
 
 		// Set up SSH command based on whether port 443 flag is used
 		if o.sshPort443 {
@@ -800,14 +802,8 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to create SSH config: %w", err)
 			}
 
-			// Convert HTTPS URL to SSH URL if needed
-			var cloneURL string
-			if !repoInfo.IsSSH {
-				cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
-			} else {
-				// Replace hostname with our SSH config host
-				cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
-			}
+			// Replace hostname with our SSH config host
+			cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
 
 			// Update the clone command with the new URL
 			com = exec.Command("git", "clone", cloneURL, gitopsWorkspace)
