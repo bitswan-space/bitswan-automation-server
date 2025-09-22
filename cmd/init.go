@@ -40,6 +40,7 @@ type initOptions struct {
 	editorImage        string
 	gitopsDevSourceDir string
 	oauthConfigFile    string
+	sshPort443         bool
 }
 
 type DockerNetwork struct {
@@ -52,8 +53,6 @@ type DockerNetwork struct {
 	Labels    string `json:"Labels"`
 	Scope     string `json:"Scope"`
 }
-
-
 
 type MetadataInit struct {
 	Domain             string  `yaml:"domain"`
@@ -95,6 +94,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
+	cmd.Flags().BoolVar(&o.sshPort443, "ssh-port-443", false, "Use SSH over port 443 with custom SSH config for repositories behind firewalls")
 	return cmd
 }
 
@@ -398,6 +398,109 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 	return nil
 }
 
+// RepositoryInfo contains parsed information from a repository URL
+type RepositoryInfo struct {
+	Hostname string
+	Org      string
+	Repo     string
+	IsSSH    bool
+}
+
+// parseRepositoryURL parses a repository URL and extracts hostname, org, and repo
+func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
+	// Handle SSH URLs (git@hostname:org/repo.git)
+	if strings.HasPrefix(repoURL, "git@") {
+		// Remove git@ prefix
+		url := strings.TrimPrefix(repoURL, "git@")
+		// Split by colon to separate hostname from path
+		parts := strings.SplitN(url, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid SSH URL format: %s", repoURL)
+		}
+
+		hostname := parts[0]
+		path := parts[1]
+
+		// Remove .git suffix if present
+		path = strings.TrimSuffix(path, ".git")
+
+		// Split path to get org/repo
+		pathParts := strings.Split(path, "/")
+		if len(pathParts) != 2 {
+			return nil, fmt.Errorf("invalid repository path format: %s", path)
+		}
+
+		return &RepositoryInfo{
+			Hostname: hostname,
+			Org:      pathParts[0],
+			Repo:     pathParts[1],
+			IsSSH:    true,
+		}, nil
+	}
+
+	// Handle HTTPS URLs (https://hostname/org/repo.git)
+	if strings.HasPrefix(repoURL, "https://") {
+		// Remove https:// prefix
+		url := strings.TrimPrefix(repoURL, "https://")
+		// Remove .git suffix if present
+		url = strings.TrimSuffix(url, ".git")
+
+		// Split by / to get parts
+		parts := strings.Split(url, "/")
+		if len(parts) < 3 {
+			return nil, fmt.Errorf("invalid HTTPS URL format: %s", repoURL)
+		}
+
+		hostname := parts[0]
+		org := parts[1]
+		repo := parts[2]
+
+		return &RepositoryInfo{
+			Hostname: hostname,
+			Org:      org,
+			Repo:     repo,
+			IsSSH:    false,
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unsupported URL format: %s", repoURL)
+}
+
+// createSSHConfig creates an SSH config file for port 443 access
+func createSSHConfig(workspacePath, workspaceName string, repoInfo *RepositoryInfo) (string, error) {
+	sshDir := filepath.Join(workspacePath, "ssh")
+	configPath := filepath.Join(sshDir, "config")
+
+	// Determine the SSH hostname based on the repository hostname
+	var sshHostname string
+	switch repoInfo.Hostname {
+	case "github.com":
+		sshHostname = "ssh.github.com"
+	case "gitlab.com":
+		sshHostname = "gitlab.com" // GitLab uses the same hostname for SSH
+	default:
+		// For other hosts, try to use the same hostname
+		sshHostname = repoInfo.Hostname
+	}
+
+	// Create SSH config content
+	configContent := fmt.Sprintf(`Host git-%s
+  HostName %s
+  User git
+  IdentityFile %s
+  IdentitiesOnly yes
+  Port 443
+  AddKeysToAgent yes
+`, workspaceName, sshHostname, filepath.Join(workspacePath, "ssh", "id_ed25519"))
+
+	// Write config file
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		return "", fmt.Errorf("failed to write SSH config file: %w", err)
+	}
+
+	return configPath, nil
+}
+
 func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	// The first argument is the workspace name
 	workspaceName := args[0]
@@ -413,7 +516,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	networkName := "bitswan_network"
 	exists, err := checkNetworkExists(networkName)
 	if err != nil {
-		panic(fmt.Errorf("Error checking network: %v\n", err))
+		panic(fmt.Errorf("error checking network: %v", err))
 	}
 
 	if exists {
@@ -473,7 +576,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 	// Secure that --local flag is not used with --set-hosts or --mkcerts
 	if o.local && (o.setHosts || o.mkCerts) {
-		panic(fmt.Errorf("Cannot use --local flag with --set-hosts or --mkcerts"))
+		panic(fmt.Errorf("cannot use --local flag with --set-hosts or --mkcerts"))
 	}
 
 	if o.local {
@@ -489,7 +592,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	if o.mkCerts {
 		certDir, err := generateWildcardCerts(o.domain)
 		if err != nil {
-			return fmt.Errorf("Error generating certificates: %v\n", err)
+			return fmt.Errorf("error generating certificates: %v", err)
 		}
 		inputCertsDir = certDir
 	}
@@ -512,7 +615,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 		certs, err := os.ReadDir(inputCertsDir)
 		if err != nil {
-			panic(fmt.Errorf("Failed to read certs directory: %w", err))
+			panic(fmt.Errorf("failed to read certs directory: %w", err))
 		}
 
 		for _, cert := range certs {
@@ -525,11 +628,11 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 			bytes, err := os.ReadFile(certPath)
 			if err != nil {
-				panic(fmt.Errorf("Failed to read cert file: %w", err))
+				panic(fmt.Errorf("failed to read cert file: %w", err))
 			}
 
 			if err := os.WriteFile(newCertPath, bytes, 0755); err != nil {
-				panic(fmt.Errorf("Failed to copy cert file: %w", err))
+				panic(fmt.Errorf("failed to copy cert file: %w", err))
 			}
 		}
 
@@ -564,6 +667,12 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
 
+		// Parse repository URL to get hostname, org, and repo
+		repoInfo, err := parseRepositoryURL(o.remoteRepo)
+		if err != nil {
+			return fmt.Errorf("failed to parse repository URL: %w", err)
+		}
+
 		// Display the public key and wait for user confirmation
 		fmt.Println("\n" + strings.Repeat("=", 60))
 		fmt.Println("IMPORTANT: SSH Key Setup Required")
@@ -579,21 +688,46 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Println("5. Give it a descriptive name (e.g., 'bitswan-workspace')")
 		fmt.Println("6. Make sure to check 'Allow write access' if you plan to push changes")
 		fmt.Println("\nPress ENTER to continue once you've added the deploy key...")
-		
+
 		// Wait for user input
 		var input string
 		fmt.Scanln(&input)
 
 		// Clone using SSH key
 		com := exec.Command("git", "clone", o.remoteRepo, gitopsWorkspace) //nolint:gosec
-		
-		// Set up SSH to use the generated key
-		com.Env = append(os.Environ(), 
-			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPair.PrivateKeyPath))
+
+		// Set up SSH command based on whether port 443 flag is used
+		if o.sshPort443 {
+			// Create SSH config file for port 443 access
+			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo)
+			if err != nil {
+				return fmt.Errorf("failed to create SSH config: %w", err)
+			}
+
+			// Convert HTTPS URL to SSH URL if needed
+			var cloneURL string
+			if !repoInfo.IsSSH {
+				cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
+			} else {
+				// Replace hostname with our SSH config host
+				cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
+			}
+
+			// Update the clone command with the new URL
+			com = exec.Command("git", "clone", cloneURL, gitopsWorkspace)
+
+			// Set up SSH to use the config file
+			com.Env = append(os.Environ(),
+				fmt.Sprintf("GIT_SSH_COMMAND=ssh -F %s -o StrictHostKeyChecking=no", sshConfigPath))
+		} else {
+			// Set up SSH to use the generated key directly
+			com.Env = append(os.Environ(),
+				fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPair.PrivateKeyPath))
+		}
 
 		fmt.Println("Cloning remote repository...")
 		if err := runCommandVerbose(com, o.verbose); err != nil {
-			panic(fmt.Errorf("Failed to clone remote repository: %w", err))
+			panic(fmt.Errorf("failed to clone remote repository: %w", err))
 		}
 		fmt.Println("Remote repository cloned!")
 	} else {
@@ -606,7 +740,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Println("Initializing git in workspace...")
 
 		if err := runCommandVerbose(com, o.verbose); err != nil {
-			panic(fmt.Errorf("Failed to init git in workspace: %w", err))
+			panic(fmt.Errorf("failed to init git in workspace: %w", err))
 		}
 
 		fmt.Println("Git initialized in workspace!")
@@ -619,13 +753,13 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Setting up GitOps worktree...")
 	if err := runCommandVerbose(worktreeAddCom, o.verbose); err != nil {
-		panic(fmt.Errorf("Failed to create GitOps worktree: exit code %w.", err))
+		panic(fmt.Errorf("failed to create GitOps worktree: exit code %w", err))
 	}
 
 	// Add repo as safe directory
 	safeDirCom := exec.Command("git", "config", "--global", "--add", "safe.directory", gitopsWorktree)
 	if err := runCommandVerbose(safeDirCom, o.verbose); err != nil {
-		panic(fmt.Errorf("Failed to add safe directory: %w", err))
+		panic(fmt.Errorf("failed to add safe directory: %w", err))
 	}
 
 	if o.remoteRepo != "" {
@@ -633,20 +767,39 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		emptyCommitCom := exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
 		emptyCommitCom.Dir = gitopsWorktree
 		if err := runCommandVerbose(emptyCommitCom, o.verbose); err != nil {
-			panic(fmt.Errorf("Failed to create empty commit: %w", err))
+			panic(fmt.Errorf("failed to create empty commit: %w", err))
 		}
 
 		// Push to remote using SSH key
 		setUpstreamCom := exec.Command("git", "push", "-u", "origin", workspaceName)
 		setUpstreamCom.Dir = gitopsWorktree
-		
-		// Set up SSH to use the generated key for push operations
-		sshKeyPath := filepath.Join(gitopsConfig, "ssh", "id_ed25519")
-		setUpstreamCom.Env = append(os.Environ(), 
-			fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPath))
-		
+
+		// Set up SSH command based on whether port 443 flag is used
+		if o.sshPort443 {
+			// Parse repository URL to get hostname, org, and repo
+			repoInfo, err := parseRepositoryURL(o.remoteRepo)
+			if err != nil {
+				return fmt.Errorf("failed to parse repository URL: %w", err)
+			}
+
+			// Create SSH config file for port 443 access
+			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo)
+			if err != nil {
+				return fmt.Errorf("failed to create SSH config: %w", err)
+			}
+
+			// Set up SSH to use the config file
+			setUpstreamCom.Env = append(os.Environ(),
+				fmt.Sprintf("GIT_SSH_COMMAND=ssh -F %s -o StrictHostKeyChecking=no", sshConfigPath))
+		} else {
+			// Set up SSH to use the generated key for push operations
+			sshKeyPath := filepath.Join(gitopsConfig, "ssh", "id_ed25519")
+			setUpstreamCom.Env = append(os.Environ(),
+				fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPath))
+		}
+
 		if err := runCommandVerbose(setUpstreamCom, o.verbose); err != nil {
-			panic(fmt.Errorf("Failed to set upstream: %w", err))
+			panic(fmt.Errorf("failed to set upstream: %w", err))
 		}
 	}
 
@@ -679,8 +832,6 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
 	}
 
-
-
 	// Set hosts to /etc/hosts file
 	if o.setHosts {
 		err := setHosts(workspaceName, o)
@@ -693,7 +844,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	if gitopsImage == "" {
 		gitopsLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops/tags/")
 		if err != nil {
-			panic(fmt.Errorf("Failed to get latest BitSwan GitOps version: %w", err))
+			panic(fmt.Errorf("failed to get latest BitSwan GitOps version: %w", err))
 		}
 		gitopsImage = "bitswan/gitops:" + gitopsLatestVersion
 	}
@@ -702,7 +853,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	if bitswanEditorImage == "" {
 		bitswanEditorLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor/tags/")
 		if err != nil {
-			panic(fmt.Errorf("Failed to get latest BitSwan Editor version: %w", err))
+			panic(fmt.Errorf("failed to get latest BitSwan Editor version: %w", err))
 		}
 		bitswanEditorImage = "bitswan/bitswan-editor:" + bitswanEditorLatestVersion
 	}
@@ -710,12 +861,12 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	fmt.Println("Setting up GitOps deployment...")
 	gitopsDeployment := gitopsConfig + "/deployment"
 	if err := os.MkdirAll(gitopsDeployment, 0755); err != nil {
-		return fmt.Errorf("Failed to create deployment directory: %w", err)
+		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
 	if inputCertsDir != "" {
 		if err := caddyapi.InstallTLSCerts(workspaceName, o.domain); err != nil {
-			return fmt.Errorf("Failed to install caddy certs %w", err)
+			return fmt.Errorf("failed to install caddy certs %w", err)
 		}
 	}
 
@@ -725,12 +876,12 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	}
 
 	if err != nil {
-		panic(fmt.Errorf("Failed to add Caddy records: %w", err))
+		panic(fmt.Errorf("failed to add Caddy records: %w", err))
 	}
 
 	err = EnsureExamples(bitswanConfig, o.verbose)
 	if err != nil {
-		panic(fmt.Errorf("Failed to download examples: %w", err))
+		panic(fmt.Errorf("failed to download examples: %w", err))
 	}
 
 	var aocEnvVars []string
@@ -861,28 +1012,28 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	}
 
 	config := &dockercompose.DockerComposeConfig{
-		GitopsPath:    gitopsConfig,
-		WorkspaceName: workspaceName,
-		GitopsImage:   gitopsImage,
-		Domain:        o.domain,
-		MqttEnvVars:   mqttEnvVars,
-		AocEnvVars:    aocEnvVars,
+		GitopsPath:         gitopsConfig,
+		WorkspaceName:      workspaceName,
+		GitopsImage:        gitopsImage,
+		Domain:             o.domain,
+		MqttEnvVars:        mqttEnvVars,
+		AocEnvVars:         aocEnvVars,
 		GitopsDevSourceDir: o.gitopsDevSourceDir,
 	}
 	compose, token, err := config.CreateDockerComposeFile()
 
 	if err != nil {
-		panic(fmt.Errorf("Failed to create docker-compose file: %w", err))
+		panic(fmt.Errorf("failed to create docker-compose file: %w", err))
 	}
 
 	dockerComposePath := gitopsDeployment + "/docker-compose.yml"
 	if err := os.WriteFile(dockerComposePath, []byte(compose), 0755); err != nil {
-		panic(fmt.Errorf("Failed to write docker-compose file: %w", err))
+		panic(fmt.Errorf("failed to write docker-compose file: %w", err))
 	}
 
 	err = os.Chdir(gitopsDeployment)
 	if err != nil {
-		panic(fmt.Errorf("Failed to change directory to GitOps deployment: %w", err))
+		panic(fmt.Errorf("failed to change directory to GitOps deployment: %w", err))
 	}
 
 	fmt.Println("GitOps deployment set up successfully!")
@@ -905,30 +1056,30 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	// Setup editor service if not disabled
 	if !o.noIde {
 		fmt.Println("Setting up editor service...")
-		
+
 		// Create editor service
 		editorService, err := services.NewEditorService(workspaceName)
 		if err != nil {
 			return fmt.Errorf("failed to create editor service: %w", err)
 		}
-		
+
 		// Enable the editor service
 		if err := editorService.Enable(token, bitswanEditorImage, o.domain, oauthConfig); err != nil {
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
-		
+
 		// Start the editor container
 		if err := editorService.StartContainer(); err != nil {
 			return fmt.Errorf("failed to start editor container: %w", err)
 		}
-		
+
 		fmt.Println("Downloading and installing editor...")
-		
+
 		// Wait for the editor service to be ready by streaming logs
 		if err := editorService.WaitForEditorReady(); err != nil {
 			panic(fmt.Errorf("failed to wait for editor to be ready: %w", err))
 		}
-		
+
 		fmt.Println("------------BITSWAN EDITOR INFO------------")
 		fmt.Printf("Bitswan Editor URL: https://%s-editor.%s\n", workspaceName, o.domain)
 
@@ -952,5 +1103,3 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
-
-
