@@ -181,10 +181,6 @@ func (k *KafkaService) CreateDockerCompose() (string, error) {
 			"kafka": map[string]interface{}{
 				"image":          "confluentinc/cp-kafka:7.5.0",
 				"container_name": containerName,
-				"ports": []string{
-					"9092:9092",
-					"9093:9093",
-				},
 				"environment": map[string]interface{}{
 					"KAFKA_NODE_ID":                                     1,
 					"KAFKA_PROCESS_ROLES":                               "broker,controller",
@@ -526,6 +522,14 @@ func (k *KafkaService) ShowCredentials() error {
 
 // UpdateImages updates the docker-compose-kafka.yml file with new images
 func (k *KafkaService) UpdateImages(kafkaImage, zookeeperImage string) error {
+	if kafkaImage == "" && zookeeperImage == "" {
+		return nil
+	}
+
+	if kafkaImage == "" || zookeeperImage == "" {
+		return fmt.Errorf("Both kafkaImage and zookeeperImage are required")
+	}
+
 	// Read the current docker-compose-kafka.yml file
 	composePath := filepath.Join(k.WorkspacePath, "deployment", "docker-compose-kafka.yml")
 	data, err := os.ReadFile(composePath)
@@ -571,23 +575,8 @@ func (k *KafkaService) UpdateImages(kafkaImage, zookeeperImage string) error {
 	return nil
 }
 
-// UpdateToLatest updates the Kafka service to the latest versions from DockerHub
 func (k *KafkaService) UpdateToLatest() error {
-	// Get latest versions from dockerhub
-	kafkaVersion, err := k.getLatestKafkaVersion()
-	if err != nil {
-		return fmt.Errorf("failed to get latest Kafka version: %w", err)
-	}
-	
-	zookeeperVersion, err := k.getLatestZookeeperVersion()
-	if err != nil {
-		return fmt.Errorf("failed to get latest Zookeeper version: %w", err)
-	}
-	
-	kafkaImage := "bitswan/bitswan-kafka:" + kafkaVersion
-	zookeeperImage := "bitswan/bitswan-zookeeper:" + zookeeperVersion
-	
-	return k.UpdateImages(kafkaImage, zookeeperImage)
+	return k.UpdateImages("", "")
 }
 
 // getLatestKafkaVersion gets the latest Kafka version from DockerHub

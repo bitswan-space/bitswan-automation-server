@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
+	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -50,6 +51,15 @@ func newListCmd() *cobra.Command {
 						}
 						if gitopsURL != "" {
 							fmt.Fprintf(cmd.OutOrStdout(), "  Gitops URL: %s\n", gitopsURL)
+						}
+						
+						// Show SSH public key
+						workspacePath := filepath.Join(workspacesDir, workspaceName)
+						if ssh.SSHKeyExists(workspacePath) {
+							publicKey, err := ssh.GetSSHPublicKey(workspacePath)
+							if err == nil {
+								fmt.Fprintf(cmd.OutOrStdout(), "  SSH Public Key: %s", strings.TrimSpace(publicKey))
+							}
 						}
 					}
 
