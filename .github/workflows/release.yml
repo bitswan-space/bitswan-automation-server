@@ -73,7 +73,7 @@ jobs:
             CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
               go build -trimpath -ldflags "-X main.version=$VERSION -w -s -extldflags '-static'" \
               -a \
-              -o "dist/$BIN_NAME$EXT" ./cmd/${APP_NAME}
+              -o "dist/$BIN_NAME$EXT" .
 
             # Compress
             if [[ "$GOOS" == "windows" ]]; then
