@@ -4,17 +4,16 @@
 CLI app and daemon for managing bitswan automation server and workspace deployments
 <br>
 <br>
-<img src="https://github.com/bitswan-space/bitswan-workspaces/actions/workflows/test.yml/badge.svg" alt="drawing"/>
-<img src="https://github.com/bitswan-space/bitswan-workspaces/actions/workflows/lint.yml/badge.svg" alt="drawing"/>
-<img src="https://pkg.go.dev/badge/github.com/bitswan-space/bitswan-workspaces.svg" alt="drawing"/>
-<img src="https://codecov.io/gh/bitswan-space/bitswan-workspaces/branch/main/graph/badge.svg" alt="drawing"/>
-<img src="https://img.shields.io/github/v/release/bitswan-space/bitswan-workspaces" alt="drawing"/>
-<img src="https://img.shields.io/github/downloads/bitswan-space/bitswan-workspaces/total.svg" alt="drawing"/>
+<img src="https://github.com/bitswan-space/bitswan-automation-server/actions/workflows/test.yml/badge.svg" alt="drawing"/>
+<img src="https://github.com/bitswan-space/bitswan-automation-server/actions/workflows/lint.yml/badge.svg" alt="drawing"/>
+<img src="https://pkg.go.dev/badge/github.com/bitswan-space/bitswan-automation-server.svg" alt="drawing"/>
+<img src="https://codecov.io/gh/bitswan-space/bitswan-automation-server/branch/main/graph/badge.svg" alt="drawing"/>
+<img src="https://img.shields.io/github/v/release/bitswan-space/bitswan-automation-server" alt="drawing"/>
+<img src="https://img.shields.io/github/downloads/bitswan-space/bitswan-automation-server/total.svg" alt="drawing"/>
 </div>
 
 # Table of Contents
 <!--ts-->
-   * [bitswan-workspaces](#bitswan-workspaces)
    * [Features](#features)
    * [Prerequisites](#prerequisites)
    * [Installation](#installation) 
@@ -23,8 +22,8 @@ CLI app and daemon for managing bitswan automation server and workspace deployme
 <!--te-->
 
 # Features
-- Automatically set up independent bitswan workspaces deployments.
-- Deployments can either connect to the bitswan.space SaaS, use the on prem bitswan management tools or operate completely independently
+- Automatically set up independent bitswan automation server deployments.
+- Deployments can either connect to the bitswan.ai SaaS, use the on prem bitswan management tools or operate completely independently
 
 
 Prerequisites
@@ -37,18 +36,18 @@ Before installation, make sure you have installed `Docker` and `Docker compose`.
 # Installation
 ## Linux / WSL
 ```
-LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-workspaces/releases/download/${LATEST_VERSION}/bitswan-workspaces_${LATEST_VERSION}_linux_amd64.tar.gz" | tar -xz
+LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server_${LATEST_VERSION}_linux_amd64.tar.gz" | tar -xz
 ```
 ## MacOS (Apple Sillicon M1+)
 ```
-LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-workspaces/releases/download/${LATEST_VERSION}/bitswan-workspaces_${LATEST_VERSION}_darwin_arm64.tar.gz" | tar -xz
+LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server_${LATEST_VERSION}_darwin_arm64.tar.gz" | tar -xz
 ```
 ## MacOS (Intel-based)
 ```
-LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-workspaces/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-workspaces/releases/download/${LATEST_VERSION}/bitswan-workspaces_${LATEST_VERSION}_darwin_amd64.tar.gz" | tar -xz
+LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server_${LATEST_VERSION}_darwin_amd64.tar.gz" | tar -xz
 ```
 
 Move the binary to a directory in your PATH
@@ -106,7 +105,7 @@ Add the CA certificate to Chrome by:
 And finally setup the workspace.
 
 ```sh
-bitswan workspace init --domain=bitswan.localhost --mkcerts dev-workspace
+bitswan workspace init --local dev-workspace
 ```
 
 You should be able to access the editor in chrome via [https://dev-workspace-editor.bitswan.localhost](https://dev-workspace-editor.bitswan.localhost).
