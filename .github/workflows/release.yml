@@ -91,11 +91,7 @@ jobs:
           cd dist
           sha256sum * > "${APP_NAME}_checksums.txt"
 
-      # 7) Install GitHub CLI (small, single binary)
-      - name: Install gh
-        uses: cli/cli-action@v2
-
-      # 8) Create the Release and upload every file in dist/
+      # 7) Create the Release and upload every file in dist/
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
