@@ -65,7 +65,7 @@ jobs:
           )
           for target in "${TARGETS[@]}"; do
             IFS="/" read -r GOOS GOARCH <<<"$target"
-            BIN_NAME="${APP_NAME}-${VERSION}-${GOOS}-${GOARCH}"
+            BIN_NAME="${APP_NAME}-v${VERSION}-${GOOS}-${GOARCH}"
             EXT=""
             if [[ "$GOOS" == "windows" ]]; then EXT=".exe"; fi
 

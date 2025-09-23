@@ -37,17 +37,17 @@ Before installation, make sure you have installed `Docker` and `Docker compose`.
 ## Linux / WSL
 ```
 LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server_${LATEST_VERSION}_linux_amd64.tar.gz" | tar -xz
+curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server-${LATEST_VERSION}-linux-amd64.tar.gz" | tar -xz
 ```
 ## MacOS (Apple Sillicon M1+)
 ```
 LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server_${LATEST_VERSION}_darwin_arm64.tar.gz" | tar -xz
+curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server-${LATEST_VERSION}-darwin-arm.tar.gz" | tar -xz
 ```
 ## MacOS (Intel-based)
 ```
 LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server_${LATEST_VERSION}_darwin_amd64.tar.gz" | tar -xz
+curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server-${LATEST_VERSION}-darwin-amd64.tar.gz" | tar -xz
 ```
 
 Move the binary to a directory in your PATH
