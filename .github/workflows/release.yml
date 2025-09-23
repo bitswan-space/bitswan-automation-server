@@ -1,0 +1,111 @@
+# .github/workflows/calver-release.yml
+name: CalVer Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  # Add your binary name once—used in several steps
+  APP_NAME: bitswan-automation-server
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      # 1) Checkout full history (tags included)
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2) Set up Go tool-chain
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      # 3) Produce a Calendar Version string
+      - name: Generate CalVer
+        id: calver
+        run: |
+          DATE_VERSION=$(date +%Y.%m.%d)
+          BUILD_NUMBER=${{ github.run_number }}
+          echo "version=${DATE_VERSION}.${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      # 4) Make and push the tag
+      - name: Create & push Git tag
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          git config --local user.email "action@example.com"
+          git config --local user.name  "GitHub Action"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+      # 5) Cross-compile for six target triples
+      - name: Build binaries
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Targets you want to ship
+          TARGETS=(
+            "linux/amd64"
+            "linux/arm64"
+            "darwin/amd64"
+            "darwin/arm64"
+            "windows/amd64"
+            "windows/arm64"
+          )
+          for target in "${TARGETS[@]}"; do
+            IFS="/" read -r GOOS GOARCH <<<"$target"
+            BIN_NAME="${APP_NAME}-${VERSION}-${GOOS}-${GOARCH}"
+            EXT=""
+            if [[ "$GOOS" == "windows" ]]; then EXT=".exe"; fi
+
+            echo "→ building $BIN_NAME$EXT"
+            CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH \
+              go build -trimpath -ldflags "-X main.version=$VERSION -w -s -extldflags '-static'" \
+              -a \
+              -o "dist/$BIN_NAME$EXT" ./cmd/${APP_NAME}
+
+            # Compress
+            if [[ "$GOOS" == "windows" ]]; then
+              zip -j "dist/$BIN_NAME.zip" "dist/$BIN_NAME$EXT"
+              rm "dist/$BIN_NAME$EXT"
+            else
+              tar -C dist -czf "dist/$BIN_NAME.tar.gz" "$BIN_NAME$EXT"
+              rm "dist/$BIN_NAME$EXT"
+            fi
+          done
+
+      # 6) Checksums (and optional signing)
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > "${APP_NAME}_checksums.txt"
+
+      # 7) Install GitHub CLI (small, single binary)
+      - name: Install gh
+        uses: cli/cli-action@v2
+
+      # 8) Create the Release and upload every file in dist/
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION:   ${{ steps.calver.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes "Automated CalVer release" \
+            dist/*
+
+      # 9) (Optional) Publish OCI images, Homebrew formula, etc.—add more steps here
+
+
