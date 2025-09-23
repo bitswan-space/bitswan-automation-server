@@ -113,5 +113,11 @@ release:
   mode: replace
   header: |
     ## BitSwan GitOps CLI ({{ .Version }})
+    
+    **CalVer Release:** {{ .Version }}
+    **Build Date:** {{ .Date }}
+    **Commit:** {{ .Commit }}
+    
+    This is an automated CalVer release triggered by a push to master.
 
     For more information, please see the [documentation](https://github.com/bitswan-space/bitswan-automation-server/blob/main/README.md).
