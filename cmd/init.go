@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
+	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
@@ -60,7 +60,7 @@ type MetadataInit struct {
 	GitopsURL          string  `yaml:"gitops-url"`
 	GitopsSecret       string  `yaml:"gitops-secret"`
 	WorkspaceId        *string `yaml:"workspace_id,omitempty"`
-	MqttUsername       *int    `yaml:"mqtt_username,omitempty"`
+	MqttUsername       *string `yaml:"mqtt_username,omitempty"`
 	MqttPassword       *string `yaml:"mqtt_password,omitempty"`
 	MqttBroker         *string `yaml:"mqtt_broker,omitempty"`
 	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
@@ -358,11 +358,7 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 			key, value, _ := strings.Cut(envVar, "=")
 			switch key {
 			case "MQTT_USERNAME":
-				username, err := strconv.Atoi(value)
-				if err != nil {
-					return fmt.Errorf("failed to convert MQTT_USERNAME: %w", err)
-				}
-				metadata.MqttUsername = &username
+				metadata.MqttUsername = &value
 			case "MQTT_PASSWORD":
 				metadata.MqttPassword = &value
 			case "MQTT_BROKER":
@@ -1000,127 +996,41 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	var mqttEnvVars []string
 	workspaceId := ""
 	fmt.Println("Registering workspace...")
-	// Check if automation_server.yaml exists
-	automationServerConfig := filepath.Join(bitswanConfig, "aoc", "automation_server.yaml")
-	if _, err := os.Stat(automationServerConfig); !os.IsNotExist(err) {
-		// Read automation_server.yaml
-		yamlFile, err := os.ReadFile(automationServerConfig)
-		if err != nil {
-			return fmt.Errorf("failed to read automation_server.yaml: %w", err)
-		}
-
-		var automationConfig AutomationServerYaml
-		if err := yaml.Unmarshal(yamlFile, &automationConfig); err != nil {
-			return fmt.Errorf("failed to unmarshal automation_server.yaml: %w", err)
-		}
-
+	
+	// Try to create AOC client
+	aocClient, err := aoc.NewAOCClient()
+	if err != nil {
+		fmt.Println("Automation server config not found, skipping workspace registration.")
+	} else {
 		fmt.Println("Getting automation server token...")
-
-		resp, err := sendRequest("GET", fmt.Sprintf("%s/api/automation-servers/token", automationConfig.AOCUrl), nil, automationConfig.AccessToken)
+		automationServerToken, err := aocClient.GetAutomationServerToken()
 		if err != nil {
-			return fmt.Errorf("error sending request: %w", err)
-		}
-
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to get automation server token: %s", resp.Status)
-		}
-
-		type AutomationServerTokenResponse struct {
-			Token string `json:"token"`
-		}
-
-		var automationServerTokenResponse AutomationServerTokenResponse
-		body, _ := ioutil.ReadAll(resp.Body)
-		err = json.Unmarshal([]byte(body), &automationServerTokenResponse)
-		if err != nil {
-			return fmt.Errorf("error decoding JSON: %w", err)
+			return fmt.Errorf("failed to get automation server token: %w", err)
 		}
 		fmt.Println("Automation server token received successfully!")
 
-		payload := map[string]interface{}{
-			"name":                 workspaceName,
-			"automation_server_id": automationConfig.AutomationServerId,
-			"keycloak_org_id":      "00000000-0000-0000-0000-000000000000",
-		}
-
+		var editorURL *string
 		if !o.noIde {
-			payload["editor_url"] = fmt.Sprintf("https://%s-editor.%s", workspaceName, o.domain)
+			url := fmt.Sprintf("https://%s-editor.%s", workspaceName, o.domain)
+			editorURL = &url
 		}
 
-		jsonBytes, err := json.Marshal(payload)
+		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL)
 		if err != nil {
-			return fmt.Errorf("failed to marshal JSON: %w", err)
+			return fmt.Errorf("failed to register workspace: %w", err)
 		}
-
-		resp, err = sendRequest("POST", fmt.Sprintf("%s/api/workspaces/", automationConfig.AOCUrl), jsonBytes, automationConfig.AccessToken)
-		if err != nil {
-			return fmt.Errorf("error sending request: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusCreated {
-			return fmt.Errorf("failed to register workspace: %s", resp.Status)
-		}
-
-		type WorkspacePostResponse struct {
-			Id                 string `json:"id"`
-			Name               string `json:"name"`
-			KeycloakOrgId      string `json:"keycloak_org_id"`
-			AutomationServerId string `json:"automation_server_id"`
-			CreatedAt          string `json:"created_at"`
-			UpdatedAt          string `json:"updated_at"`
-		}
-
-		var workspacePostResponse WorkspacePostResponse
-		body, _ = ioutil.ReadAll(resp.Body)
-		err = json.Unmarshal([]byte(body), &workspacePostResponse)
-		if err != nil {
-			return fmt.Errorf("error decoding JSON: %w", err)
-		}
-
 		fmt.Println("Workspace registered successfully!")
 
-		workspaceId = workspacePostResponse.Id
-
-		aocEnvVars = append(aocEnvVars, "BITSWAN_WORKSPACE_ID="+fmt.Sprint(workspacePostResponse.Id))
-		aocEnvVars = append(aocEnvVars, "BITSWAN_AOC_URL="+automationConfig.AOCUrl)
-		aocEnvVars = append(aocEnvVars, "BITSWAN_AOC_TOKEN="+automationServerTokenResponse.Token)
+		aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
 
 		fmt.Println("Getting EMQX JWT for workspace...")
-		resp, err = sendRequest("GET", fmt.Sprintf("%s/api/workspaces/%s/emqx/jwt", automationConfig.AOCUrl, workspacePostResponse.Id), nil, automationConfig.AccessToken)
+		mqttCreds, err := aocClient.GetMQTTCredentials(workspaceId)
 		if err != nil {
-			return fmt.Errorf("error sending request: %w", err)
+			return fmt.Errorf("failed to get MQTT credentials: %w", err)
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to get EMQX JWT: %s", resp.Status)
-		}
-
-		type EmqxGetResponse struct {
-			Url   string `json:"url"`
-			Token string `json:"token"`
-		}
-
-		var emqxGetResponse EmqxGetResponse
-		body, _ = ioutil.ReadAll(resp.Body)
-		err = json.Unmarshal([]byte(body), &emqxGetResponse)
-		if err != nil {
-			return fmt.Errorf("error decoding JSON: %w", err)
-		}
-
 		fmt.Println("EMQX JWT received successfully!")
 
-		urlParts := strings.Split(emqxGetResponse.Url, ":")
-		emqxUrl, emqxPort := urlParts[0], urlParts[1]
-		mqttEnvVars = append(mqttEnvVars, "MQTT_USERNAME="+fmt.Sprint(workspacePostResponse.Id))
-		mqttEnvVars = append(mqttEnvVars, "MQTT_PASSWORD="+emqxGetResponse.Token)
-		mqttEnvVars = append(mqttEnvVars, "MQTT_BROKER="+emqxUrl)
-		mqttEnvVars = append(mqttEnvVars, "MQTT_PORT="+emqxPort)
-		mqttEnvVars = append(mqttEnvVars, "MQTT_TOPIC=/topology")
-	} else {
-		fmt.Println("Automation server config not found, skipping workspace registration.")
+		mqttEnvVars = aoc.GetMQTTEnvironmentVariables(mqttCreds)
 	}
 
 	config := &dockercompose.DockerComposeConfig{
