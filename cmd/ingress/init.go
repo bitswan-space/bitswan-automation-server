@@ -168,6 +168,6 @@ func InitIngress(verbose bool) error {
 		panic(fmt.Errorf("failed to init ingress: %w", err))
 	}
 
-	fmt.Println("Ingress proxy started successfully!")
+	fmt.Println("Ingress proxy is ready!")
 	return nil
 } 

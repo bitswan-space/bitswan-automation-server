@@ -155,7 +155,13 @@ func InitCaddy() error {
 			payload = []byte(`[]`)
 		}
 
-		if _, err := sendRequest("PUT", url, payload); err != nil {
+		_, err := sendRequest("PUT", url, payload)
+		if err != nil {
+			// Check if this is a 409 error (already exists)
+			if strings.Contains(err.Error(), "status code 409") {
+				fmt.Println("Ingress is already initialized!")
+				return nil
+			}
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
 	}
@@ -326,6 +332,16 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 
 	if method == http.MethodDelete && (resp.StatusCode < 200 || resp.StatusCode >= 300) && resp.StatusCode != 404 {
 		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request", resp.StatusCode)
+	}
+
+	// For PUT requests, 409 (Conflict) means the resource already exists, which is acceptable for initialization
+	if method == http.MethodPut && resp.StatusCode == 409 {
+		// Read the response body to avoid connection issues
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return body, nil
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
