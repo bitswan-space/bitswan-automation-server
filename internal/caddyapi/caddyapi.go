@@ -231,6 +231,11 @@ func sanitizeHostname(hostname string) string {
 func AddRoute(hostname, upstream string) error {
 	caddyAPIRoutesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/routes/..."
 
+	// First, remove any existing routes with the same ID to avoid duplicates
+	if err := RemoveRoute(hostname); err != nil {
+		return fmt.Errorf("failed to remove existing route before adding new one for %s: %w", hostname, err)
+	}
+
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
 
@@ -280,7 +285,7 @@ func AddRoute(hostname, upstream string) error {
 	return nil
 }
 
-// RemoveRoute removes a route by hostname
+// RemoveRoute removes a route by hostname, retrying until 404 is returned
 func RemoveRoute(hostname string) error {
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
@@ -288,13 +293,26 @@ func RemoveRoute(hostname string) error {
 	// Construct the URL for the specific route
 	url := fmt.Sprintf("http://localhost:2019/id/%s", routeID)
 
-	// Send a DELETE request to the Caddy API
-	if _, err := sendRequest("DELETE", url, nil); err != nil {
-		return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
+	// Keep trying to delete until we get a 404 (route doesn't exist)
+	firstRun := true
+	for {
+		_, err := sendRequest("DELETE", url, nil)
+		if err != nil {
+			// Check if this is a 404 error (route doesn't exist)
+			if strings.Contains(err.Error(), "status code 404") {
+				if firstRun {
+					fmt.Printf("Route %s already removed or doesn't exist\n", hostname)
+				}
+				return nil
+			}
+			// For other errors, return immediately
+			return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
+		}
+		
+		// If we get here, the deletion was successful, continue to check for more routes
+		fmt.Printf("Removed route: %s\n", hostname)
+		firstRun = false
 	}
-
-	fmt.Printf("Successfully removed route: %s\n", hostname)
-	return nil
 }
 
 // ListRoutes retrieves and lists all current routes from Caddy
