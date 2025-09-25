@@ -66,7 +66,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		"volumes": []string{
 			config.GitopsPath + "/gitops:/gitops/gitops:z",
 			config.GitopsPath + "/secrets:/gitops/secrets:z",
-			sshDir + ":/root/.ssh:z",
+			sshDir + ":/home/user1000/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
 		},
 		"environment": []string{
@@ -94,26 +94,25 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), "DEBUG=true")
 	}
 
-	// Only run this part if the sshDir doesn't contain a public key
-	publicKeyPath := sshDir + "/id_ed25519.pub"
-	if _, err := os.Stat(publicKeyPath); os.IsNotExist(err) {
-		if hostOs == WindowsMac {
-			gitopsVolumes := []string{
-				gitConfig + ":/root/.gitconfig:z",
-				config.GitopsPath + "/workspace/.git:/workspace-repo/.git:z",
-			}
-
-			gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
-
-			// Rewrite .git in worktree because it's calling git command inside the container (only for Windows and Mac)
-			gitdir := "gitdir: /workspace-repo/.git/worktrees/gitops"
-			if err := os.WriteFile(config.GitopsPath+"/gitops/.git", []byte(gitdir), 0644); err != nil {
-				return "", "", fmt.Errorf("failed to rewrite gitops worktree .git file: %w", err)
-			}
-		} else if hostOs == Linux {
-			gitopsService["privileged"] = true
-			gitopsService["pid"] = "host"
+	// Add workspace git mount and rewrite git path for all OS
+	if hostOs == WindowsMac {
+		gitopsVolumes := []string{
+			gitConfig + ":/root/.gitconfig:z",
+			config.GitopsPath + "/workspace/.git:/workspace-repo/.git:z",
 		}
+		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
+	} else if hostOs == Linux {
+		// For Linux, also mount workspace git directory
+		gitopsVolumes := []string{
+			config.GitopsPath + "/workspace/.git:/workspace-repo/.git:z",
+		}
+		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
+	}
+
+	// Rewrite .git in worktree for all OS to use container path
+	gitdir := "gitdir: /workspace-repo/.git/worktrees/gitops"
+	if err := os.WriteFile(config.GitopsPath+"/gitops/.git", []byte(gitdir), 0644); err != nil {
+		return "", "", fmt.Errorf("failed to rewrite gitops worktree .git file: %w", err)
 	}
 
 	// Construct the docker-compose data structure
