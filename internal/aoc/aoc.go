@@ -59,7 +59,7 @@ type AOCClient struct {
 // NewAOCClient creates a new AOC client from the automation server config
 func NewAOCClient() (*AOCClient, error) {
 	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
-	automationServerConfig := filepath.Join(bitswanConfig, "aoc", "automation_server.yaml")
+	automationServerConfig := filepath.Join(bitswanConfig, "automation_server.yaml")
 	
 	if _, err := os.Stat(automationServerConfig); os.IsNotExist(err) {
 		return nil, fmt.Errorf("automation server config not found")
