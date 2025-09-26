@@ -139,14 +139,15 @@ func (c *AOCClient) RegisterWorkspace(workspaceName string, editorURL *string) (
 
 // GetMQTTCredentials gets MQTT credentials for a workspace
 func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, error) {
-	resp, err := c.sendRequest("GET", fmt.Sprintf("%s/api/workspaces/%s/emqx/jwt", c.config.AOCUrl, workspaceId), nil)
+	url := fmt.Sprintf("%s/api/workspaces/%s/emqx/jwt", c.config.AOCUrl, workspaceId)
+	resp, err := c.sendRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error sending request: %w", err)
+		return nil, fmt.Errorf("error sending request to %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get EMQX JWT: %s", resp.Status)
+		return nil, fmt.Errorf("failed to get EMQX JWT from %s: %s", url, resp.Status)
 	}
 
 	var emqxResponse EmqxGetResponse
@@ -175,19 +176,37 @@ func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, er
 
 // GetAOCEnvironmentVariables creates AOC environment variables
 func (c *AOCClient) GetAOCEnvironmentVariables(workspaceId, automationServerToken string) []string {
+	aocUrl := c.config.AOCUrl
+	// Replace .localhost hostname with Docker service name for internal communication
+	if strings.Contains(aocUrl, ".localhost") {
+		// Extract the path part after the hostname
+		urlParts := strings.Split(strings.TrimPrefix(aocUrl, "http://"), "/")
+		path := ""
+		if len(urlParts) > 1 {
+			path = "/" + strings.Join(urlParts[1:], "/")
+		}
+		aocUrl = "http://aoc-bitswan-backend:8000" + path
+	}
+	
 	return []string{
 		"BITSWAN_WORKSPACE_ID=" + workspaceId,
-		"BITSWAN_AOC_URL=" + c.config.AOCUrl,
+		"BITSWAN_AOC_URL=" + aocUrl,
 		"BITSWAN_AOC_TOKEN=" + automationServerToken,
 	}
 }
 
 // GetMQTTEnvironmentVariables creates MQTT environment variables from credentials
 func GetMQTTEnvironmentVariables(creds *MQTTCredentials) []string {
+	broker := creds.Broker
+	// Replace .localhost hostname with Docker service name for internal communication
+	if strings.Contains(broker, ".localhost") {
+		broker = "aoc-emqx"
+	}
+	
 	return []string{
 		"MQTT_USERNAME=" + creds.Username,
 		"MQTT_PASSWORD=" + creds.Password,
-		"MQTT_BROKER=" + creds.Broker,
+		"MQTT_BROKER=" + broker,
 		"MQTT_PORT=" + fmt.Sprint(creds.Port),
 		"MQTT_TOPIC=" + creds.Topic,
 	}
