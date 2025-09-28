@@ -188,7 +188,7 @@ func (c *AOCClient) RegisterWorkspace(workspaceName string, editorURL *string) (
 	}
 
 	if editorURL != nil {
-		payload["description"] = fmt.Sprintf("Workspace with editor URL: %s", *editorURL)
+		payload["editor_url"] = *editorURL
 	}
 
 	jsonBytes, err := json.Marshal(payload)
