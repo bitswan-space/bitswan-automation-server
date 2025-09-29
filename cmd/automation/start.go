@@ -15,10 +15,11 @@ func newStartCmd() *cobra.Command {
 		Short: "Start the automation",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workspaceName, err := config.GetWorkspaceName()
+			configManager := config.NewAutomationServerConfig()
+			workspaceName, err := configManager.GetActiveWorkspace()
 			automationDeploymentId := args[0]
 			if err != nil {
-				return fmt.Errorf("failed to get active workspace from config.toml: %v", err)
+				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
 			}
 
 			fmt.Printf("Starting an automation %s...\n", automationDeploymentId)

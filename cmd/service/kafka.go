@@ -105,7 +105,8 @@ func newKafkaUpdateCmd() *cobra.Command {
 
 func enableKafkaService() error {
 	// Get the active workspace
-	workspaceName, err := config.GetWorkspaceName()
+	configManager := config.NewAutomationServerConfig()
+	workspaceName, err := configManager.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -131,7 +132,8 @@ func enableKafkaService() error {
 
 func disableKafkaService() error {
 	// Get the active workspace
-	workspaceName, err := config.GetWorkspaceName()
+	configManager := config.NewAutomationServerConfig()
+	workspaceName, err := configManager.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -157,7 +159,8 @@ func disableKafkaService() error {
 
 func kafkaStatus(showPasswords bool) error {
 	// Get the active workspace
-	workspaceName, err := config.GetWorkspaceName()
+	configManager := config.NewAutomationServerConfig()
+	workspaceName, err := configManager.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -207,7 +210,8 @@ func kafkaStatus(showPasswords bool) error {
 
 func startKafkaContainer() error {
 	// Get the active workspace
-	workspaceName, err := config.GetWorkspaceName()
+	configManager := config.NewAutomationServerConfig()
+	workspaceName, err := configManager.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -239,7 +243,8 @@ func startKafkaContainer() error {
 
 func stopKafkaContainer() error {
 	// Get the active workspace
-	workspaceName, err := config.GetWorkspaceName()
+	configManager := config.NewAutomationServerConfig()
+	workspaceName, err := configManager.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -271,7 +276,8 @@ func stopKafkaContainer() error {
 
 func updateKafkaService(kafkaImage, zookeeperImage string) error {
 	// Get the active workspace
-	workspaceName, err := config.GetWorkspaceName()
+	configManager := config.NewAutomationServerConfig()
+	workspaceName, err := configManager.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}

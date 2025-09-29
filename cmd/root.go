@@ -10,6 +10,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/cmd/automation"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/caddy"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -29,14 +30,12 @@ func newRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(caddy.NewCaddyCmd())    // caddy subcommand (deprecated)
 
 	// Check if the configuration file exists and has an active workspace
-	configPath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "config.toml")
-	if _, err := os.Stat(configPath); err == nil {
-		// File exists, read and parse it
-		configData, err := os.ReadFile(configPath)
-		if err == nil {
-			if strings.Contains(string(configData), "active_workspace = \"") {
-				cmd.AddCommand(automation.NewAutomationCmd())
-			}
+	configManager := config.NewAutomationServerConfig()
+	if configManager.ConfigExists() {
+		// Config exists, check if it has an active workspace
+		activeWorkspace, err := configManager.GetActiveWorkspace()
+		if err == nil && activeWorkspace != "" {
+			cmd.AddCommand(automation.NewAutomationCmd())
 		}
 	}
 
