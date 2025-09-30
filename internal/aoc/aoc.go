@@ -2,10 +2,14 @@ package aoc
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -128,7 +132,7 @@ func (c *AOCClient) ExchangeOTP(otp, automationServerId string) (string, string,
 		return "", "", fmt.Errorf("failed to marshal OTP request: %w", err)
 	}
 
-	resp, err := c.sendRequest("POST", fmt.Sprintf("%s/api/automation_server/exchange-otp/", c.settings.AOCUrl), jsonBytes)
+	resp, err := c.sendRequest("POST", fmt.Sprintf("%s/api/automation_server/exchange-otp", c.settings.AOCUrl), jsonBytes)
 	if err != nil {
 		return "", "", fmt.Errorf("error sending OTP exchange request: %w", err)
 	}
@@ -151,7 +155,7 @@ func (c *AOCClient) ExchangeOTP(otp, automationServerId string) (string, string,
 
 // GetAutomationServerInfo gets the automation server information
 func (c *AOCClient) GetAutomationServerInfo() (*AutomationServerInfo, error) {
-	resp, err := c.sendRequest("GET", fmt.Sprintf("%s/api/automation_server/info/", c.settings.AOCUrl), nil)
+	resp, err := c.sendRequest("GET", fmt.Sprintf("%s/api/automation_server/info", c.settings.AOCUrl), nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request: %w", err)
 	}
@@ -365,6 +369,56 @@ func (c *AOCClient) SaveConfig() error {
 	return c.configManager.UpdateAutomationServer(*c.settings)
 }
 
+// createHTTPClient creates an HTTP client that trusts mkcert certificates
+func createHTTPClient() (*http.Client, error) {
+	// Get the user's home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	// Path to mkcert root CA
+	mkcertPath := filepath.Join(homeDir, ".local", "share", "mkcert", "rootCA.pem")
+	
+	// Check if mkcert root CA exists
+	if _, err := os.Stat(mkcertPath); os.IsNotExist(err) {
+		// If mkcert CA doesn't exist, use default client
+		return &http.Client{}, nil
+	}
+
+	// Read the mkcert root CA certificate
+	caCert, err := os.ReadFile(mkcertPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read mkcert root CA: %w", err)
+	}
+
+	// Create a certificate pool that includes system certificates
+	caCertPool, err := x509.SystemCertPool()
+	if err != nil {
+		// Fallback to empty pool if system cert pool fails
+		caCertPool = x509.NewCertPool()
+	}
+	
+	// Add the mkcert root CA to the pool
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to parse mkcert root CA")
+	}
+
+	// Create TLS configuration that trusts the mkcert CA
+	tlsConfig := &tls.Config{
+		RootCAs: caCertPool,
+	}
+
+	// Create HTTP client with custom transport
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+	}
+
+	return client, nil
+}
+
 // sendRequest is a helper method for making HTTP requests
 func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Response, error) {
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
@@ -378,7 +432,11 @@ func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Respo
 		req.Header.Set("Authorization", "Bearer "+c.settings.AccessToken)
 	}
 
-	client := &http.Client{}
+	client, err := createHTTPClient()
+	if err != nil {
+		return nil, fmt.Errorf("error creating HTTP client: %w", err)
+	}
+	
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %w", err)
