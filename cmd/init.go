@@ -256,49 +256,6 @@ func UpdateExamples(bitswanConfig string, verbose bool) error {
 	return nil
 }
 
-func generateWildcardCerts(domain string) (string, error) {
-	// Create temporary directory
-	tempDir, err := os.MkdirTemp("", "certs-*")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %w", err)
-	}
-
-	// Store current working directory
-	originalDir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %w", err)
-	}
-
-	// Change to temp directory
-	if err := os.Chdir(tempDir); err != nil {
-		return "", fmt.Errorf("failed to change to temp directory: %w", err)
-	}
-
-	// Ensure we change back to original directory when function returns
-	defer os.Chdir(originalDir)
-
-	// Generate wildcard certificate
-	wildcardDomain := "*." + domain
-	cmd := exec.Command("mkcert", wildcardDomain)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to generate certificate: %w", err)
-	}
-
-	// Generate file names
-	keyFile := fmt.Sprintf("_wildcard.%s-key.pem", domain)
-	certFile := fmt.Sprintf("_wildcard.%s.pem", domain)
-
-	// Rename files
-	if err := os.Rename(keyFile, "private-key.pem"); err != nil {
-		return "", fmt.Errorf("failed to rename key file: %w", err)
-	}
-	if err := os.Rename(certFile, "full-chain.pem"); err != nil {
-		return "", fmt.Errorf("failed to rename cert file: %w", err)
-	}
-
-	return tempDir, nil
-}
-
 func setHosts(workspaceName string, o *initOptions) error {
 	fmt.Println("Checking if the user has permission to write to /etc/hosts...")
 	fileInfo, err := os.Stat("/etc/hosts")
@@ -699,56 +656,15 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	inputCertsDir := o.certsDir
-
+	// Handle certificate generation and installation
 	if o.mkCerts {
-		certDir, err := generateWildcardCerts(o.domain)
-		if err != nil {
-			return fmt.Errorf("error generating certificates: %v", err)
+		if err := caddyapi.GenerateAndInstallCerts(o.domain); err != nil {
+			return fmt.Errorf("error generating and installing certificates: %w", err)
 		}
-		inputCertsDir = certDir
-	}
-
-	if inputCertsDir != "" {
-		fmt.Println("Installing certs from", inputCertsDir)
-		caddyCertsDir := caddyConfig + "/certs"
-		if _, err := os.Stat(caddyCertsDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(caddyCertsDir, 0755); err != nil {
-				return fmt.Errorf("failed to create Caddy certs directory: %w", err)
-			}
+	} else if o.certsDir != "" {
+		if err := caddyapi.InstallCertsFromDir(o.certsDir, o.domain, caddyConfig); err != nil {
+			return fmt.Errorf("error installing certificates from directory: %w", err)
 		}
-
-		certsDir := caddyCertsDir + "/" + o.domain
-		if _, err := os.Stat(certsDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(certsDir, 0755); err != nil {
-				return fmt.Errorf("failed to create certs directory: %w", err)
-			}
-		}
-
-		certs, err := os.ReadDir(inputCertsDir)
-		if err != nil {
-			panic(fmt.Errorf("failed to read certs directory: %w", err))
-		}
-
-		for _, cert := range certs {
-			if cert.IsDir() {
-				continue
-			}
-
-			certPath := inputCertsDir + "/" + cert.Name()
-			newCertPath := certsDir + "/" + cert.Name()
-
-			bytes, err := os.ReadFile(certPath)
-			if err != nil {
-				panic(fmt.Errorf("failed to read cert file: %w", err))
-			}
-
-			if err := os.WriteFile(newCertPath, bytes, 0755); err != nil {
-				panic(fmt.Errorf("failed to copy cert file: %w", err))
-			}
-		}
-
-		fmt.Println("Certs copied successfully!")
 	}
 
 	gitopsConfig := bitswanConfig + "workspaces/" + workspaceName
@@ -972,9 +888,10 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	if inputCertsDir != "" {
+	// Install TLS certificates and policies if certificates were provided
+	if o.mkCerts || o.certsDir != "" {
 		if err := caddyapi.InstallTLSCerts(workspaceName, o.domain); err != nil {
-			return fmt.Errorf("failed to install caddy certs %w", err)
+			return fmt.Errorf("failed to install caddy certs: %w", err)
 		}
 	}
 

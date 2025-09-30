@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"gopkg.in/yaml.v3"
 )
@@ -372,4 +373,232 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+// generateWildcardCerts generates wildcard certificates using mkcert
+func generateWildcardCerts(domain string) (string, error) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "certs-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Store current working directory
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		return "", fmt.Errorf("failed to change to temp directory: %w", err)
+	}
+
+	// Ensure we change back to original directory when function returns
+	defer os.Chdir(originalDir)
+
+	// Generate wildcard certificate
+	wildcardDomain := "*." + domain
+	cmd := exec.Command("mkcert", wildcardDomain)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to generate certificate: %w", err)
+	}
+
+	// Generate file names
+	keyFile := fmt.Sprintf("_wildcard.%s-key.pem", domain)
+	certFile := fmt.Sprintf("_wildcard.%s.pem", domain)
+
+	// Rename files
+	if err := os.Rename(keyFile, "private-key.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename key file: %w", err)
+	}
+	if err := os.Rename(certFile, "full-chain.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename cert file: %w", err)
+	}
+
+	return tempDir, nil
+}
+
+// InstallCertsFromDir installs certificates from a directory to Caddy's cert directory
+func InstallCertsFromDir(inputCertsDir, domain, caddyConfig string) error {
+	if inputCertsDir == "" {
+		return nil
+	}
+
+	fmt.Println("Installing certs from", inputCertsDir)
+	caddyCertsDir := caddyConfig + "/certs"
+	if _, err := os.Stat(caddyCertsDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(caddyCertsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create Caddy certs directory: %w", err)
+		}
+	}
+
+	certsDir := caddyCertsDir + "/" + domain
+	if _, err := os.Stat(certsDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(certsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create certs directory: %w", err)
+		}
+	}
+
+	certs, err := os.ReadDir(inputCertsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read certs directory: %w", err)
+	}
+
+	for _, cert := range certs {
+		if cert.IsDir() {
+			continue
+		}
+
+		certPath := inputCertsDir + "/" + cert.Name()
+		newCertPath := certsDir + "/" + cert.Name()
+
+		bytes, err := os.ReadFile(certPath)
+		if err != nil {
+			return fmt.Errorf("failed to read cert file: %w", err)
+		}
+
+		if err := os.WriteFile(newCertPath, bytes, 0755); err != nil {
+			return fmt.Errorf("failed to copy cert file: %w", err)
+		}
+	}
+
+	fmt.Println("Certs copied successfully!")
+	return nil
+}
+
+// GenerateAndInstallCerts generates wildcard certificates and installs them to Caddy
+func GenerateAndInstallCerts(domain string) error {
+	// Generate certificates
+	certDir, err := generateWildcardCerts(domain)
+	if err != nil {
+		return fmt.Errorf("error generating certificates: %w", err)
+	}
+
+	// Install certificates to the standard Caddy location
+	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+	if err := InstallCertsFromDir(certDir, domain, caddyConfig); err != nil {
+		return fmt.Errorf("error installing certificates: %w", err)
+	}
+
+	// Clean up temporary directory
+	defer os.RemoveAll(certDir)
+
+	return nil
+}
+
+// generateCertsForHostname generates certificates for a specific hostname using mkcert
+func generateCertsForHostname(hostname string) (string, error) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "certs-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Store current working directory
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		return "", fmt.Errorf("failed to change to temp directory: %w", err)
+	}
+
+	// Ensure we change back to original directory when function returns
+	defer os.Chdir(originalDir)
+
+	// Generate certificate for the specific hostname
+	cmd := exec.Command("mkcert", hostname)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to generate certificate: %w", err)
+	}
+
+	// Generate file names based on hostname
+	keyFile := fmt.Sprintf("%s-key.pem", hostname)
+	certFile := fmt.Sprintf("%s.pem", hostname)
+
+	// Rename files
+	if err := os.Rename(keyFile, "private-key.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename key file: %w", err)
+	}
+	if err := os.Rename(certFile, "full-chain.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename cert file: %w", err)
+	}
+
+	return tempDir, nil
+}
+
+// GenerateAndInstallCertsForHostname generates certificates for a specific hostname and installs them to Caddy
+func GenerateAndInstallCertsForHostname(hostname, domain string) error {
+	// Generate certificates for the specific hostname
+	certDir, err := generateCertsForHostname(hostname)
+	if err != nil {
+		return fmt.Errorf("error generating certificates: %w", err)
+	}
+
+	// Install certificates to the standard Caddy location
+	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+	if err := InstallCertsFromDir(certDir, domain, caddyConfig); err != nil {
+		return fmt.Errorf("error installing certificates: %w", err)
+	}
+
+	// Clean up temporary directory
+	defer os.RemoveAll(certDir)
+
+	return nil
+}
+
+// InstallTLSCertsForHostname installs TLS certificates and policies for a specific hostname
+func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
+	caddyAPITLSBaseUrl := "http://localhost:2019/config/apps/tls/certificates/load_files/..."
+	caddyAPITLSPoliciesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies/..."
+
+	// Define TLS policies and certificates for the specific hostname
+	tlsPolicy := []TLSPolicy{
+		{
+			ID: fmt.Sprintf("%s_%s_tlspolicy", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
+			Match: TLSMatch{
+				SNI: []string{hostname},
+			},
+			CertificateSelection: TLSCertificateSelection{
+				AnyTag: []string{workspaceName},
+			},
+		},
+	}
+
+	tlsLoad := []TLSFileLoad{
+		{
+			ID:          fmt.Sprintf("%s_%s_tlscerts", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", domain),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", domain),
+			Tags:        []string{workspaceName},
+		},
+	}
+
+	// Send TLS certificates to Caddy
+	jsonPayload, err := json.Marshal(tlsLoad)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TLS certificates payload: %w", err)
+	}
+
+	_, err = sendRequest("POST", caddyAPITLSBaseUrl, jsonPayload)
+	if err != nil {
+		return fmt.Errorf("failed to add TLS certificates to Caddy: %w", err)
+	}
+
+	// Send TLS policies to Caddy
+	jsonPayload, err = json.Marshal(tlsPolicy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TLS policies payload: %w", err)
+	}
+
+	_, err = sendRequest("POST", caddyAPITLSPoliciesBaseUrl, jsonPayload)
+	if err != nil {
+		return fmt.Errorf("failed to add TLS policies to Caddy: %w", err)
+	}
+
+	fmt.Println("TLS certificates and policies installed successfully!")
+	return nil
 }
