@@ -420,7 +420,7 @@ func generateWildcardCerts(domain string) (string, error) {
 }
 
 // InstallCertsFromDir installs certificates from a directory to Caddy's cert directory
-func InstallCertsFromDir(inputCertsDir, domain, caddyConfig string) error {
+func InstallCertsFromDir(inputCertsDir, hostname, caddyConfig string) error {
 	if inputCertsDir == "" {
 		return nil
 	}
@@ -433,7 +433,10 @@ func InstallCertsFromDir(inputCertsDir, domain, caddyConfig string) error {
 		}
 	}
 
-	certsDir := caddyCertsDir + "/" + domain
+	// Use hostname instead of domain to avoid overwriting certificates for different subdomains
+	// Sanitize hostname for filesystem safety
+	sanitizedHostname := sanitizeHostname(hostname)
+	certsDir := caddyCertsDir + "/" + sanitizedHostname
 	if _, err := os.Stat(certsDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(certsDir, 0755); err != nil {
 			return fmt.Errorf("failed to create certs directory: %w", err)
@@ -538,9 +541,9 @@ func GenerateAndInstallCertsForHostname(hostname, domain string) error {
 		return fmt.Errorf("error generating certificates: %w", err)
 	}
 
-	// Install certificates to the standard Caddy location
+	// Install certificates to the standard Caddy location using hostname instead of domain
 	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-	if err := InstallCertsFromDir(certDir, domain, caddyConfig); err != nil {
+	if err := InstallCertsFromDir(certDir, hostname, caddyConfig); err != nil {
 		return fmt.Errorf("error installing certificates: %w", err)
 	}
 
@@ -571,8 +574,8 @@ func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
 	tlsLoad := []TLSFileLoad{
 		{
 			ID:          fmt.Sprintf("%s_%s_tlscerts", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
-			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", domain),
-			Key:         fmt.Sprintf("/tls/%s/private-key.pem", domain),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(hostname)),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(hostname)),
 			Tags:        []string{workspaceName},
 		},
 	}
