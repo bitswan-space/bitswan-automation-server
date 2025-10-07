@@ -16,11 +16,12 @@ type AutomationServerConfig struct {
 // Config represents the combined TOML configuration
 type Config struct {
 	ActiveWorkspace    string                    `toml:"active_workspace"`
-	AutomationServer   AutomationServerSettings  `toml:"automation_server"`
+	AutomationOperationsCenter   AutomationOperationsCenterSettings  `toml:"aoc"`
+
 }
 
-// AutomationServerSettings represents the automation server settings in TOML
-type AutomationServerSettings struct {
+// AutomationOperationsCenterSettings represents the automation operations center connection settings in TOML
+type AutomationOperationsCenterSettings struct {
 	AOCUrl             string `toml:"aoc_url"`
 	AutomationServerId string `toml:"automation_server_id"`
 	AccessToken        string `toml:"access_token"`
@@ -92,25 +93,25 @@ func (m *AutomationServerConfig) saveTOMLConfig(config *Config) error {
 }
 
 // UpdateAutomationServer updates only the automation server settings
-func (m *AutomationServerConfig) UpdateAutomationServer(settings AutomationServerSettings) error {
+func (m *AutomationServerConfig) UpdateAutomationServer(settings AutomationOperationsCenterSettings) error {
 	config, err := m.LoadConfig()
 	if err != nil {
 		// If no config exists, create a new one
 		config = &Config{}
 	}
 
-	config.AutomationServer = settings
+	config.AutomationOperationsCenter = settings
 	return m.SaveConfig(config)
 }
 
 // GetAutomationServerSettings returns the current automation server settings
-func (m *AutomationServerConfig) GetAutomationServerSettings() (*AutomationServerSettings, error) {
+func (m *AutomationServerConfig) GetAutomationServerSettings() (*AutomationOperationsCenterSettings, error) {
 	config, err := m.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	return &config.AutomationServer, nil
+	return &config.AutomationOperationsCenter, nil
 }
 
 // GetActiveWorkspace returns the current active workspace

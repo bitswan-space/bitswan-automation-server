@@ -74,7 +74,7 @@ type MQTTCredentials struct {
 // AOCClient handles AOC API interactions
 type AOCClient struct {
 	config *config.AutomationServerConfig
-	settings      *config.AutomationServerSettings
+	settings      *config.AutomationOperationsCenterSettings
 }
 
 // NewAOCClient creates a new AOC client from the automation server config
@@ -97,7 +97,7 @@ func NewAOCClientWithOTP(aocUrl, otp, automationServerId string) (*AOCClient, er
 	cfg := config.NewAutomationServerConfig()
 	
 	// Create temporary settings for OTP exchange
-	tempSettings := &config.AutomationServerSettings{
+	tempSettings := &config.AutomationOperationsCenterSettings{
 		AOCUrl:             aocUrl,
 		AutomationServerId: automationServerId,
 	}
