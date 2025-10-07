@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"gopkg.in/yaml.v3"
 )
@@ -155,7 +156,13 @@ func InitCaddy() error {
 			payload = []byte(`[]`)
 		}
 
-		if _, err := sendRequest("PUT", url, payload); err != nil {
+		_, err := sendRequest("PUT", url, payload)
+		if err != nil {
+			// Check if this is a 409 error (already exists)
+			if strings.Contains(err.Error(), "status code 409") {
+				fmt.Println("Ingress is already initialized!")
+				return nil
+			}
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
 	}
@@ -225,6 +232,11 @@ func sanitizeHostname(hostname string) string {
 func AddRoute(hostname, upstream string) error {
 	caddyAPIRoutesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/routes/..."
 
+	// First, remove any existing routes with the same ID to avoid duplicates
+	if err := RemoveRoute(hostname); err != nil {
+		return fmt.Errorf("failed to remove existing route before adding new one for %s: %w", hostname, err)
+	}
+
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
 
@@ -274,7 +286,7 @@ func AddRoute(hostname, upstream string) error {
 	return nil
 }
 
-// RemoveRoute removes a route by hostname
+// RemoveRoute removes a route by hostname, retrying until 404 is returned
 func RemoveRoute(hostname string) error {
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
@@ -282,13 +294,26 @@ func RemoveRoute(hostname string) error {
 	// Construct the URL for the specific route
 	url := fmt.Sprintf("http://localhost:2019/id/%s", routeID)
 
-	// Send a DELETE request to the Caddy API
-	if _, err := sendRequest("DELETE", url, nil); err != nil {
-		return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
+	// Keep trying to delete until we get a 404 (route doesn't exist)
+	firstRun := true
+	for {
+		_, err := sendRequest("DELETE", url, nil)
+		if err != nil {
+			// Check if this is a 404 error (route doesn't exist)
+			if strings.Contains(err.Error(), "status code 404") {
+				if firstRun {
+					fmt.Printf("Route %s already removed or doesn't exist\n", hostname)
+				}
+				return nil
+			}
+			// For other errors, return immediately
+			return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
+		}
+		
+		// If we get here, the deletion was successful, continue to check for more routes
+		fmt.Printf("Removed route: %s\n", hostname)
+		firstRun = false
 	}
-
-	fmt.Printf("Successfully removed route: %s\n", hostname)
-	return nil
 }
 
 // ListRoutes retrieves and lists all current routes from Caddy
@@ -328,6 +353,16 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request", resp.StatusCode)
 	}
 
+	// For PUT requests, 409 (Conflict) means the resource already exists, which is acceptable for initialization
+	if method == http.MethodPut && resp.StatusCode == 409 {
+		// Read the response body to avoid connection issues
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return body, nil
+	}
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("Caddy API returned status code %d", resp.StatusCode)
 	}
@@ -338,4 +373,235 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 
 	return body, nil
+}
+
+// generateWildcardCerts generates wildcard certificates using mkcert
+func generateWildcardCerts(domain string) (string, error) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "certs-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Store current working directory
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		return "", fmt.Errorf("failed to change to temp directory: %w", err)
+	}
+
+	// Ensure we change back to original directory when function returns
+	defer os.Chdir(originalDir)
+
+	// Generate wildcard certificate
+	wildcardDomain := "*." + domain
+	cmd := exec.Command("mkcert", wildcardDomain)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to generate certificate: %w", err)
+	}
+
+	// Generate file names
+	keyFile := fmt.Sprintf("_wildcard.%s-key.pem", domain)
+	certFile := fmt.Sprintf("_wildcard.%s.pem", domain)
+
+	// Rename files
+	if err := os.Rename(keyFile, "private-key.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename key file: %w", err)
+	}
+	if err := os.Rename(certFile, "full-chain.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename cert file: %w", err)
+	}
+
+	return tempDir, nil
+}
+
+// InstallCertsFromDir installs certificates from a directory to Caddy's cert directory
+func InstallCertsFromDir(inputCertsDir, hostname, caddyConfig string) error {
+	if inputCertsDir == "" {
+		return nil
+	}
+
+	fmt.Println("Installing certs from", inputCertsDir)
+	caddyCertsDir := caddyConfig + "/certs"
+	if _, err := os.Stat(caddyCertsDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(caddyCertsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create Caddy certs directory: %w", err)
+		}
+	}
+
+	// Use hostname instead of domain to avoid overwriting certificates for different subdomains
+	// Sanitize hostname for filesystem safety
+	sanitizedHostname := sanitizeHostname(hostname)
+	certsDir := caddyCertsDir + "/" + sanitizedHostname
+	if _, err := os.Stat(certsDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(certsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create certs directory: %w", err)
+		}
+	}
+
+	certs, err := os.ReadDir(inputCertsDir)
+	if err != nil {
+		return fmt.Errorf("failed to read certs directory: %w", err)
+	}
+
+	for _, cert := range certs {
+		if cert.IsDir() {
+			continue
+		}
+
+		certPath := inputCertsDir + "/" + cert.Name()
+		newCertPath := certsDir + "/" + cert.Name()
+
+		bytes, err := os.ReadFile(certPath)
+		if err != nil {
+			return fmt.Errorf("failed to read cert file: %w", err)
+		}
+
+		if err := os.WriteFile(newCertPath, bytes, 0755); err != nil {
+			return fmt.Errorf("failed to copy cert file: %w", err)
+		}
+	}
+
+	fmt.Println("Certs copied successfully!")
+	return nil
+}
+
+// GenerateAndInstallCerts generates wildcard certificates and installs them to Caddy
+func GenerateAndInstallCerts(domain string) error {
+	// Generate certificates
+	certDir, err := generateWildcardCerts(domain)
+	if err != nil {
+		return fmt.Errorf("error generating certificates: %w", err)
+	}
+
+	// Install certificates to the standard Caddy location
+	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+	if err := InstallCertsFromDir(certDir, domain, caddyConfig); err != nil {
+		return fmt.Errorf("error installing certificates: %w", err)
+	}
+
+	// Clean up temporary directory
+	defer os.RemoveAll(certDir)
+
+	return nil
+}
+
+// generateCertsForHostname generates certificates for a specific hostname using mkcert
+func generateCertsForHostname(hostname string) (string, error) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "certs-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Store current working directory
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Change to temp directory
+	if err := os.Chdir(tempDir); err != nil {
+		return "", fmt.Errorf("failed to change to temp directory: %w", err)
+	}
+
+	// Ensure we change back to original directory when function returns
+	defer os.Chdir(originalDir)
+
+	// Generate certificate for the specific hostname
+	cmd := exec.Command("mkcert", hostname)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to generate certificate: %w", err)
+	}
+
+	// Generate file names based on hostname
+	keyFile := fmt.Sprintf("%s-key.pem", hostname)
+	certFile := fmt.Sprintf("%s.pem", hostname)
+
+	// Rename files
+	if err := os.Rename(keyFile, "private-key.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename key file: %w", err)
+	}
+	if err := os.Rename(certFile, "full-chain.pem"); err != nil {
+		return "", fmt.Errorf("failed to rename cert file: %w", err)
+	}
+
+	return tempDir, nil
+}
+
+// GenerateAndInstallCertsForHostname generates certificates for a specific hostname and installs them to Caddy
+func GenerateAndInstallCertsForHostname(hostname, domain string) error {
+	// Generate certificates for the specific hostname
+	certDir, err := generateCertsForHostname(hostname)
+	if err != nil {
+		return fmt.Errorf("error generating certificates: %w", err)
+	}
+
+	// Install certificates to the standard Caddy location using hostname instead of domain
+	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+	if err := InstallCertsFromDir(certDir, hostname, caddyConfig); err != nil {
+		return fmt.Errorf("error installing certificates: %w", err)
+	}
+
+	// Clean up temporary directory
+	defer os.RemoveAll(certDir)
+
+	return nil
+}
+
+// InstallTLSCertsForHostname installs TLS certificates and policies for a specific hostname
+func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
+	caddyAPITLSBaseUrl := "http://localhost:2019/config/apps/tls/certificates/load_files/..."
+	caddyAPITLSPoliciesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies/..."
+
+	// Define TLS policies and certificates for the specific hostname
+	tlsPolicy := []TLSPolicy{
+		{
+			ID: fmt.Sprintf("%s_%s_tlspolicy", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
+			Match: TLSMatch{
+				SNI: []string{hostname},
+			},
+			CertificateSelection: TLSCertificateSelection{
+				AnyTag: []string{workspaceName},
+			},
+		},
+	}
+
+	tlsLoad := []TLSFileLoad{
+		{
+			ID:          fmt.Sprintf("%s_%s_tlscerts", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(hostname)),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(hostname)),
+			Tags:        []string{workspaceName},
+		},
+	}
+
+	// Send TLS certificates to Caddy
+	jsonPayload, err := json.Marshal(tlsLoad)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TLS certificates payload: %w", err)
+	}
+
+	_, err = sendRequest("POST", caddyAPITLSBaseUrl, jsonPayload)
+	if err != nil {
+		return fmt.Errorf("failed to add TLS certificates to Caddy: %w", err)
+	}
+
+	// Send TLS policies to Caddy
+	jsonPayload, err = json.Marshal(tlsPolicy)
+	if err != nil {
+		return fmt.Errorf("failed to marshal TLS policies payload: %w", err)
+	}
+
+	_, err = sendRequest("POST", caddyAPITLSPoliciesBaseUrl, jsonPayload)
+	if err != nil {
+		return fmt.Errorf("failed to add TLS policies to Caddy: %w", err)
+	}
+
+	fmt.Println("TLS certificates and policies installed successfully!")
+	return nil
 }

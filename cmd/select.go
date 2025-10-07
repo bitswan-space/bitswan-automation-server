@@ -25,17 +25,11 @@ func newSelectCmd() *cobra.Command {
 				return fmt.Errorf("error: %w", err)
 			}
 
-			// Load the existing configuration
-			conf, err := config.GetConfig()
-			if err != nil {
-				return err
-			}
+			// Load the configuration manager
+			cfg := config.NewAutomationServerConfig()
 
 			// Update the active workspace
-			conf.ActiveWorkspace = workspace
-
-			// Save the updated configuration
-			if err := conf.Save(); err != nil {
+			if err := cfg.SetActiveWorkspace(workspace); err != nil {
 				return err
 			}
 

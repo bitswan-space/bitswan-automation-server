@@ -14,10 +14,11 @@ func newRemoveCmd() *cobra.Command {
 		Short: "Remove the automation",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workspaceName, err := config.GetWorkspaceName()
+			cfg := config.NewAutomationServerConfig()
+			workspaceName, err := cfg.GetActiveWorkspace()
 			automationDeploymentId := args[0]
 			if err != nil {
-				return fmt.Errorf("failed to get active workspace from config.toml: %v", err)
+				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
 			}
 
 			// Create an Automation instance

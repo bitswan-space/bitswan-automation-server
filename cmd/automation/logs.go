@@ -23,10 +23,11 @@ func newLogsCmd() *cobra.Command {
 		Short: "Get logs for automation",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workspaceName, err := config.GetWorkspaceName()
+			cfg := config.NewAutomationServerConfig()
+			workspaceName, err := cfg.GetActiveWorkspace()
 			automationDeploymentId := args[0]
 			if err != nil {
-				return fmt.Errorf("failed to get active workspace from config.toml: %v", err)
+				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
 			}
 
 			lines, err := cmd.Flags().GetInt("lines")
