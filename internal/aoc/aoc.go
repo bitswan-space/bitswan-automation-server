@@ -73,28 +73,28 @@ type MQTTCredentials struct {
 
 // AOCClient handles AOC API interactions
 type AOCClient struct {
-	configManager *config.AutomationServerConfig
+	config *config.AutomationServerConfig
 	settings      *config.AutomationServerSettings
 }
 
 // NewAOCClient creates a new AOC client from the automation server config
 func NewAOCClient() (*AOCClient, error) {
-	configManager := config.NewAutomationServerConfig()
+	cfg := config.NewAutomationServerConfig()
 	
-	settings, err := configManager.GetAutomationServerSettings()
+	settings, err := cfg.GetAutomationServerSettings()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load automation server settings: %w", err)
 	}
 
 	return &AOCClient{
-		configManager: configManager,
+		config: cfg,
 		settings:      settings,
 	}, nil
 }
 
 // NewAOCClientWithOTP creates a new AOC client by exchanging OTP for access token
 func NewAOCClientWithOTP(aocUrl, otp, automationServerId string) (*AOCClient, error) {
-	configManager := config.NewAutomationServerConfig()
+	cfg := config.NewAutomationServerConfig()
 	
 	// Create temporary settings for OTP exchange
 	tempSettings := &config.AutomationServerSettings{
@@ -103,7 +103,7 @@ func NewAOCClientWithOTP(aocUrl, otp, automationServerId string) (*AOCClient, er
 	}
 
 	client := &AOCClient{
-		configManager: configManager,
+		config: cfg,
 		settings:      tempSettings,
 	}
 
@@ -366,7 +366,7 @@ func GetMQTTEnvironmentVariables(creds *MQTTCredentials) []string {
 
 // SaveConfig saves the current configuration to the automation server config file
 func (c *AOCClient) SaveConfig() error {
-	return c.configManager.UpdateAutomationServer(*c.settings)
+	return c.config.UpdateAutomationServer(*c.settings)
 }
 
 // createHTTPClient creates an HTTP client that trusts mkcert certificates

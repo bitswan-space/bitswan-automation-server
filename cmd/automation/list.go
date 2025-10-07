@@ -15,8 +15,8 @@ func newListCmd() *cobra.Command {
 		Short: "List available bitswan workspace automations",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			configManager := config.NewAutomationServerConfig()
-			workspaceName, err := configManager.GetActiveWorkspace()
+			cfg := config.NewAutomationServerConfig()
+			workspaceName, err := cfg.GetActiveWorkspace()
 			if err != nil {
 				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
 			}

@@ -26,10 +26,10 @@ func newSelectCmd() *cobra.Command {
 			}
 
 			// Load the configuration manager
-			configManager := config.NewAutomationServerConfig()
+			cfg := config.NewAutomationServerConfig()
 
 			// Update the active workspace
-			if err := configManager.SetActiveWorkspace(workspace); err != nil {
+			if err := cfg.SetActiveWorkspace(workspace); err != nil {
 				return err
 			}
 

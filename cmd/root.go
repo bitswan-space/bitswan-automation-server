@@ -30,10 +30,10 @@ func newRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(caddy.NewCaddyCmd())    // caddy subcommand (deprecated)
 
 	// Check if the configuration file exists and has an active workspace
-	configManager := config.NewAutomationServerConfig()
-	if configManager.ConfigExists() {
+	cfg := config.NewAutomationServerConfig()
+	if cfg.ConfigExists() {
 		// Config exists, check if it has an active workspace
-		activeWorkspace, err := configManager.GetActiveWorkspace()
+		activeWorkspace, err := cfg.GetActiveWorkspace()
 		if err == nil && activeWorkspace != "" {
 			cmd.AddCommand(automation.NewAutomationCmd())
 		}

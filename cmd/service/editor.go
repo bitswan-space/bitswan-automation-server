@@ -112,8 +112,8 @@ func newEditorUpdateCmd() *cobra.Command {
 
 func enableEditorService(editorImage, oauthConfigFile string) error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -192,8 +192,8 @@ func enableEditorService(editorImage, oauthConfigFile string) error {
 
 func disableEditorService() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -219,8 +219,8 @@ func disableEditorService() error {
 
 func editorStatus(showPasswords bool) error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -269,8 +269,8 @@ func editorStatus(showPasswords bool) error {
 
 func startEditorContainer() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -323,8 +323,8 @@ func startEditorContainer() error {
 
 func stopEditorContainer() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -356,8 +356,8 @@ func stopEditorContainer() error {
 
 func updateEditorService(editorImage string) error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}

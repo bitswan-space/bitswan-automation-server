@@ -103,8 +103,8 @@ func newCouchDBUpdateCmd() *cobra.Command {
 
 func enableCouchDBService() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -130,8 +130,8 @@ func enableCouchDBService() error {
 
 func disableCouchDBService() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -157,8 +157,8 @@ func disableCouchDBService() error {
 
 func couchDBStatus(showPasswords bool) error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -207,8 +207,8 @@ func couchDBStatus(showPasswords bool) error {
 
 func startCouchDBContainer() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -240,8 +240,8 @@ func startCouchDBContainer() error {
 
 func stopCouchDBContainer() error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
@@ -273,8 +273,8 @@ func stopCouchDBContainer() error {
 
 func updateCouchDBService(couchdbImage string) error {
 	// Get the active workspace
-	configManager := config.NewAutomationServerConfig()
-	workspaceName, err := configManager.GetActiveWorkspace()
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
