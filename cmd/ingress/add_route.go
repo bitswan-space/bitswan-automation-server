@@ -10,7 +10,6 @@ import (
 
 func newAddRouteCmd() *cobra.Command {
 	var mkcert bool
-	var domain string
 
 	cmd := &cobra.Command{
 		Use:   "add-route <hostname> <upstream>",
@@ -28,14 +27,12 @@ Examples:
 
 			// Generate and install certificates if --mkcert flag is set
 			if mkcert {
-				// Extract domain from hostname if not provided
-				if domain == "" {
-					parts := strings.Split(hostname, ".")
-					if len(parts) < 2 {
-						return fmt.Errorf("invalid hostname format: %s (must contain at least one dot)", hostname)
-					}
-					domain = strings.Join(parts[1:], ".")
+				// Extract domain from hostname
+				parts := strings.Split(hostname, ".")
+				if len(parts) < 2 {
+					return fmt.Errorf("invalid hostname format: %s (must contain at least one dot)", hostname)
 				}
+				domain := strings.Join(parts[1:], ".")
 
 				// Generate certificate for the specific hostname
 				if err := caddyapi.GenerateAndInstallCertsForHostname(hostname, domain); err != nil {
@@ -57,7 +54,6 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&mkcert, "mkcert", false, "Generate certificates using mkcert for the hostname")
-	cmd.Flags().StringVar(&domain, "domain", "", "Domain for certificate generation (optional, will be extracted from hostname if not provided)")
 
 	return cmd
 } 
