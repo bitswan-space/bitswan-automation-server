@@ -29,6 +29,7 @@ import (
 
 type initOptions struct {
 	remoteRepo         string
+	workspaceBranch    string
 	domain             string
 	certsDir           string
 	verbose            bool
@@ -90,6 +91,7 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&o.remoteRepo, "remote", "", "The remote repository to clone")
+	cmd.Flags().StringVar(&o.workspaceBranch, "branch", "", "The branch to clone from the remote repository (defaults to the repository's default branch)")
 	cmd.Flags().StringVar(&o.domain, "domain", "", "The domain to use for the Caddyfile")
 	cmd.Flags().StringVar(&o.certsDir, "certs-dir", "", "The directory where the certificates are located")
 	cmd.Flags().BoolVar(&o.noIde, "no-ide", false, "Do not start Bitswan Editor")
@@ -842,6 +844,19 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 			panic(fmt.Errorf("failed to clone remote repository: %w", err))
 		}
 		fmt.Println("Remote repository cloned!")
+
+		// Checkout specified branch if provided
+		if o.workspaceBranch != "" {
+			fmt.Printf("Checking out branch '%s'...\n", o.workspaceBranch)
+			checkoutCom := exec.Command("git", "checkout", o.workspaceBranch)
+			checkoutCom.Dir = gitopsWorkspace
+			if err := runCommandVerbose(checkoutCom, o.verbose); err != nil {
+				fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", o.workspaceBranch, err)
+				fmt.Printf("Continuing with the default branch...\n")
+			} else {
+				fmt.Printf("Successfully checked out branch '%s'!\n", o.workspaceBranch)
+			}
+		}
 	} else {
 		if err := os.Mkdir(gitopsWorkspace, 0755); err != nil {
 			return fmt.Errorf("failed to create GitOps workspace directory %s: %w", gitopsWorkspace, err)
