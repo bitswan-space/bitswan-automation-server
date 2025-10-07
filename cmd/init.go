@@ -91,7 +91,7 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&o.remoteRepo, "remote", "", "The remote repository to clone")
-	cmd.Flags().StringVar(&o.workspaceBranch, "workspace-branch", "", "The branch to clone from the remote repository (defaults to the repository's default branch)")
+	cmd.Flags().StringVar(&o.workspaceBranch, "branch", "", "The branch to clone from the remote repository (defaults to the repository's default branch)")
 	cmd.Flags().StringVar(&o.domain, "domain", "", "The domain to use for the Caddyfile")
 	cmd.Flags().StringVar(&o.certsDir, "certs-dir", "", "The directory where the certificates are located")
 	cmd.Flags().BoolVar(&o.noIde, "no-ide", false, "Do not start Bitswan Editor")
