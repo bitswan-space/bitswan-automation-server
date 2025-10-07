@@ -81,7 +81,7 @@ type AOCClient struct {
 func NewAOCClient() (*AOCClient, error) {
 	cfg := config.NewAutomationServerConfig()
 	
-	settings, err := cfg.GetAutomationServerSettings()
+	settings, err := cfg.GetAutomationOperationsCenterSettings()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load automation server settings: %w", err)
 	}

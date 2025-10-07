@@ -104,8 +104,8 @@ func (m *AutomationServerConfig) UpdateAutomationServer(settings AutomationOpera
 	return m.SaveConfig(config)
 }
 
-// GetAutomationServerSettings returns the current automation server settings
-func (m *AutomationServerConfig) GetAutomationServerSettings() (*AutomationOperationsCenterSettings, error) {
+// GetAutomationOperationsCenterSettings returns the current automation operations center connection settings
+func (m *AutomationServerConfig) GetAutomationOperationsCenterSettings() (*AutomationOperationsCenterSettings, error) {
 	config, err := m.LoadConfig()
 	if err != nil {
 		return nil, err
