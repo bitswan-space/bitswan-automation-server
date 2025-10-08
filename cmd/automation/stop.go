@@ -37,10 +37,10 @@ func newStopCmd() *cobra.Command {
 func stopAutomation(workspaceName, automationDeploymentId string) error {
 	metadata := config.GetWorkspaceMetadata(workspaceName)
 	// Construct the URL for stopping the automation
-	url := fmt.Sprintf("%s/automations/%s/stop", metadata.GitOpsURL, automationDeploymentId)
+	url := fmt.Sprintf("%s/automations/%s/stop", metadata.GitopsURL, automationDeploymentId)
 
 	// Send the request to stop the automation
-	resp, err := automations.SendAutomationRequest("POST", url, metadata.GitOpsSecret)
+	resp, err := automations.SendAutomationRequest("POST", url, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to stop automation: %w", err)
 	}

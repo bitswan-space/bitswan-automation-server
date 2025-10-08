@@ -395,7 +395,7 @@ func (k *KafkaService) UnregisterFromCaddy() error {
 }
 
 // getWorkspaceMetadata retrieves workspace metadata
-func (k *KafkaService) getWorkspaceMetadata() (*config.Metadata, error) {
+func (k *KafkaService) getWorkspaceMetadata() (*config.WorkspaceMetadata, error) {
 	metadata := config.GetWorkspaceMetadata(k.WorkspaceName)
 	return &metadata, nil
 }

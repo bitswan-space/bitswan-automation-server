@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/workspace"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -145,7 +146,7 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 		return fmt.Errorf("failed to read metadata.yaml: %w", err)
 	}
 
-	var metadata workspace.MetadataInit
+	var metadata config.WorkspaceMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
 		return fmt.Errorf("failed to unmarshal metadata.yaml: %w", err)
 	}
@@ -212,13 +213,8 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 	metadata.MqttTopic = &mqttCreds.Topic
 
 	// Save updated metadata
-	yamlData, err := yaml.Marshal(metadata)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	if err := os.WriteFile(metadataPath, yamlData, 0644); err != nil {
-		return fmt.Errorf("failed to write metadata file: %w", err)
+	if err := metadata.SaveToFile(metadataPath); err != nil {
+		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
 	fmt.Printf("  ✅ Metadata updated successfully!\n")

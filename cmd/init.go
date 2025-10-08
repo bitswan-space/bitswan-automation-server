@@ -19,6 +19,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
@@ -55,19 +56,6 @@ type DockerNetwork struct {
 	Scope     string `json:"Scope"`
 }
 
-type MetadataInit struct {
-	Domain             string  `yaml:"domain"`
-	EditorURL          *string `yaml:"editor-url,omitempty"`
-	GitopsURL          string  `yaml:"gitops-url"`
-	GitopsSecret       string  `yaml:"gitops-secret"`
-	WorkspaceId        *string `yaml:"workspace_id,omitempty"`
-	MqttUsername       *string `yaml:"mqtt_username,omitempty"`
-	MqttPassword       *string `yaml:"mqtt_password,omitempty"`
-	MqttBroker         *string `yaml:"mqtt_broker,omitempty"`
-	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
-	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
-	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
-}
 
 type RepositoryInfo struct {
 	Hostname string
@@ -301,7 +289,7 @@ func setHosts(workspaceName string, o *initOptions) error {
 
 // After displaying the information, save it to metadata.yaml
 func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir string) error {
-	metadata := MetadataInit{
+	metadata := config.WorkspaceMetadata{
 		Domain:       domain,
 		GitopsURL:    fmt.Sprintf("https://%s-gitops.%s", workspaceName, domain),
 		GitopsSecret: token,
@@ -345,16 +333,10 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 		metadata.GitopsDevSourceDir = &gitopsDevSourceDir
 	}
 
-	// Marshal to YAML
-	yamlData, err := yaml.Marshal(metadata)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	// Write to file
+	// Save to file
 	metadataPath := filepath.Join(gitopsConfig, "metadata.yaml")
-	if err := os.WriteFile(metadataPath, yamlData, 0644); err != nil {
-		return fmt.Errorf("failed to write metadata file: %w", err)
+	if err := metadata.SaveToFile(metadataPath); err != nil {
+		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
 	return nil
