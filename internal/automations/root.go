@@ -42,10 +42,10 @@ func (a *Automation) Remove() error {
 	metadata := config.GetWorkspaceMetadata(a.Workspace)
 
 	// Construct the URL for stopping the automation
-	url := fmt.Sprintf("%s/automations/%s", metadata.GitOpsURL, a.DeploymentID)
+	url := fmt.Sprintf("%s/automations/%s", metadata.GitopsURL, a.DeploymentID)
 
 	// Send the request to stop the automation
-	resp, err := SendAutomationRequest("DELETE", url, metadata.GitOpsSecret)
+	resp, err := SendAutomationRequest("DELETE", url, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to remove automation: %w", err)
 	}
@@ -82,10 +82,10 @@ func GetAutomations(workspaceName string) ([]Automation, error) {
 
 	fmt.Println("Fetching automations...")
 
-	url := fmt.Sprintf("%s/automations", metadata.GitOpsURL)
+	url := fmt.Sprintf("%s/automations", metadata.GitopsURL)
 
 	// Send the request
-	resp, err := SendAutomationRequest("GET", url, metadata.GitOpsSecret)
+	resp, err := SendAutomationRequest("GET", url, metadata.GitopsSecret)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request: %w", err)
 	}

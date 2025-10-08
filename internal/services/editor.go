@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"gopkg.in/yaml.v3"
@@ -40,7 +41,7 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 }
 
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
-func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config) (string, error) {
+func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string) (string, error) {
 	gitopsPath := e.WorkspacePath
 	workspaceName := e.WorkspaceName
 	sshDir := gitopsPath + "/ssh"
@@ -86,6 +87,11 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 
 		// Add oauth environment variables to bitswanEditor
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), oauthEnvVars...)
+	}
+
+	// Append MQTT env variables when workspace is connected to AOC
+	if len(mqttEnvVars) > 0 {
+		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), mqttEnvVars...)
 	}
 
 	// Construct the docker-compose data structure
@@ -157,8 +163,19 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		}
 	}
 	
+	// Read metadata to get MQTT environment variables
+	var mqttEnvVars []string
+	metadata, err := e.GetMetadata()
+	if err == nil && metadata.MqttUsername != nil {
+		mqttEnvVars = append(mqttEnvVars, "MQTT_USERNAME="+*metadata.MqttUsername)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_PASSWORD="+*metadata.MqttPassword)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_BROKER="+*metadata.MqttBroker)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
+		mqttEnvVars = append(mqttEnvVars, "MQTT_TOPIC="+*metadata.MqttTopic)
+	}
+	
 	// Generate docker-compose content
-	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig)
+	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
@@ -365,22 +382,16 @@ type EditorConfig struct {
 	Cert        bool   `yaml:"cert"`
 }
 
-// Metadata represents workspace metadata
-type Metadata struct {
-	Domain       string  `yaml:"domain"`
-	EditorURL    *string `yaml:"editor-url,omitempty"`
-	GitopsSecret string  `yaml:"gitops-secret"`
-}
 
 // GetMetadata reads workspace metadata
-func (e *EditorService) GetMetadata() (*Metadata, error) {
+func (e *EditorService) GetMetadata() (*config.WorkspaceMetadata, error) {
 	metadataPath := filepath.Join(e.WorkspacePath, "metadata.yaml")
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
 		return nil, err
 	}
 	
-	var metadata Metadata
+	var metadata config.WorkspaceMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
 		return nil, err
 	}

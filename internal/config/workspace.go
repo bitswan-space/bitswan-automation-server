@@ -1,18 +1,27 @@
 package config
 
 import (
-	"gopkg.in/yaml.v2"
+	"fmt"
 	"os"
+	"gopkg.in/yaml.v2"
 )
 
-type Metadata struct {
-	Domain       string `yaml:"domain"`
-	EditorURL    string `yaml:"editor-url"`
-	GitOpsURL    string `yaml:"gitops-url"`
-	GitOpsSecret string `yaml:"gitops-secret"`
+// WorkspaceMetadata represents the unified workspace metadata structure
+type WorkspaceMetadata struct {
+	Domain             string  `yaml:"domain"`
+	EditorURL          *string `yaml:"editor-url,omitempty"`
+	GitopsURL          string  `yaml:"gitops-url"`
+	GitopsSecret       string  `yaml:"gitops-secret"`
+	WorkspaceId        *string `yaml:"workspace_id,omitempty"`
+	MqttUsername       *string `yaml:"mqtt_username,omitempty"`
+	MqttPassword       *string `yaml:"mqtt_password,omitempty"`
+	MqttBroker         *string `yaml:"mqtt_broker,omitempty"`
+	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
+	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
+	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
 }
 
-func GetWorkspaceMetadata(workspaceName string) Metadata {
+func GetWorkspaceMetadata(workspaceName string) WorkspaceMetadata {
 	metadataPath := os.Getenv("HOME") + "/.config/bitswan/" + "workspaces/" + workspaceName + "/metadata.yaml"
 
 	data, err := os.ReadFile(metadataPath)
@@ -20,11 +29,27 @@ func GetWorkspaceMetadata(workspaceName string) Metadata {
 		panic(err)
 	}
 
-	var metadata Metadata
+	var metadata WorkspaceMetadata
 	err = yaml.Unmarshal(data, &metadata)
 	if err != nil {
 		panic(err)
 	}
 
 	return metadata
+}
+
+// SaveToFile saves the WorkspaceMetadata to a YAML file at the specified path
+func (wm *WorkspaceMetadata) SaveToFile(filePath string) error {
+	// Marshal to YAML
+	yamlData, err := yaml.Marshal(wm)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(filePath, yamlData, 0644); err != nil {
+		return fmt.Errorf("failed to write metadata file: %w", err)
+	}
+
+	return nil
 }
