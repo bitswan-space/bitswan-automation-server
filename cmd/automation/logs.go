@@ -49,7 +49,10 @@ func newLogsCmd() *cobra.Command {
 }
 
 func getLogsFromAutomation(workspaceName string, automationDeploymentId string, lines int) error {
-	metadata := config.GetWorkspaceMetadata(workspaceName)
+	metadata, err := config.GetWorkspaceMetadata(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
 
 	fmt.Println("Fetching automations logs...")
 

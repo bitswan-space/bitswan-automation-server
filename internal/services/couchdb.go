@@ -265,7 +265,10 @@ func (c *CouchDBService) UnregisterFromCaddy() error {
 
 // getWorkspaceMetadata retrieves workspace metadata
 func (c *CouchDBService) getWorkspaceMetadata() (*config.WorkspaceMetadata, error) {
-	metadata := config.GetWorkspaceMetadata(c.WorkspaceName)
+	metadata, err := config.GetWorkspaceMetadata(c.WorkspaceName)
+	if err != nil {
+		return nil, err
+	}
 	return &metadata, nil
 }
 

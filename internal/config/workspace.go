@@ -21,21 +21,21 @@ type WorkspaceMetadata struct {
 	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
 }
 
-func GetWorkspaceMetadata(workspaceName string) WorkspaceMetadata {
+func GetWorkspaceMetadata(workspaceName string) (WorkspaceMetadata, error) {
 	metadataPath := os.Getenv("HOME") + "/.config/bitswan/" + "workspaces/" + workspaceName + "/metadata.yaml"
 
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
-		panic(err)
+		return WorkspaceMetadata{}, fmt.Errorf("failed to read metadata file: %w", err)
 	}
 
 	var metadata WorkspaceMetadata
 	err = yaml.Unmarshal(data, &metadata)
 	if err != nil {
-		panic(err)
+		return WorkspaceMetadata{}, fmt.Errorf("failed to unmarshal metadata: %w", err)
 	}
 
-	return metadata
+	return metadata, nil
 }
 
 // SaveToFile saves the WorkspaceMetadata to a YAML file at the specified path

@@ -212,6 +212,10 @@ func removeGitops(workspaceName string) error {
 	dockerComposeFilePath := filepath.Join(dockerComposePath, "docker-compose.yml")
 	data, err := os.ReadFile(dockerComposeFilePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("Warning: docker-compose.yml not found, skipping image removal")
+			return nil
+		}
 		return fmt.Errorf("error reading docker-compose file: %w", err)
 	}
 
