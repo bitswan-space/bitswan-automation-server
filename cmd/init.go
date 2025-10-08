@@ -919,32 +919,33 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Println("Getting automation server token...")
 		automationServerToken, err := aocClient.GetAutomationServerToken()
 		if err != nil {
-			return fmt.Errorf("failed to get automation server token: %w", err)
+			fmt.Println("No automation server token available, skipping workspace registration.")
+		} else {
+			fmt.Println("Automation server token received successfully!")
+
+			var editorURL *string
+			if !o.noIde {
+				url := fmt.Sprintf("https://%s-editor.%s", workspaceName, o.domain)
+				editorURL = &url
+			}
+
+			workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL)
+			if err != nil {
+				return fmt.Errorf("failed to register workspace: %w", err)
+			}
+			fmt.Println("Workspace registered successfully!")
+
+			aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
+
+			fmt.Println("Getting EMQX JWT for workspace...")
+			mqttCreds, err := aocClient.GetMQTTCredentials(workspaceId)
+			if err != nil {
+				return fmt.Errorf("failed to get MQTT credentials: %w", err)
+			}
+			fmt.Println("EMQX JWT received successfully!")
+
+			mqttEnvVars = aoc.GetMQTTEnvironmentVariables(mqttCreds)
 		}
-		fmt.Println("Automation server token received successfully!")
-
-		var editorURL *string
-		if !o.noIde {
-			url := fmt.Sprintf("https://%s-editor.%s", workspaceName, o.domain)
-			editorURL = &url
-		}
-
-		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL)
-		if err != nil {
-			return fmt.Errorf("failed to register workspace: %w", err)
-		}
-		fmt.Println("Workspace registered successfully!")
-
-		aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
-
-		fmt.Println("Getting EMQX JWT for workspace...")
-		mqttCreds, err := aocClient.GetMQTTCredentials(workspaceId)
-		if err != nil {
-			return fmt.Errorf("failed to get MQTT credentials: %w", err)
-		}
-		fmt.Println("EMQX JWT received successfully!")
-
-		mqttEnvVars = aoc.GetMQTTEnvironmentVariables(mqttCreds)
 	}
 
 	config := &dockercompose.DockerComposeConfig{
