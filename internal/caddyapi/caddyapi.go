@@ -374,7 +374,12 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if method == http.MethodDelete && (resp.StatusCode < 200 || resp.StatusCode >= 300) && resp.StatusCode != 404 {
-		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request", resp.StatusCode)
+		// Read the response body to get detailed error information
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request (failed to read response body: %w)", resp.StatusCode, err)
+		}
+		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request: %s", resp.StatusCode, string(body))
 	}
 
 	// For PUT requests, 409 (Conflict) means the resource already exists, which is acceptable for initialization
@@ -388,7 +393,12 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Caddy API returned status code %d", resp.StatusCode)
+		// Read the response body to get detailed error information
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("Caddy API returned status code %d (failed to read response body: %w)", resp.StatusCode, err)
+		}
+		return nil, fmt.Errorf("Caddy API returned status code %d: %s", resp.StatusCode, string(body))
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)

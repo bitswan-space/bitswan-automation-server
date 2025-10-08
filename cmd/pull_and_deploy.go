@@ -46,7 +46,10 @@
 	}
 
 	func pullAndDeploy(workspaceName, branchName string, force, noBuild bool) error {
-		metadata := config.GetWorkspaceMetadata(workspaceName)
+		metadata, err := config.GetWorkspaceMetadata(workspaceName)
+		if err != nil {
+			return fmt.Errorf("failed to get workspace metadata: %w", err)
+		}
 		// Construct the URL for the pull-and-deploy endpoint with query parameters
 		url := fmt.Sprintf("%s/automations/pull-and-deploy/%s", metadata.GitopsURL, branchName)
 
