@@ -383,16 +383,10 @@ type EditorConfig struct {
 }
 
 
-// GetMetadata reads workspace metadata
+// GetMetadata reads workspace metadata using the centralized function
 func (e *EditorService) GetMetadata() (*config.WorkspaceMetadata, error) {
-	metadataPath := filepath.Join(e.WorkspacePath, "metadata.yaml")
-	data, err := os.ReadFile(metadataPath)
+	metadata, err := config.GetWorkspaceMetadata(e.WorkspaceName)
 	if err != nil {
-		return nil, err
-	}
-	
-	var metadata config.WorkspaceMetadata
-	if err := yaml.Unmarshal(data, &metadata); err != nil {
 		return nil, err
 	}
 	
