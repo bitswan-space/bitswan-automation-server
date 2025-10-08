@@ -132,8 +132,8 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	tlsLoad := []TLSFileLoad{
 		{
 			ID:          fmt.Sprintf("%s_tlscerts", workspaceName),
-			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", domain),
-			Key:         fmt.Sprintf("/tls/%s/private-key.pem", domain),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(domain)),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(domain)),
 			Tags:        []string{workspaceName},
 		},
 	}
