@@ -214,36 +214,35 @@ func removeGitops(workspaceName string) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Println("Warning: docker-compose.yml not found, skipping image removal")
-			return nil
 		}
-		return fmt.Errorf("error reading docker-compose file: %w", err)
+		fmt.Println("error reading docker-compose file: %w", err)
 	}
+	if err == nil {
+		var compose Compose
+		err = yaml.Unmarshal(data, &compose)
+		if err != nil {
+			return fmt.Errorf("error unmarshalling docker-compose file: %w", err)
+		}
 
-	var compose Compose
-	err = yaml.Unmarshal(data, &compose)
-	if err != nil {
-		return fmt.Errorf("error unmarshalling docker-compose file: %w", err)
-	}
-
-	for _, service := range compose.Services {
-		if service.Image != "" {
-			exists, err := checkContainerExists(service.Image)
-			if err != nil {
-				return fmt.Errorf("error checking if image exists: %w", err)
-			}
-
-			if !exists {
-				err = deleteDockerImage(service.Image)
+		for _, service := range compose.Services {
+			if service.Image != "" {
+				exists, err := checkContainerExists(service.Image)
 				if err != nil {
-					return fmt.Errorf("error deleting docker image %s: %w", service.Image, err)
+					return fmt.Errorf("error checking if image exists: %w", err)
 				}
-				fmt.Println("Images removed successfully.")
-			} else {
-				fmt.Printf("Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
+
+				if !exists {
+					err = deleteDockerImage(service.Image)
+					if err != nil {
+						return fmt.Errorf("error deleting docker image %s: %w", service.Image, err)
+					}
+					fmt.Println("Images removed successfully.")
+				} else {
+					fmt.Printf("Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
+				}
 			}
 		}
 	}
-
 	// 5. Remove the gitops folder
 	fmt.Println("Removing gitops folder...")
 	cmd = exec.Command("rm", "-r", workspaceName)
