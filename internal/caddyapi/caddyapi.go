@@ -87,6 +87,8 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 }
 
 func InstallTLSCerts(workspaceName, domain string) error {
+	InitSet("http://localhost:2019/config/apps/tls/certificates/load_files", nil)
+	InitSet("http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies", nil)
 	caddyAPITLSBaseUrl := "http://localhost:2019/config/apps/tls/certificates/load_files/..."
 	caddyAPITLSPoliciesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies/..."
 
@@ -140,12 +142,22 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	return nil
 }
 
+func InitSet(url string, payload []byte) error {
+	_, err := sendRequest("PUT", url, payload)
+	if err != nil {
+		if strings.Contains(err.Error(), "status code 409") {
+			fmt.Println("Set already initialized!")
+			return nil
+		}
+		return fmt.Errorf("failed to initialize set: %w", err)
+	}
+	return nil
+}
+
 func InitCaddy() error {
 	urls := []string{
 		"http://localhost:2019/config/apps/http/servers/srv0/routes",
 		"http://localhost:2019/config/apps/http/servers/srv0/listen",
-		"http://localhost:2019/config/apps/tls/certificates/load_files",
-		"http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies",
 	}
 
 	for idx, url := range urls {
@@ -156,13 +168,8 @@ func InitCaddy() error {
 			payload = []byte(`[]`)
 		}
 
-		_, err := sendRequest("PUT", url, payload)
+		err := InitSet(url, payload)
 		if err != nil {
-			// Check if this is a 409 error (already exists)
-			if strings.Contains(err.Error(), "status code 409") {
-				fmt.Println("Ingress is already initialized!")
-				return nil
-			}
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
 	}
