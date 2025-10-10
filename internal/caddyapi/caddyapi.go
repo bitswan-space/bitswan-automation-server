@@ -111,8 +111,12 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 }
 
 func InstallTLSCerts(workspaceName, domain string) error {
-    caddyAPITLSBaseUrl := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files/..."
-    caddyAPITLSPoliciesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies/..."
+	certsSet :=  getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
+	caddyAPITLSBaseUrl := certsSet + "/..."
+	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
+	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
+	InitSet(certsSet, nil)
+	InitSet(policiesSet, nil)
 
 	// Define TLS policies and certificates
 	tlsPolicy := []TLSPolicy{
@@ -164,13 +168,23 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	return nil
 }
 
+func InitSet(url string, payload []byte) error {
+	_, err := sendRequest("PUT", url, payload)
+	if err != nil {
+		if strings.Contains(err.Error(), "status code 409") {
+			fmt.Println("Set already initialized!")
+			return nil
+		}
+		return fmt.Errorf("failed to initialize set: %w", err)
+	}
+	return nil
+}
+
 func InitCaddy() error {
-    urls := []string{
-        getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes",
-        getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen",
-        getCaddyBaseURL() + "/config/apps/tls/certificates/load_files",
-        getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies",
-    }
+	urls := []string{
+		getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes",
+		getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen",
+	}
 
 	for idx, url := range urls {
 		var payload []byte
@@ -180,13 +194,8 @@ func InitCaddy() error {
 			payload = []byte(`[]`)
 		}
 
-		_, err := sendRequest("PUT", url, payload)
+		err := InitSet(url, payload)
 		if err != nil {
-			// Check if this is a 409 error (already exists)
-			if strings.Contains(err.Error(), "status code 409") {
-				fmt.Println("Ingress is already initialized!")
-				return nil
-			}
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
 	}

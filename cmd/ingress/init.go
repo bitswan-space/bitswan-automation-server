@@ -115,11 +115,6 @@ func InitIngress(verbose bool) error {
 	}
 	if string(caddyContainerId) != "" {
 		fmt.Println("Caddy aleady initialized!")
-		// If caddy is not running, start it
-		caddyDockerComposeCom := exec.Command("docker", "compose", "-p", caddyProjectName, "up", "-d")
-		if err := runCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
-			return fmt.Errorf("failed to start caddy: %w", err)
-		}
 		return nil
 	}
 
