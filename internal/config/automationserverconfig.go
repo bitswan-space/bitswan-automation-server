@@ -16,7 +16,7 @@ type AutomationServerConfig struct {
 // Config represents the combined TOML configuration
 type Config struct {
 	ActiveWorkspace    string                    `toml:"active_workspace"`
-	AutomationOperationsCenter   AutomationOperationsCenterSettings  `toml:"aoc"`
+	AutomationOperationsCenter   AutomationOperationsCenterSettings  `toml:"automation_server"`
 
 }
 
@@ -59,7 +59,6 @@ func (m *AutomationServerConfig) loadTOMLConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
-
 // SaveConfig saves the configuration to the TOML file
 func (m *AutomationServerConfig) SaveConfig(config *Config) error {
 	// Ensure config directory exists
@@ -78,7 +77,7 @@ func (m *AutomationServerConfig) SaveConfig(config *Config) error {
 // saveTOMLConfig saves configuration to the TOML file
 func (m *AutomationServerConfig) saveTOMLConfig(config *Config) error {
 	tomlConfigPath := filepath.Join(m.configDir, "automation_server_config.toml")
-	
+
 	file, err := os.Create(tomlConfigPath)
 	if err != nil {
 		return fmt.Errorf("failed to create TOML config file: %w", err)
@@ -139,9 +138,9 @@ func (m *AutomationServerConfig) SetActiveWorkspace(workspace string) error {
 // ConfigExists checks if any configuration file exists
 func (m *AutomationServerConfig) ConfigExists() bool {
 	tomlConfigPath := filepath.Join(m.configDir, "automation_server_config.toml")
-	
+
 	_, tomlExists := os.Stat(tomlConfigPath)
-	
+
 	return tomlExists == nil
 }
 
