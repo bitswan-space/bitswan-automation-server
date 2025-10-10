@@ -56,7 +56,7 @@ type TLSFileLoad struct {
 }
 
 // getCaddyBaseURL returns the base URL for the Caddy API, preferring
-// the BITSWAN_CADDY_HOSTS environment variable if set, otherwise defaulting
+// the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
 // to http://localhost:2019
 func getCaddyBaseURL() string {
     if host := os.Getenv("BITSWAN_CADDY_HOST"); host != "" {
