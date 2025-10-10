@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -54,6 +55,29 @@ type TLSFileLoad struct {
 	Tags        []string `json:"tags"`
 }
 
+// getCaddyBaseURL returns the base URL for the Caddy API, preferring
+// the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
+// to http://localhost:2019. It also normalizes the value by ensuring a scheme
+// and stripping any trailing slash.
+func getCaddyBaseURL() string {
+    host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
+    if host == "" {
+        return "http://localhost:2019"
+    }
+
+    // Prepend default scheme if missing
+    if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+        host = "http://" + host
+    }
+
+    // Strip trailing slash if present
+    if strings.HasSuffix(host, "/") {
+        host = strings.TrimRight(host, "/")
+    }
+
+    return host
+}
+
 func RegisterServiceWithCaddy(serviceName, workspaceName, domain, upstream string) error {
 	// Construct the hostname using the existing pattern
 	hostname := fmt.Sprintf("%s-%s.%s", workspaceName, serviceName, domain)
@@ -76,7 +100,7 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 	
 	// Fall back to old approach using the legacy ID format
 	legacyID := fmt.Sprintf("%s_%s", workspaceName, serviceName)
-	url := fmt.Sprintf("http://localhost:2019/id/%s", legacyID)
+    url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", legacyID)
 	
 	if _, err := sendRequest("DELETE", url, nil); err != nil {
 		return fmt.Errorf("failed to unregister service '%s' using both new and legacy formats: %w", serviceName, err)
@@ -87,8 +111,8 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 }
 
 func InstallTLSCerts(workspaceName, domain string) error {
-	caddyAPITLSBaseUrl := "http://localhost:2019/config/apps/tls/certificates/load_files/..."
-	caddyAPITLSPoliciesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies/..."
+    caddyAPITLSBaseUrl := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files/..."
+    caddyAPITLSPoliciesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies/..."
 
 	// Define TLS policies and certificates
 	tlsPolicy := []TLSPolicy{
@@ -141,12 +165,12 @@ func InstallTLSCerts(workspaceName, domain string) error {
 }
 
 func InitCaddy() error {
-	urls := []string{
-		"http://localhost:2019/config/apps/http/servers/srv0/routes",
-		"http://localhost:2019/config/apps/http/servers/srv0/listen",
-		"http://localhost:2019/config/apps/tls/certificates/load_files",
-		"http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies",
-	}
+    urls := []string{
+        getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes",
+        getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen",
+        getCaddyBaseURL() + "/config/apps/tls/certificates/load_files",
+        getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies",
+    }
 
 	for idx, url := range urls {
 		var payload []byte
@@ -213,7 +237,7 @@ func DeleteCaddyRecords(workspaceName string) error {
 	// Delete TLS-related items using the old direct ID approach
 	tlsItems := []string{"tlspolicy", "tlscerts"}
 	for _, item := range tlsItems {
-		url := fmt.Sprintf("http://localhost:2019/id/%s_%s", workspaceName, item)
+        url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s_%s", workspaceName, item)
 		if _, err := sendRequest("DELETE", url, nil); err != nil {
 			// Don't fail completely if TLS items fail - they might not exist
 			fmt.Printf("Warning: failed to delete %s: %v\n", item, err)
@@ -230,7 +254,7 @@ func sanitizeHostname(hostname string) string {
 
 // AddRoute adds a generic route for any hostname to upstream mapping
 func AddRoute(hostname, upstream string) error {
-	caddyAPIRoutesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/routes/..."
+    caddyAPIRoutesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes/..."
 
 	// First, remove any existing routes with the same ID to avoid duplicates
 	if err := RemoveRoute(hostname); err != nil {
@@ -292,7 +316,7 @@ func RemoveRoute(hostname string) error {
 	routeID := sanitizeHostname(hostname)
 	
 	// Construct the URL for the specific route
-	url := fmt.Sprintf("http://localhost:2019/id/%s", routeID)
+    url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", routeID)
 
 	// Keep trying to delete until we get a 404 (route doesn't exist)
 	firstRun := true
@@ -318,7 +342,7 @@ func RemoveRoute(hostname string) error {
 
 // ListRoutes retrieves and lists all current routes from Caddy
 func ListRoutes() ([]Route, error) {
-	url := "http://localhost:2019/config/apps/http/servers/srv0/routes"
+    url := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
 	
 	responseBody, err := sendRequest("GET", url, nil)
 	if err != nil {
@@ -555,8 +579,8 @@ func GenerateAndInstallCertsForHostname(hostname, domain string) error {
 
 // InstallTLSCertsForHostname installs TLS certificates and policies for a specific hostname
 func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
-	caddyAPITLSBaseUrl := "http://localhost:2019/config/apps/tls/certificates/load_files/..."
-	caddyAPITLSPoliciesBaseUrl := "http://localhost:2019/config/apps/http/servers/srv0/tls_connection_policies/..."
+    caddyAPITLSBaseUrl := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files/..."
+    caddyAPITLSPoliciesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies/..."
 
 	// Define TLS policies and certificates for the specific hostname
 	tlsPolicy := []TLSPolicy{
