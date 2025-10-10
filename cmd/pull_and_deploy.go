@@ -46,9 +46,12 @@
 	}
 
 	func pullAndDeploy(workspaceName, branchName string, force, noBuild bool) error {
-		metadata := config.GetWorkspaceMetadata(workspaceName)
+		metadata, err := config.GetWorkspaceMetadata(workspaceName)
+		if err != nil {
+			return fmt.Errorf("failed to get workspace metadata: %w", err)
+		}
 		// Construct the URL for the pull-and-deploy endpoint with query parameters
-		url := fmt.Sprintf("%s/automations/pull-and-deploy/%s", metadata.GitOpsURL, branchName)
+		url := fmt.Sprintf("%s/automations/pull-and-deploy/%s", metadata.GitopsURL, branchName)
 
 		// Add query parameters if needed
 		if force || noBuild {
@@ -68,7 +71,7 @@
 		}
 
 		// Send the request to pull branch and deploy all automations
-		resp, err := automations.SendAutomationRequest("POST", url, metadata.GitOpsSecret)
+		resp, err := automations.SendAutomationRequest("POST", url, metadata.GitopsSecret)
 		if err != nil {
 			return fmt.Errorf("failed to send request to pull branch and deploy automations: %w", err)
 		}

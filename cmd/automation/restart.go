@@ -35,12 +35,15 @@ func newRestartCmd() *cobra.Command {
 }
 
 func restartAutomation(workspaceName, automationDeploymentId string) error {
-	metadata := config.GetWorkspaceMetadata(workspaceName)
+	metadata, err := config.GetWorkspaceMetadata(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
 	// Construct the URL for stopping the automation
-	url := fmt.Sprintf("%s/automations/%s/restart", metadata.GitOpsURL, automationDeploymentId)
+	url := fmt.Sprintf("%s/automations/%s/restart", metadata.GitopsURL, automationDeploymentId)
 
 	// Send the request to stop the automation
-	resp, err := automations.SendAutomationRequest("POST", url, metadata.GitOpsSecret)
+	resp, err := automations.SendAutomationRequest("POST", url, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to restart automation: %w", err)
 	}

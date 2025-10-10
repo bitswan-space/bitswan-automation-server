@@ -49,16 +49,19 @@ func newLogsCmd() *cobra.Command {
 }
 
 func getLogsFromAutomation(workspaceName string, automationDeploymentId string, lines int) error {
-	metadata := config.GetWorkspaceMetadata(workspaceName)
+	metadata, err := config.GetWorkspaceMetadata(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
 
 	fmt.Println("Fetching automations logs...")
 
 	// Create a new GET request
-	url := fmt.Sprintf("%s/automations/%s/logs", metadata.GitOpsURL, automationDeploymentId)
+	url := fmt.Sprintf("%s/automations/%s/logs", metadata.GitopsURL, automationDeploymentId)
 	if lines > 0 {
 		url += fmt.Sprintf("?lines=%d", lines)
 	}
-	resp, err := automations.SendAutomationRequest("GET", url, metadata.GitOpsSecret)
+	resp, err := automations.SendAutomationRequest("GET", url, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}

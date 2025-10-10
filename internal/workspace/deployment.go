@@ -7,25 +7,12 @@ import (
 	"path/filepath"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"gopkg.in/yaml.v3"
 )
 
-// MetadataInit represents the workspace metadata structure
-type MetadataInit struct {
-	Domain             string  `yaml:"domain"`
-	EditorURL          *string `yaml:"editor-url,omitempty"`
-	GitopsURL          string  `yaml:"gitops-url"`
-	GitopsSecret       string  `yaml:"gitops-secret"`
-	WorkspaceId        *string `yaml:"workspace_id,omitempty"`
-	MqttUsername       *string `yaml:"mqtt_username,omitempty"`
-	MqttPassword       *string `yaml:"mqtt_password,omitempty"`
-	MqttBroker         *string `yaml:"mqtt_broker,omitempty"`
-	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
-	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
-	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
-}
 
 // UpdateWorkspaceDeployment updates the workspace deployment with new AOC and MQTT configuration
 func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage ...string) error {
@@ -38,7 +25,7 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage ...string
 		return fmt.Errorf("failed to read metadata.yaml: %w", err)
 	}
 
-	var metadata MetadataInit
+	var metadata config.WorkspaceMetadata
 	if err := yaml.Unmarshal(data, &metadata); err != nil {
 		return fmt.Errorf("failed to unmarshal metadata.yaml: %w", err)
 	}
