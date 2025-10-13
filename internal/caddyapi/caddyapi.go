@@ -111,8 +111,12 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 }
 
 func InstallTLSCerts(workspaceName, domain string) error {
-    caddyAPITLSBaseUrl := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files/..."
-    caddyAPITLSPoliciesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies/..."
+	certsSet :=  getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
+	caddyAPITLSBaseUrl := certsSet + "/..."
+	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
+	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
+	InitSet(certsSet, nil)
+	InitSet(policiesSet, nil)
 
 	// Define TLS policies and certificates
 	tlsPolicy := []TLSPolicy{
@@ -132,8 +136,8 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	tlsLoad := []TLSFileLoad{
 		{
 			ID:          fmt.Sprintf("%s_tlscerts", workspaceName),
-			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", domain),
-			Key:         fmt.Sprintf("/tls/%s/private-key.pem", domain),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(domain)),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(domain)),
 			Tags:        []string{workspaceName},
 		},
 	}
@@ -164,13 +168,23 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	return nil
 }
 
+func InitSet(url string, payload []byte) error {
+	_, err := sendRequest("PUT", url, payload)
+	if err != nil {
+		if strings.Contains(err.Error(), "status code 409") {
+			fmt.Println("Set already initialized!")
+			return nil
+		}
+		return fmt.Errorf("failed to initialize set: %w", err)
+	}
+	return nil
+}
+
 func InitCaddy() error {
-    urls := []string{
-        getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes",
-        getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen",
-        getCaddyBaseURL() + "/config/apps/tls/certificates/load_files",
-        getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies",
-    }
+	urls := []string{
+		getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes",
+		getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen",
+	}
 
 	for idx, url := range urls {
 		var payload []byte
@@ -180,13 +194,8 @@ func InitCaddy() error {
 			payload = []byte(`[]`)
 		}
 
-		_, err := sendRequest("PUT", url, payload)
+		err := InitSet(url, payload)
 		if err != nil {
-			// Check if this is a 409 error (already exists)
-			if strings.Contains(err.Error(), "status code 409") {
-				fmt.Println("Ingress is already initialized!")
-				return nil
-			}
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
 	}
@@ -374,7 +383,12 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if method == http.MethodDelete && (resp.StatusCode < 200 || resp.StatusCode >= 300) && resp.StatusCode != 404 {
-		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request", resp.StatusCode)
+		// Read the response body to get detailed error information
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request (failed to read response body: %w)", resp.StatusCode, err)
+		}
+		return nil, fmt.Errorf("Caddy API returned status code %d for DELETE request: %s", resp.StatusCode, string(body))
 	}
 
 	// For PUT requests, 409 (Conflict) means the resource already exists, which is acceptable for initialization
@@ -388,7 +402,12 @@ func sendRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Caddy API returned status code %d", resp.StatusCode)
+		// Read the response body to get detailed error information
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("Caddy API returned status code %d (failed to read response body: %w)", resp.StatusCode, err)
+		}
+		return nil, fmt.Errorf("Caddy API returned status code %d: %s", resp.StatusCode, string(body))
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)

@@ -19,6 +19,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
@@ -55,19 +56,6 @@ type DockerNetwork struct {
 	Scope     string `json:"Scope"`
 }
 
-type MetadataInit struct {
-	Domain             string  `yaml:"domain"`
-	EditorURL          *string `yaml:"editor-url,omitempty"`
-	GitopsURL          string  `yaml:"gitops-url"`
-	GitopsSecret       string  `yaml:"gitops-secret"`
-	WorkspaceId        *string `yaml:"workspace_id,omitempty"`
-	MqttUsername       *string `yaml:"mqtt_username,omitempty"`
-	MqttPassword       *string `yaml:"mqtt_password,omitempty"`
-	MqttBroker         *string `yaml:"mqtt_broker,omitempty"`
-	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
-	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
-	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
-}
 
 type RepositoryInfo struct {
 	Hostname string
@@ -301,7 +289,7 @@ func setHosts(workspaceName string, o *initOptions) error {
 
 // After displaying the information, save it to metadata.yaml
 func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir string) error {
-	metadata := MetadataInit{
+	metadata := config.WorkspaceMetadata{
 		Domain:       domain,
 		GitopsURL:    fmt.Sprintf("https://%s-gitops.%s", workspaceName, domain),
 		GitopsSecret: token,
@@ -345,16 +333,10 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 		metadata.GitopsDevSourceDir = &gitopsDevSourceDir
 	}
 
-	// Marshal to YAML
-	yamlData, err := yaml.Marshal(metadata)
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	// Write to file
+	// Save to file
 	metadataPath := filepath.Join(gitopsConfig, "metadata.yaml")
-	if err := os.WriteFile(metadataPath, yamlData, 0644); err != nil {
-		return fmt.Errorf("failed to write metadata file: %w", err)
+	if err := metadata.SaveToFile(metadataPath); err != nil {
+		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
 	return nil
@@ -937,32 +919,33 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		fmt.Println("Getting automation server token...")
 		automationServerToken, err := aocClient.GetAutomationServerToken()
 		if err != nil {
-			return fmt.Errorf("failed to get automation server token: %w", err)
+			fmt.Println("No automation server token available, skipping workspace registration.")
+		} else {
+			fmt.Println("Automation server token received successfully!")
+
+			var editorURL *string
+			if !o.noIde {
+				url := fmt.Sprintf("https://%s-editor.%s", workspaceName, o.domain)
+				editorURL = &url
+			}
+
+			workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL)
+			if err != nil {
+				return fmt.Errorf("failed to register workspace: %w", err)
+			}
+			fmt.Println("Workspace registered successfully!")
+
+			aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
+
+			fmt.Println("Getting EMQX JWT for workspace...")
+			mqttCreds, err := aocClient.GetMQTTCredentials(workspaceId)
+			if err != nil {
+				return fmt.Errorf("failed to get MQTT credentials: %w", err)
+			}
+			fmt.Println("EMQX JWT received successfully!")
+
+			mqttEnvVars = aoc.GetMQTTEnvironmentVariables(mqttCreds)
 		}
-		fmt.Println("Automation server token received successfully!")
-
-		var editorURL *string
-		if !o.noIde {
-			url := fmt.Sprintf("https://%s-editor.%s", workspaceName, o.domain)
-			editorURL = &url
-		}
-
-		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL)
-		if err != nil {
-			return fmt.Errorf("failed to register workspace: %w", err)
-		}
-		fmt.Println("Workspace registered successfully!")
-
-		aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
-
-		fmt.Println("Getting EMQX JWT for workspace...")
-		mqttCreds, err := aocClient.GetMQTTCredentials(workspaceId)
-		if err != nil {
-			return fmt.Errorf("failed to get MQTT credentials: %w", err)
-		}
-		fmt.Println("EMQX JWT received successfully!")
-
-		mqttEnvVars = aoc.GetMQTTEnvironmentVariables(mqttCreds)
 	}
 
 	config := &dockercompose.DockerComposeConfig{

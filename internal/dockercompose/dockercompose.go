@@ -104,7 +104,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	} else if hostOs == Linux {
 		// For Linux, also mount workspace git directory
 		gitopsVolumes := []string{
-			config.GitopsPath + "/workspace/.git:/workspace-repo/.git:z",
+			config.GitopsPath + "/workspace/:/workspace-repo/:z",
 		}
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
 	}

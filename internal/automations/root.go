@@ -39,13 +39,16 @@ type Automation struct {
 // Remove sends a request to remove the automation associated with the Automation object
 func (a *Automation) Remove() error {
 	// Retrieve workspace metadata
-	metadata := config.GetWorkspaceMetadata(a.Workspace)
+	metadata, err := config.GetWorkspaceMetadata(a.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
 
 	// Construct the URL for stopping the automation
-	url := fmt.Sprintf("%s/automations/%s", metadata.GitOpsURL, a.DeploymentID)
+	url := fmt.Sprintf("%s/automations/%s", metadata.GitopsURL, a.DeploymentID)
 
 	// Send the request to stop the automation
-	resp, err := SendAutomationRequest("DELETE", url, metadata.GitOpsSecret)
+	resp, err := SendAutomationRequest("DELETE", url, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to remove automation: %w", err)
 	}
@@ -78,14 +81,17 @@ func SendAutomationRequest(method, url string, workspaceSecret string) (*http.Re
 
 // GetAutomations fetches the list of automations for a given workspace
 func GetAutomations(workspaceName string) ([]Automation, error) {
-	metadata := config.GetWorkspaceMetadata(workspaceName)
+	metadata, err := config.GetWorkspaceMetadata(workspaceName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
 
 	fmt.Println("Fetching automations...")
 
-	url := fmt.Sprintf("%s/automations", metadata.GitOpsURL)
+	url := fmt.Sprintf("%s/automations", metadata.GitopsURL)
 
 	// Send the request
-	resp, err := SendAutomationRequest("GET", url, metadata.GitOpsSecret)
+	resp, err := SendAutomationRequest("GET", url, metadata.GitopsSecret)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request: %w", err)
 	}

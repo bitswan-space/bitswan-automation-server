@@ -107,6 +107,17 @@ func InitIngress(verbose bool) error {
 	caddyConfig := bitswanConfig + "caddy"
 	caddyCertsDir := caddyConfig + "/certs"
 
+	caddyProjectName := "bitswan-caddy"
+	// If caddy container exists and caddy dir exists, return
+	caddyContainerId, err := exec.Command("docker", "ps", "-q", "-f", "name=caddy").Output()
+	if err != nil {
+		return fmt.Errorf("failed to check if caddy container exists: %w", err)
+	}
+	if string(caddyContainerId) != "" {
+		fmt.Println("Caddy aleady initialized!")
+		return nil
+	}
+
 	fmt.Println("Setting up ingress proxy...")
 	if err := os.MkdirAll(caddyConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create ingress config directory: %w", err)
@@ -139,7 +150,6 @@ func InitIngress(verbose bool) error {
 		panic(fmt.Errorf("failed to change directory to ingress config: %w", err))
 	}
 
-	caddyProjectName := "bitswan-caddy"
 	caddyDockerComposeCom := exec.Command("docker", "compose", "-p", caddyProjectName, "up", "-d")
 
 	// Capture both stdout and stderr
