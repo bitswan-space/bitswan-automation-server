@@ -28,12 +28,12 @@ type EditorService struct {
 // NewEditorService creates a new Editor service manager
 func NewEditorService(workspaceName string) (*EditorService, error) {
 	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
-	
+
 	// Check if workspace exists
 	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace '%s' does not exist", workspaceName)
 	}
-	
+
 	return &EditorService{
 		WorkspaceName: workspaceName,
 		WorkspacePath: workspacePath,
@@ -81,6 +81,17 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 			"OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
 		}
 
+		//if issuer contains localhost, skip oidc discovery
+		if strings.Contains(oauthConfig.IssuerUrl, "localhost") {
+			oauthEnvVars = append(oauthEnvVars, 
+			"OAUTH2_PROXY_SKIP_OIDC_DISCOVERY=true",
+			"OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true",
+			"OAUTH2_PROXY_OIDC_JWKS_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/certs",
+			"OAUTH2_PROXY_LOGIN_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/auth",
+			"OAUTH2_PROXY_REDEEM_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/token",
+			"OAUTH2_PROXY_VALIDATE_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/userinfo")
+		}
+
 		if len(oauthConfig.AllowedGroups) > 0 {
 			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_ALLOWED_GROUPS="+strings.Join(oauthConfig.AllowedGroups, ","))
 		}
@@ -121,11 +132,11 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 func (e *EditorService) SaveDockerCompose(content string) error {
 	deploymentDir := filepath.Join(e.WorkspacePath, "deployment")
 	dockerComposePath := filepath.Join(deploymentDir, "docker-compose-editor.yml")
-	
+
 	if err := os.WriteFile(dockerComposePath, []byte(content), 0755); err != nil {
 		return fmt.Errorf("failed to write docker-compose-editor.yml: %w", err)
 	}
-	
+
 	fmt.Printf("Editor docker-compose saved to: %s\n", dockerComposePath)
 	return nil
 }
@@ -136,7 +147,7 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 	if e.IsEnabled() {
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", e.WorkspaceName)
 	}
-	
+
 	// Create codeserver config directory
 	codeserverConfigDir := filepath.Join(e.WorkspacePath, "codeserver-config")
 	if err := os.MkdirAll(codeserverConfigDir, 0700); err != nil {
@@ -162,7 +173,7 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 			return fmt.Errorf("failed to change ownership of workspace folder: %w", err)
 		}
 	}
-	
+
 	// Read metadata to get MQTT environment variables
 	var mqttEnvVars []string
 	metadata, err := e.GetMetadata()
@@ -173,23 +184,31 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		mqttEnvVars = append(mqttEnvVars, "MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
 		mqttEnvVars = append(mqttEnvVars, "MQTT_TOPIC="+*metadata.MqttTopic)
 	}
-	
+
+	if oauthConfig != nil && metadata.MqttUsername != nil {
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_BROKER="+*metadata.MqttBroker)
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_ALLOWED_GROUPS_TOPIC=/groups")
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_USERNAME="+*metadata.MqttUsername)
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PASSWORD="+*metadata.MqttPassword)
+	}
+
 	// Generate docker-compose content
 	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
-	
+
 	// Save docker-compose file
 	if err := e.SaveDockerCompose(dockerComposeContent); err != nil {
 		return fmt.Errorf("failed to save docker-compose file: %w", err)
 	}
-	
+
 	// Register Editor service with Caddy
 	if err := caddyapi.RegisterServiceWithCaddy("editor", e.WorkspaceName, domain, fmt.Sprintf("%s-editor:9999", e.WorkspaceName)); err != nil {
 		return fmt.Errorf("failed to register Editor service with caddy: %w", err)
 	}
-	
+
 	fmt.Printf("Editor service enabled for workspace '%s'\n", e.WorkspaceName)
 	return nil
 }
@@ -200,33 +219,33 @@ func (e *EditorService) Disable() error {
 	if !e.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'", e.WorkspaceName)
 	}
-	
+
 	// Stop containers if running
 	if e.IsContainerRunning() {
 		if err := e.StopContainer(); err != nil {
 			return fmt.Errorf("failed to stop editor container: %w", err)
 		}
 	}
-	
+
 	// Remove docker-compose file
 	dockerComposePath := filepath.Join(e.WorkspacePath, "deployment", "docker-compose-editor.yml")
 	if err := os.Remove(dockerComposePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove docker-compose-editor.yml: %w", err)
 	}
-	
+
 	// Remove codeserver config directory
 	codeserverConfigDir := filepath.Join(e.WorkspacePath, "codeserver-config")
 	if err := os.RemoveAll(codeserverConfigDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove codeserver-config directory: %w", err)
 	}
-	
+
 	// Get domain from metadata for Caddy cleanup
 	metadata, err := e.GetMetadata()
 	if err == nil && metadata.Domain != "" {
 		// Remove from Caddy (best effort)
 		caddyapi.UnregisterCaddyService("editor", e.WorkspaceName, metadata.Domain)
 	}
-	
+
 	fmt.Printf("Editor service disabled for workspace '%s'\n", e.WorkspaceName)
 	return nil
 }
@@ -245,7 +264,7 @@ func (e *EditorService) IsContainerRunning() bool {
 	if err != nil {
 		return false
 	}
-	
+
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	return len(lines) > 0 && lines[0] != ""
 }
@@ -254,10 +273,10 @@ func (e *EditorService) IsContainerRunning() bool {
 func (e *EditorService) StartContainer() error {
 	deploymentDir := filepath.Join(e.WorkspacePath, "deployment")
 	projectName := e.WorkspaceName + "-editor"
-	
+
 	cmd := exec.Command("docker", "compose", "-f", "docker-compose-editor.yml", "-p", projectName, "up", "-d")
 	cmd.Dir = deploymentDir
-	
+
 	fmt.Printf("Starting Editor container for workspace '%s'...\n", e.WorkspaceName)
 	return e.runCommand(cmd)
 }
@@ -266,10 +285,10 @@ func (e *EditorService) StartContainer() error {
 func (e *EditorService) StopContainer() error {
 	deploymentDir := filepath.Join(e.WorkspacePath, "deployment")
 	projectName := e.WorkspaceName + "-editor"
-	
+
 	cmd := exec.Command("docker", "compose", "-f", "docker-compose-editor.yml", "-p", projectName, "down")
 	cmd.Dir = deploymentDir
-	
+
 	fmt.Printf("Stopping Editor container for workspace '%s'...\n", e.WorkspaceName)
 	return e.runCommand(cmd)
 }
@@ -280,11 +299,11 @@ func (e *EditorService) ShowAccessInfo() error {
 	if err != nil {
 		return fmt.Errorf("failed to read metadata: %w", err)
 	}
-	
+
 	if metadata.EditorURL != nil {
 		fmt.Printf("Editor URL: %s\n", *metadata.EditorURL)
 	}
-	
+
 	return nil
 }
 
@@ -293,13 +312,13 @@ func (e *EditorService) ShowCredentials() error {
 	if !e.IsContainerRunning() {
 		return fmt.Errorf("Editor container is not running")
 	}
-	
+
 	// Get editor password from container
 	password, err := e.getEditorPassword()
 	if err != nil {
 		return fmt.Errorf("failed to get editor password: %w", err)
 	}
-	
+
 	fmt.Printf("Editor Password: %s\n", password)
 	return nil
 }
@@ -389,7 +408,7 @@ func (e *EditorService) GetMetadata() (*config.WorkspaceMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &metadata, nil
 }
 
@@ -411,20 +430,20 @@ func (e *EditorService) UpdateImage(newImage string) error {
 		}
 		newImage = "bitswan/bitswan-editor:" + latestVersion
 	}
-	
+
 	// Read the current docker-compose-editor.yml file
 	composePath := filepath.Join(e.WorkspacePath, "deployment", "docker-compose-editor.yml")
 	data, err := os.ReadFile(composePath)
 	if err != nil {
 		return fmt.Errorf("failed to read docker-compose-editor.yml: %w", err)
 	}
-	
+
 	// Parse the YAML
 	var compose map[string]interface{}
 	if err := yaml.Unmarshal(data, &compose); err != nil {
 		return fmt.Errorf("failed to parse docker-compose-editor.yml: %w", err)
 	}
-	
+
 	// Update the image in the bitswan-editor service
 	if services, ok := compose["services"].(map[string]interface{}); ok {
 		if editorService, ok := services["bitswan-editor"].(map[string]interface{}); ok {
@@ -435,17 +454,17 @@ func (e *EditorService) UpdateImage(newImage string) error {
 	} else {
 		return fmt.Errorf("services section not found in docker-compose-editor.yml")
 	}
-	
+
 	// Write the updated file back
 	updatedData, err := yaml.Marshal(compose)
 	if err != nil {
 		return fmt.Errorf("failed to marshal updated docker-compose: %w", err)
 	}
-	
+
 	if err := os.WriteFile(composePath, updatedData, 0644); err != nil {
 		return fmt.Errorf("failed to write updated docker-compose-editor.yml: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -457,4 +476,4 @@ func (e *EditorService) UpdateToLatest() error {
 // getLatestVersion gets the latest version from DockerHub
 func (e *EditorService) getLatestVersion() (string, error) {
 	return dockerhub.GetLatestEditorVersion()
-} 
+}
