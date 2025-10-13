@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
@@ -10,6 +11,7 @@ import (
 
 func newAddRouteCmd() *cobra.Command {
 	var mkcert bool
+	var certsDir string
 
 	cmd := &cobra.Command{
 		Use:   "add-route <hostname> <upstream>",
@@ -19,13 +21,14 @@ func newAddRouteCmd() *cobra.Command {
 Examples:
   bitswan ingress add-route foo.bar.example.com internal-host-name:2904
   bitswan ingress add-route api.myapp.com localhost:8080
-  bitswan ingress add-route keycloak.bitswan.localhost aoc-keycloak:8080 --mkcert`,
+  bitswan ingress add-route keycloak.bitswan.localhost aoc-keycloak:8080 --mkcert
+  bitswan ingress add-route secure.example.com backend:8080 --certs-dir /path/to/certs`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hostname := args[0]
 			upstream := args[1]
 
-			// Generate and install certificates if --mkcert flag is set
+			// Handle certificate generation and installation
 			if mkcert {
 				// Extract domain from hostname
 				parts := strings.Split(hostname, ".")
@@ -44,6 +47,12 @@ Examples:
 				if err := caddyapi.InstallTLSCertsForHostname(hostname, domain, "default"); err != nil {
 					return fmt.Errorf("failed to install TLS policies: %w", err)
 				}
+			} else if certsDir != "" {
+				// Install certificates from directory
+				caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+				if err := caddyapi.InstallCertsFromDir(certsDir, hostname, caddyConfig); err != nil {
+					return fmt.Errorf("failed to install certificates from directory: %w", err)
+				}
 			}
 
 			if err := caddyapi.AddRoute(hostname, upstream); err != nil {
@@ -54,6 +63,7 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&mkcert, "mkcert", false, "Generate certificates using mkcert for the hostname")
+	cmd.Flags().StringVar(&certsDir, "certs-dir", "", "The directory where the certificates are located")
 
 	return cmd
 } 
