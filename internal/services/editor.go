@@ -66,30 +66,94 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 	}
 
 	if oauthConfig != nil {
+		// Use provider from config or default to keycloak-oidc
+		provider := "keycloak-oidc"
+		if oauthConfig.Provider != nil {
+			provider = *oauthConfig.Provider
+		}
+
+		// Use http address from config or default
+		httpAddress := "0.0.0.0:9999"
+		if oauthConfig.HttpAddress != nil {
+			httpAddress = *oauthConfig.HttpAddress
+		}
+
+		// Use scope from config or default
+		scope := "openid email profile group_membership"
+		if oauthConfig.Scope != nil {
+			scope = *oauthConfig.Scope
+		}
+
+		// Use groups claim from config or default
+		groupsClaim := "group_membership"
+		if oauthConfig.GroupsClaim != nil {
+			groupsClaim = *oauthConfig.GroupsClaim
+		}
+
 		oauthEnvVars := []string{
 			"OAUTH_ENABLED=true", // This is the trigger entrypoint script
-			"OAUTH2_PROXY_PROVIDER=keycloak-oidc",
+			"OAUTH2_PROXY_PROVIDER=" + provider,
+			"OAUTH2_PROXY_HTTP_ADDRESS=" + httpAddress,
 			"OAUTH2_PROXY_CLIENT_ID=" + oauthConfig.ClientId,
 			"OAUTH2_PROXY_CLIENT_SECRET=" + oauthConfig.ClientSecret,
 			"OAUTH2_PROXY_COOKIE_SECRET=" + oauthConfig.CookieSecret,
 			"OAUTH2_PROXY_OIDC_ISSUER_URL=" + oauthConfig.IssuerUrl,
 			"OAUTH2_PROXY_REDIRECT_URL=https://" + fmt.Sprintf("%s-editor", workspaceName) + "." + domain + "/oauth2/callback",
 			"OAUTH2_PROXY_EMAIL_DOMAINS=" + strings.Join(oauthConfig.EmailDomains, ","),
-			"OAUTH2_PROXY_OIDC_GROUPS_CLAIM=group_membership",
-			"OAUTH2_PROXY_SCOPE=openid email profile group_membership",
+			"OAUTH2_PROXY_OIDC_GROUPS_CLAIM=" + groupsClaim,
+			"OAUTH2_PROXY_SCOPE=" + scope,
 			"OAUTH2_PROXY_CODE_CHALLENGE_METHOD=S256",
 			"OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true",
 		}
 
-		//if issuer contains localhost, skip oidc discovery
+		// Add custom endpoint URLs if provided, otherwise construct from issuer URL
+		if oauthConfig.LoginUrl != nil || oauthConfig.RedeemUrl != nil || oauthConfig.JwksUrl != nil || oauthConfig.ValidateUrl != nil {
+			// If any custom endpoint is provided, enable manual discovery mode
+			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_SKIP_OIDC_DISCOVERY=true")
+
+			if oauthConfig.LoginUrl != nil {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_LOGIN_URL="+*oauthConfig.LoginUrl)
+			} else {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_LOGIN_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/auth")
+			}
+
+			if oauthConfig.RedeemUrl != nil {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_REDEEM_URL="+*oauthConfig.RedeemUrl)
+			} else {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_REDEEM_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/token")
+			}
+
+			if oauthConfig.JwksUrl != nil {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_OIDC_JWKS_URL="+*oauthConfig.JwksUrl)
+			} else {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_OIDC_JWKS_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/certs")
+			}
+
+			if oauthConfig.ValidateUrl != nil {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_VALIDATE_URL="+*oauthConfig.ValidateUrl)
+			} else {
+				oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_VALIDATE_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/userinfo")
+			}
+		} else if strings.Contains(oauthConfig.IssuerUrl, "localhost") {
+			oauthEnvVars = append(oauthEnvVars,
+				"OAUTH2_PROXY_SKIP_OIDC_DISCOVERY=true",
+				"OAUTH2_PROXY_OIDC_JWKS_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/certs",
+				"OAUTH2_PROXY_LOGIN_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/auth",
+				"OAUTH2_PROXY_REDEEM_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/token",
+				"OAUTH2_PROXY_VALIDATE_URL="+oauthConfig.IssuerUrl+"/protocol/openid-connect/userinfo")
+		}
+
+		// Add optional flags
+		if oauthConfig.SetAuthorizationHeader != nil && *oauthConfig.SetAuthorizationHeader {
+			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_SET_AUTHORIZATION_HEADER=true")
+		}
+		if oauthConfig.PassAccessToken != nil && *oauthConfig.PassAccessToken {
+			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_PASS_ACCESS_TOKEN=true")
+		}
+
+		// Add localhost-specific SSL settings if needed
 		if strings.Contains(oauthConfig.IssuerUrl, "localhost") {
-			oauthEnvVars = append(oauthEnvVars, 
-			"OAUTH2_PROXY_SKIP_OIDC_DISCOVERY=true",
-			"OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true",
-			"OAUTH2_PROXY_OIDC_JWKS_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/certs",
-			"OAUTH2_PROXY_LOGIN_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/auth",
-			"OAUTH2_PROXY_REDEEM_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/token",
-			"OAUTH2_PROXY_VALIDATE_URL=" + oauthConfig.IssuerUrl + "/protocol/openid-connect/userinfo")
+			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true")
 		}
 
 		if len(oauthConfig.AllowedGroups) > 0 {
@@ -401,14 +465,12 @@ type EditorConfig struct {
 	Cert        bool   `yaml:"cert"`
 }
 
-
 // GetMetadata reads workspace metadata using the centralized function
 func (e *EditorService) GetMetadata() (*config.WorkspaceMetadata, error) {
 	metadata, err := config.GetWorkspaceMetadata(e.WorkspaceName)
 	if err != nil {
 		return nil, err
 	}
-
 	return &metadata, nil
 }
 
