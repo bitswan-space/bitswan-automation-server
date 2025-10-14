@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
@@ -140,7 +139,6 @@ func monitorImageBuilds(gitopsURL, gitopsSecret string, imageTags []string) erro
 		buildingImages[tag] = true
 	}
 
-	lastLogLines := make(map[string]int) // Track how many lines we've already shown
 	pollInterval := 2 * time.Second
 
 	for len(buildingImages) > 0 {
@@ -173,35 +171,6 @@ func monitorImageBuilds(gitopsURL, gitopsSecret string, imageTags []string) erro
 
 			// Check each building image
 			for tag := range buildingImages {
-				// Get logs for this image to show progress
-				// Strip "internal/" prefix from tag for the logs endpoint
-				logTag := tag
-				if strings.HasPrefix(tag, "internal/") {
-					logTag = strings.TrimPrefix(tag, "internal/")
-				}
-				logsURL := fmt.Sprintf("%s/automations/images/%s/logs?lines=5", gitopsURL, logTag)
-				logsResp, err := automations.SendAutomationRequest("GET", logsURL, gitopsSecret)
-				if err == nil && logsResp.StatusCode == http.StatusOK {
-					logsBody, err := io.ReadAll(logsResp.Body)
-					logsResp.Body.Close()
-					if err == nil {
-						var logsRespData ImageLogsResponse
-						if err := json.Unmarshal(logsBody, &logsRespData); err == nil {
-							// Display new log lines
-							startLine := lastLogLines[tag]
-							if startLine < len(logsRespData.Logs) {
-								for i := startLine; i < len(logsRespData.Logs); i++ {
-									logLine := strings.TrimSpace(logsRespData.Logs[i])
-									if logLine != "" {
-										fmt.Printf("  [%s] %s\n", tag, logLine)
-									}
-								}
-								lastLogLines[tag] = len(logsRespData.Logs)
-							}
-						}
-					}
-				}
-
 				// Check if this image is no longer building
 				if building, exists := imageStatus[tag]; exists && !building {
 					fmt.Printf("  ✅ [%s] Build completed\n", tag)
