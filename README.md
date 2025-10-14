@@ -31,7 +31,6 @@ Prerequisites
 Before installation, make sure you have installed `Docker` and `Docker compose`. Installation guides can be found on these links :
 
 - [Docker](https://docs.docker.com/engine/install/)
-- [Docker compose](https://docs.docker.com/compose/install/)
 
 # Installation
 ## Linux / WSL
