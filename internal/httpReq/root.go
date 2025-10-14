@@ -75,9 +75,6 @@ func ExecuteRequestWithLocalhostResolution(req *http.Request) (*http.Response, e
     var caCertPool *x509.CertPool
     if mkcertCA, mkcertErr := loadMkcertCA(); mkcertErr == nil {
         caCertPool = mkcertCA
-        fmt.Printf("Using mkcert CA for .localhost domains\n")
-    } else {
-        fmt.Printf("mkcert CA not available, using system certs: %v\n", mkcertErr)
     }
 
     // Create a transport with custom dialing for .localhost domains
@@ -90,7 +87,6 @@ func ExecuteRequestWithLocalhostResolution(req *http.Request) (*http.Response, e
             fmt.Printf("Resolving host %s\n", host)
 
             if strings.HasSuffix(host, ".localhost") {
-                fmt.Printf("Using localhost resolution for %s\n", host)
                 // Force localhost resolution for .localhost domains
                 return net.Dial(network, net.JoinHostPort("127.0.0.1", port))
             }
@@ -109,11 +105,9 @@ func ExecuteRequestWithLocalhostResolution(req *http.Request) (*http.Response, e
         transport.TLSClientConfig = &tls.Config{
             RootCAs: caCertPool,
         }
-        fmt.Printf("Using mkcert CA for TLS verification of %s\n", req.URL.Hostname())
     } else {
         // For other domains or when mkcert CA is not available, use system default TLS config
         transport.TLSClientConfig = &tls.Config{}
-        fmt.Printf("Using system default TLS verification for %s\n", req.URL.Hostname())
     }
 
     // Create a client with our custom transport
