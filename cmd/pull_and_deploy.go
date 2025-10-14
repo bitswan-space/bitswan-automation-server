@@ -26,6 +26,15 @@ type ImageLogsResponse struct {
 	Logs     []string `json:"logs"`
 }
 
+// ImageResponse represents a single image from the images endpoint
+type ImageResponse struct {
+	ID      string `json:"id"`
+	Tag     string `json:"tag"`
+	Created string `json:"created"`
+	Size    int64  `json:"size"`
+	Building bool  `json:"building"`
+}
+
 func newPullAndDeployCmd() *cobra.Command {
 	var branch string
 	var force bool
@@ -124,7 +133,7 @@ func pullAndDeploy(workspaceName, branchName string, force, noBuild bool) error 
 	return nil
 }
 
-// monitorImageBuilds polls the image logs endpoint until all builds are complete
+// monitorImageBuilds polls the images endpoint until all builds are complete
 func monitorImageBuilds(gitopsURL, gitopsSecret string, imageTags []string) error {
 	buildingImages := make(map[string]bool)
 	for _, tag := range imageTags {
@@ -133,84 +142,75 @@ func monitorImageBuilds(gitopsURL, gitopsSecret string, imageTags []string) erro
 
 	lastLogLines := make(map[string]int) // Track how many lines we've already shown
 	pollInterval := 2 * time.Second
-	maxRetries := 300 // 10 minutes max (300 * 2 seconds)
-	retries := 0
 
-	for len(buildingImages) > 0 && retries < maxRetries {
-		retries++
+	for len(buildingImages) > 0 {
 		time.Sleep(pollInterval)
 
-		for tag := range buildingImages {
-			// Get logs for this image
-			logsURL := fmt.Sprintf("%s/automations/images/%s/logs?lines=1000", gitopsURL, tag)
-			resp, err := automations.SendAutomationRequest("GET", logsURL, gitopsSecret)
+		// Get all images to check their building status
+		imagesURL := fmt.Sprintf("%s/automations/images/", gitopsURL)
+		resp, err := automations.SendAutomationRequest("GET", imagesURL, gitopsSecret)
+		if err != nil {
+			continue
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
 			if err != nil {
-				// Image might not have started building yet, continue
 				continue
 			}
 
-			if resp.StatusCode == http.StatusOK {
-				body, err := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				if err != nil {
-					continue
-				}
-
-				var logsResp ImageLogsResponse
-				if err := json.Unmarshal(body, &logsResp); err != nil {
-					continue
-				}
-
-				// Display new log lines
-				startLine := lastLogLines[tag]
-				if startLine < len(logsResp.Logs) {
-					for i := startLine; i < len(logsResp.Logs); i++ {
-						logLine := strings.TrimSpace(logsResp.Logs[i])
-						if logLine != "" {
-							fmt.Printf("  [%s] %s\n", tag, logLine)
-						}
-					}
-					lastLogLines[tag] = len(logsResp.Logs)
-
-					// Check if build is complete by looking for success/completion indicators
-					// or checking if the log file no longer has .building extension
-					for _, line := range logsResp.Logs {
-						if strings.Contains(line, "Successfully built") ||
-							strings.Contains(line, "Successfully tagged") ||
-							strings.Contains(line, "Build complete") {
-							fmt.Printf("  ✅ [%s] Build completed\n", tag)
-							delete(buildingImages, tag)
-							break
-						}
-						if strings.Contains(line, "ERROR") || strings.Contains(line, "Build failed") {
-							fmt.Printf("  ❌ [%s] Build failed\n", tag)
-							delete(buildingImages, tag)
-							break
-						}
-					}
-				}
-			} else if resp.StatusCode == http.StatusNotFound {
-				resp.Body.Close()
-				// Log file might have been moved from .building to final name
-				// Try one more time, if still 404, consider it done
-				time.Sleep(500 * time.Millisecond)
-				resp2, err := automations.SendAutomationRequest("GET", logsURL, gitopsSecret)
-				if err == nil {
-					if resp2.StatusCode == http.StatusNotFound {
-						// Build is complete (log file exists without .building)
-						fmt.Printf("  ✅ [%s] Build completed\n", tag)
-						delete(buildingImages, tag)
-					}
-					resp2.Body.Close()
-				}
-			} else {
-				resp.Body.Close()
+			var images []ImageResponse
+			if err := json.Unmarshal(body, &images); err != nil {
+				continue
 			}
-		}
-	}
 
-	if retries >= maxRetries {
-		return fmt.Errorf("timeout waiting for image builds to complete")
+			// Create a map of tag -> building status for quick lookup
+			imageStatus := make(map[string]bool)
+			for _, img := range images {
+				imageStatus[img.Tag] = img.Building
+			}
+
+			// Check each building image
+			for tag := range buildingImages {
+				// Get logs for this image to show progress
+				// Strip "internal/" prefix from tag for the logs endpoint
+				logTag := tag
+				if strings.HasPrefix(tag, "internal/") {
+					logTag = strings.TrimPrefix(tag, "internal/")
+				}
+				logsURL := fmt.Sprintf("%s/automations/images/%s/logs?lines=5", gitopsURL, logTag)
+				logsResp, err := automations.SendAutomationRequest("GET", logsURL, gitopsSecret)
+				if err == nil && logsResp.StatusCode == http.StatusOK {
+					logsBody, err := io.ReadAll(logsResp.Body)
+					logsResp.Body.Close()
+					if err == nil {
+						var logsRespData ImageLogsResponse
+						if err := json.Unmarshal(logsBody, &logsRespData); err == nil {
+							// Display new log lines
+							startLine := lastLogLines[tag]
+							if startLine < len(logsRespData.Logs) {
+								for i := startLine; i < len(logsRespData.Logs); i++ {
+									logLine := strings.TrimSpace(logsRespData.Logs[i])
+									if logLine != "" {
+										fmt.Printf("  [%s] %s\n", tag, logLine)
+									}
+								}
+								lastLogLines[tag] = len(logsRespData.Logs)
+							}
+						}
+					}
+				}
+
+				// Check if this image is no longer building
+				if building, exists := imageStatus[tag]; exists && !building {
+					fmt.Printf("  ✅ [%s] Build completed\n", tag)
+					delete(buildingImages, tag)
+				}
+			}
+		} else {
+			resp.Body.Close()
+		}
 	}
 
 	return nil
