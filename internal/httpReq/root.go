@@ -84,7 +84,6 @@ func ExecuteRequestWithLocalhostResolution(req *http.Request) (*http.Response, e
             if err != nil {
                 return nil, err
             }
-            fmt.Printf("Resolving host %s\n", host)
 
             if strings.HasSuffix(host, ".localhost") {
                 // Force localhost resolution for .localhost domains
