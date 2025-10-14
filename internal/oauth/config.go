@@ -9,22 +9,34 @@ import (
 )
 
 type Config struct {
-	ClientId      string `json:"client_id"`
-	ClientSecret  string `json:"client_secret"`
-	IssuerUrl     string `json:"issuer_url"`
-	RedirectUrl   string `json:"redirect_url"`
-	CookieSecret  string `json:"cookie_secret"`
+	ClientId      string   `json:"client_id"`
+	ClientSecret  string   `json:"client_secret"`
+	IssuerUrl     string   `json:"issuer_url"`
+	RedirectUrl   string   `json:"redirect_url"`
+	CookieSecret  string   `json:"cookie_secret"`
 	EmailDomains  []string `json:"email_domains"`
 	AllowedGroups []string `json:"allowed_groups"`
+
+	// Advanced OAuth2 Proxy settings (optional)
+	Provider               *string `json:"provider,omitempty"`                 // e.g., "oidc", "keycloak-oidc"
+	HttpAddress            *string `json:"http_address,omitempty"`             // e.g., "0.0.0.0:9999"
+	LoginUrl               *string `json:"login_url,omitempty"`                // Custom login URL
+	RedeemUrl              *string `json:"redeem_url,omitempty"`               // Custom token endpoint URL
+	JwksUrl                *string `json:"jwks_url,omitempty"`                 // Custom JWKS URL
+	ValidateUrl            *string `json:"validate_url,omitempty"`             // Custom userinfo endpoint URL
+	Scope                  *string `json:"scope,omitempty"`                    // e.g., "openid email profile"
+	SetAuthorizationHeader *bool   `json:"set_authorization_header,omitempty"` // Pass authorization header
+	PassAccessToken        *bool   `json:"pass_access_token,omitempty"`        // Pass access token
+	GroupsClaim            *string `json:"groups_claim,omitempty"`             // Groups claim name
 }
 
 func GetOauthConfig(workspaceName string) (*Config, error) {
 	var config Config
 	fmt.Println("Getting OAuth config for workspace:", workspaceName)
-	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName 
+	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName
 	configPath := workspacePath + "/secrets/oauth-config.yaml"
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {	
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		fmt.Println("No OAuth config found, skipping...")
 		return nil, fmt.Errorf("no OAuth config found")
 	}
