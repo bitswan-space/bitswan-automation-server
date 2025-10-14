@@ -145,22 +145,22 @@ func monitorImageBuilds(gitopsURL, gitopsSecret string, imageTags []string) erro
 		time.Sleep(pollInterval)
 
 		// Get all images to check their building status
-		imagesURL := fmt.Sprintf("%s/automations/images/", gitopsURL)
+		imagesURL := fmt.Sprintf("%s/images/", gitopsURL)
 		resp, err := automations.SendAutomationRequest("GET", imagesURL, gitopsSecret)
 		if err != nil {
-			continue
+			return fmt.Errorf("failed to get images: %w", err)
 		}
 
 		if resp.StatusCode == http.StatusOK {
 			body, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
-				continue
+				return fmt.Errorf("failed to read response body: %w", err)
 			}
 
 			var images []ImageResponse
 			if err := json.Unmarshal(body, &images); err != nil {
-				continue
+				return fmt.Errorf("failed to parse response JSON: %w", err)
 			}
 
 			// Create a map of tag -> building status for quick lookup
@@ -178,7 +178,7 @@ func monitorImageBuilds(gitopsURL, gitopsSecret string, imageTags []string) erro
 				}
 			}
 		} else {
-			resp.Body.Close()
+			return fmt.Errorf("failed to get images: %w", err)
 		}
 	}
 
