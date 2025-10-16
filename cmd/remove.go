@@ -32,16 +32,21 @@ const (
 
 func newRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:          "remove <workspace-name>",
+		Use:          "remove <workspace-name>...",
 		Short:        "bitswan workspace remove",
-		Args:         cobra.ExactArgs(1),
+		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workspaceName := args[0]
-			err := removeGitops(workspaceName)
-			if err != nil {
-				return fmt.Errorf("error removing gitops: %w", err)
+			for _, workspaceName := range args {
+				fmt.Printf("Removing workspace: %s\n", workspaceName)
+				err := removeGitops(workspaceName)
+				if err != nil {
+					fmt.Printf("Error removing workspace %s: %v\n", workspaceName, err)
+				} else {
+					fmt.Printf("Successfully removed workspace: %s\n", workspaceName)
+				}
 			}
+			
 			return nil
 		},
 	}
@@ -198,14 +203,21 @@ func removeGitops(workspaceName string) error {
 	workspacesFolder := filepath.Join(bitswanPath, "workspaces")
 	dockerComposePath := filepath.Join(workspacesFolder, workspaceName, "deployment")
 	projectName := workspaceName + "-site"
-	cmd := exec.Command("docker", "compose", "-p", projectName, "down", "--volumes")
-	cmd.Dir = dockerComposePath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove docker containers and volumes: %w", err)
+	
+	// Check if deployment directory exists before trying to run docker compose
+	if _, err := os.Stat(dockerComposePath); os.IsNotExist(err) {
+		fmt.Println("Deployment directory not found, skipping docker operations.")
+	} else {
+		cmd := exec.Command("docker", "compose", "-p", projectName, "down", "--volumes")
+		cmd.Dir = dockerComposePath
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Warning: failed to remove docker containers and volumes: %v\n", err)
+		} else {
+			fmt.Println("Docker containers and volumes removed successfully.")
+		}
 	}
-	fmt.Println("Docker containers and volumes removed successfully.")
 
 	// 4. Remove images used by docker-compose
 	fmt.Println("Removing images used by docker-compose...")
@@ -214,61 +226,82 @@ func removeGitops(workspaceName string) error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Println("Warning: docker-compose.yml not found, skipping image removal")
+		} else {
+			fmt.Printf("Warning: error reading docker-compose file: %v\n", err)
 		}
-		fmt.Println("error reading docker-compose file: %w", err)
-	}
-	if err == nil {
+	} else {
 		var compose Compose
 		err = yaml.Unmarshal(data, &compose)
 		if err != nil {
-			return fmt.Errorf("error unmarshalling docker-compose file: %w", err)
-		}
-
-		for _, service := range compose.Services {
-			if service.Image != "" {
-				exists, err := checkContainerExists(service.Image)
-				if err != nil {
-					return fmt.Errorf("error checking if image exists: %w", err)
-				}
-
-				if !exists {
-					err = deleteDockerImage(service.Image)
+			fmt.Printf("Warning: error unmarshalling docker-compose file: %v\n", err)
+		} else {
+			for _, service := range compose.Services {
+				if service.Image != "" {
+					exists, err := checkContainerExists(service.Image)
 					if err != nil {
-						return fmt.Errorf("error deleting docker image %s: %w", service.Image, err)
+						fmt.Printf("Warning: error checking if image exists: %v\n", err)
+						continue
 					}
-					fmt.Println("Images removed successfully.")
-				} else {
-					fmt.Printf("Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
+
+					if !exists {
+						err = deleteDockerImage(service.Image)
+						if err != nil {
+							fmt.Printf("Warning: error deleting docker image %s: %v\n", service.Image, err)
+						} else {
+							fmt.Println("Images removed successfully.")
+						}
+					} else {
+						fmt.Printf("Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
+					}
 				}
 			}
 		}
 	}
 	// 5. Remove the gitops folder
 	fmt.Println("Removing gitops folder...")
-	cmd = exec.Command("rm", "-r", workspaceName)
-	cmd.Dir = workspacesFolder
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove gitops folder: %w", err)
+	workspacePath := filepath.Join(workspacesFolder, workspaceName)
+	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
+		fmt.Println("Workspace folder not found, skipping folder removal.")
+	} else {
+		// First try without sudo
+		cmd := exec.Command("rm", "-r", workspaceName)
+		cmd.Dir = workspacesFolder
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			// If permission denied, try with sudo
+			fmt.Println("Permission denied, trying with sudo...")
+			cmd = exec.Command("sudo", "rm", "-r", workspaceName)
+			cmd.Dir = workspacesFolder
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				fmt.Printf("Warning: failed to remove gitops folder even with sudo: %v\n", err)
+			} else {
+				fmt.Println("GitOps folder removed successfully with sudo.")
+			}
+		} else {
+			fmt.Println("GitOps folder removed successfully.")
+		}
 	}
-	fmt.Println("GitOps folder removed successfully.")
 
 	// 6. Remove caddy files
 	fmt.Println("Removing caddy files...")
 	err = caddyapi.DeleteCaddyRecords(workspaceName)
 	if err != nil {
-		return fmt.Errorf("error removing caddy files: %w", err)
+		fmt.Printf("Warning: error removing caddy files: %v\n", err)
+	} else {
+		fmt.Println("Caddy files removed successfully.")
 	}
-	fmt.Println("Caddy files removed successfully.")
 
 	// 7. Remove entries from /etc/hosts
 	fmt.Println("Removing entries from /etc/hosts...")
 	err = deleteHostsEntry(workspaceName)
 	if err != nil {
-		return fmt.Errorf("error removing entries from /etc/hosts: %w", err)
+		fmt.Printf("Warning: error removing entries from /etc/hosts: %v\n", err)
+	} else {
+		fmt.Println("Entries removed from /etc/hosts successfully.")
 	}
-	fmt.Println("Entries removed from /etc/hosts successfully.")
 
 	return nil
 }
