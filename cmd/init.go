@@ -42,6 +42,7 @@ type initOptions struct {
 	editorImage        string
 	gitopsDevSourceDir string
 	oauthConfigFile    string
+	oauth              bool
 	sshPort            string
 }
 
@@ -91,6 +92,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
+	cmd.Flags().BoolVar(&o.oauth, "oauth", false, "Automatically fetch OAuth configuration from AOC")
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
 	return cmd
 }
@@ -910,7 +912,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	var mqttEnvVars []string
 	workspaceId := ""
 	fmt.Println("Registering workspace...")
-	
+
 	// Try to create AOC client
 	aocClient, err := aoc.NewAOCClient()
 	if err != nil {
@@ -934,6 +936,15 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to register workspace: %w", err)
 			}
 			fmt.Println("Workspace registered successfully!")
+
+			if o.oauth {
+				fmt.Println("Fetching OAuth configuration from AOC...")
+				oauthConfig, err = aocClient.GetOAuthConfig(workspaceId)
+				if err != nil {
+					return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
+				}
+				fmt.Println("OAuth configuration fetched successfully!")
+			}
 
 			aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
 
