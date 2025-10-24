@@ -2,6 +2,7 @@ package aoc
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 )
 
 // OTPExchangeRequest represents the OTP exchange request
@@ -80,7 +82,7 @@ type AOCClient struct {
 // NewAOCClient creates a new AOC client from the automation server config
 func NewAOCClient() (*AOCClient, error) {
 	cfg := config.NewAutomationServerConfig()
-	
+
 	settings, err := cfg.GetAutomationOperationsCenterSettings()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load automation server settings: %w", err)
@@ -95,7 +97,7 @@ func NewAOCClient() (*AOCClient, error) {
 // NewAOCClientWithOTP creates a new AOC client by exchanging OTP for access token
 func NewAOCClientWithOTP(aocUrl, otp, automationServerId string) (*AOCClient, error) {
 	cfg := config.NewAutomationServerConfig()
-	
+
 	// Create temporary settings for OTP exchange
 	tempSettings := &config.AutomationOperationsCenterSettings{
 		AOCUrl:             aocUrl,
@@ -326,6 +328,75 @@ func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, er
 	}, nil
 }
 
+// KeycloakClientSecretResponse represents the Keycloak client secret response
+type KeycloakClientSecretResponse struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	IssuerURL    string `json:"issuer_url"`
+}
+
+func (c *AOCClient) GetKeycloakClientSecret(workspaceId string) (*KeycloakClientSecretResponse, error) {
+	url := fmt.Sprintf("%s/api/automation_server/workspaces/%s/keycloak/client-secret", c.settings.AOCUrl, workspaceId)
+	resp, err := c.sendRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request to %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get Keycloak client secret from %s: %s - %s", url, resp.Status, string(body))
+	}
+
+	var response KeycloakClientSecretResponse
+	body, _ := io.ReadAll(resp.Body)
+	err = json.Unmarshal([]byte(body), &response)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %w", err)
+	}
+
+	return &response, nil
+}
+
+func generateCookieSecret() (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 32)
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return "", fmt.Errorf("failed to generate random secret: %w", err)
+	}
+	for i := range b {
+		b[i] = alphabet[int(random[i])%len(alphabet)]
+	}
+	return string(b), nil
+}
+
+func (c *AOCClient) GetOAuthConfig(workspaceId string) (*oauth.Config, error) {
+	keycloakInfo, err := c.GetKeycloakClientSecret(workspaceId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Keycloak client secret: %w", err)
+	}
+
+	cookieSecret, err := generateCookieSecret()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate cookie secret: %w", err)
+	}
+
+	oauthConfig := &oauth.Config{
+		ClientId:      keycloakInfo.ClientID,
+		ClientSecret:  keycloakInfo.ClientSecret,
+		IssuerUrl:     keycloakInfo.IssuerURL,
+		Provider:      stringPtr("keycloak-oidc"),
+		HttpAddress:   stringPtr("0.0.0.0:9999"),
+		Scope:         stringPtr("openid email profile group_membership"),
+		GroupsClaim:   stringPtr("group_membership"),
+		EmailDomains:  []string{"*"},
+		AllowedGroups: []string{},
+		CookieSecret:  cookieSecret,
+	}
+	return oauthConfig, nil
+}
+
 // GetAOCEnvironmentVariables creates AOC environment variables
 func (c *AOCClient) GetAOCEnvironmentVariables(workspaceId, automationServerToken string) []string {
 	aocUrl := c.settings.AOCUrl
@@ -339,7 +410,7 @@ func (c *AOCClient) GetAOCEnvironmentVariables(workspaceId, automationServerToke
 		}
 		aocUrl = "http://aoc-bitswan-backend:8000" + path
 	}
-	
+
 	return []string{
 		"BITSWAN_WORKSPACE_ID=" + workspaceId,
 		"BITSWAN_AOC_URL=" + aocUrl,
@@ -354,7 +425,7 @@ func GetMQTTEnvironmentVariables(creds *MQTTCredentials) []string {
 	if strings.Contains(broker, ".localhost") {
 		broker = "aoc-emqx"
 	}
-	
+
 	return []string{
 		"MQTT_USERNAME=" + creds.Username,
 		"MQTT_PASSWORD=" + creds.Password,
@@ -379,7 +450,7 @@ func createHTTPClient() (*http.Client, error) {
 
 	// Path to mkcert root CA
 	mkcertPath := filepath.Join(homeDir, ".local", "share", "mkcert", "rootCA.pem")
-	
+
 	// Check if mkcert root CA exists
 	if _, err := os.Stat(mkcertPath); os.IsNotExist(err) {
 		// If mkcert CA doesn't exist, use default client
@@ -398,7 +469,7 @@ func createHTTPClient() (*http.Client, error) {
 		// Fallback to empty pool if system cert pool fails
 		caCertPool = x509.NewCertPool()
 	}
-	
+
 	// Add the mkcert root CA to the pool
 	if !caCertPool.AppendCertsFromPEM(caCert) {
 		return nil, fmt.Errorf("failed to parse mkcert root CA")
@@ -436,7 +507,7 @@ func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Respo
 	if err != nil {
 		return nil, fmt.Errorf("error creating HTTP client: %w", err)
 	}
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %w", err)
@@ -447,4 +518,9 @@ func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Respo
 // GetAccessToken returns the current access token
 func (c *AOCClient) GetAccessToken() string {
 	return c.settings.AccessToken
+}
+
+// Helper function to create string pointers
+func stringPtr(s string) *string {
+	return &s
 }
