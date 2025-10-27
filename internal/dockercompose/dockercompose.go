@@ -19,12 +19,12 @@ const (
 
 // DockerComposeConfig holds the configuration required for creating a docker-compose file
 type DockerComposeConfig struct {
-	GitopsPath   string
-	WorkspaceName string
-	GitopsImage  string
-	Domain       string
-	MqttEnvVars  []string
-	AocEnvVars   []string
+	GitopsPath         string
+	WorkspaceName      string
+	GitopsImage        string
+	Domain             string
+	MqttEnvVars        []string
+	AocEnvVars         []string
 	GitopsDevSourceDir string
 }
 
@@ -94,15 +94,15 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), "DEBUG=true")
 	}
 
-	// Add workspace git mount and rewrite git path for all OS
+	// Add workspace directory mount and rewrite git path for all OS
 	if hostOs == WindowsMac {
 		gitopsVolumes := []string{
 			gitConfig + ":/root/.gitconfig:z",
-			config.GitopsPath + "/workspace/.git:/workspace-repo/.git:z",
+			config.GitopsPath + "/workspace/:/workspace-repo/:z",
 		}
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
 	} else if hostOs == Linux {
-		// For Linux, also mount workspace git directory
+		// For Linux, also mount workspace directory
 		gitopsVolumes := []string{
 			config.GitopsPath + "/workspace/:/workspace-repo/:z",
 		}
@@ -180,5 +180,3 @@ func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 
 	return buf.String(), nil
 }
-
-
