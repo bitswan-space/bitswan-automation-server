@@ -382,14 +382,19 @@ func (c *AOCClient) GetOAuthConfig(workspaceId string) (*oauth.Config, error) {
 		return nil, fmt.Errorf("failed to generate cookie secret: %w", err)
 	}
 
+	provider := "keycloak-oidc"
+	httpAddr := "0.0.0.0:9999"
+	scope := "openid email profile group_membership"
+	groupsClaim := "group_membership"
+
 	oauthConfig := &oauth.Config{
 		ClientId:      keycloakInfo.ClientID,
 		ClientSecret:  keycloakInfo.ClientSecret,
 		IssuerUrl:     keycloakInfo.IssuerURL,
-		Provider:      stringPtr("keycloak-oidc"),
-		HttpAddress:   stringPtr("0.0.0.0:9999"),
-		Scope:         stringPtr("openid email profile group_membership"),
-		GroupsClaim:   stringPtr("group_membership"),
+		Provider:      &provider,
+		HttpAddress:   &httpAddr,
+		Scope:         &scope,
+		GroupsClaim:   &groupsClaim,
 		EmailDomains:  []string{"*"},
 		AllowedGroups: []string{},
 		CookieSecret:  cookieSecret,
@@ -518,9 +523,4 @@ func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Respo
 // GetAccessToken returns the current access token
 func (c *AOCClient) GetAccessToken() string {
 	return c.settings.AccessToken
-}
-
-// Helper function to create string pointers
-func stringPtr(s string) *string {
-	return &s
 }
