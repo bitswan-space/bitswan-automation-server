@@ -42,7 +42,7 @@ type initOptions struct {
 	editorImage        string
 	gitopsDevSourceDir string
 	oauthConfigFile    string
-	oauth              bool
+	noOauth            bool
 	sshPort            string
 }
 
@@ -56,7 +56,6 @@ type DockerNetwork struct {
 	Labels    string `json:"Labels"`
 	Scope     string `json:"Scope"`
 }
-
 
 type RepositoryInfo struct {
 	Hostname string
@@ -92,7 +91,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
-	cmd.Flags().BoolVar(&o.oauth, "oauth", false, "Automatically fetch OAuth configuration from AOC")
+	cmd.Flags().BoolVar(&o.noOauth, "no-oauth", false, "Disable automatically fetching OAuth configuration from AOC")
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
 	return cmd
 }
@@ -937,13 +936,16 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Println("Workspace registered successfully!")
 
-			if o.oauth {
+			// Automatically fetch OAuth configuration when AOC is configured 
+			if !o.noOauth {
 				fmt.Println("Fetching OAuth configuration from AOC...")
 				oauthConfig, err = aocClient.GetOAuthConfig(workspaceId)
 				if err != nil {
 					return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
 				}
 				fmt.Println("OAuth configuration fetched successfully!")
+			} else {
+				fmt.Println("OAuth disabled, using password authentication")
 			}
 
 			aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
