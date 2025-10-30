@@ -46,16 +46,31 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 	workspaceName := e.WorkspaceName
 	sshDir := gitopsPath + "/ssh"
 
+	// Get AOC URL from config
+	aocURL, err := e.getAOCURLFromConfig()
+	if err != nil {
+		// If AOC URL is not configured, continue without it
+		fmt.Printf("Warning: AOC URL not configured: %v\n", err)
+		aocURL = ""
+	}
+	
+	environmentVars := []string{
+		"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
+		"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
+		"BITSWAN_GITOPS_DIR=/home/coder/workspace",
+	}
+	
+	// Add AOC_URL if available
+	if aocURL != "" {
+		environmentVars = append(environmentVars, "AOC_URL="+aocURL)
+	}
+	
 	bitswanEditor := map[string]interface{}{
 		"image":    bitswanEditorImage,
 		"restart":  "always",
 		"hostname": workspaceName + "-editor",
 		"networks": []string{"bitswan_network"},
-		"environment": []string{
-			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
-			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
-			"BITSWAN_GITOPS_DIR=/home/coder/workspace",
-		},
+		"environment": environmentVars,
 		"volumes": []string{
 			gitopsPath + "/workspace:/home/coder/workspace/workspace:z",
 			gitopsPath + "/secrets:/home/coder/workspace/secrets:z",
@@ -160,14 +175,17 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_ALLOWED_GROUPS="+strings.Join(oauthConfig.AllowedGroups, ","))
 		}
 
-		// Add oauth environment variables to bitswanEditor
-		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), oauthEnvVars...)
+		// Add oauth environment variables to environmentVars
+		environmentVars = append(environmentVars, oauthEnvVars...)
 	}
 
 	// Append MQTT env variables when workspace is connected to AOC
 	if len(mqttEnvVars) > 0 {
-		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), mqttEnvVars...)
+		environmentVars = append(environmentVars, mqttEnvVars...)
 	}
+	
+	// Update the bitswanEditor with the final environment variables
+	bitswanEditor["environment"] = environmentVars
 
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
@@ -239,15 +257,12 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 	}
 
 	// Read metadata to get MQTT environment variables
-	var mqttEnvVars []string
 	metadata, err := e.GetMetadata()
-	if err == nil && metadata.MqttUsername != nil {
-		mqttEnvVars = append(mqttEnvVars, "MQTT_USERNAME="+*metadata.MqttUsername)
-		mqttEnvVars = append(mqttEnvVars, "MQTT_PASSWORD="+*metadata.MqttPassword)
-		mqttEnvVars = append(mqttEnvVars, "MQTT_BROKER="+*metadata.MqttBroker)
-		mqttEnvVars = append(mqttEnvVars, "MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
-		mqttEnvVars = append(mqttEnvVars, "MQTT_TOPIC="+*metadata.MqttTopic)
+	if err != nil {
+		return fmt.Errorf("failed to read workspace metadata. Make sure workspace is properly initialized: %w", err)
 	}
+	
+	mqttEnvVars := e.getMQTTEnvVarsFromMetadata(metadata)
 
 	if oauthConfig != nil && metadata.MqttUsername != nil {
 		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_BROKER="+*metadata.MqttBroker)
@@ -532,10 +547,71 @@ func (e *EditorService) UpdateImage(newImage string) error {
 
 // UpdateToLatest updates the editor service to the latest version from DockerHub
 func (e *EditorService) UpdateToLatest() error {
-	return e.UpdateImage("")
+	// Get the latest version
+	latestVersion, err := e.getLatestVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get latest version: %w", err)
+	}
+	
+	// Get metadata to retrieve gitops secret and domain
+	metadata, err := e.GetMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to read workspace metadata. Make sure workspace is properly initialized: %w", err)
+	}
+	
+	gitopsSecretToken := metadata.GitopsSecret
+	domain := metadata.Domain
+	bitswanEditorImage := "bitswan/bitswan-editor:" + latestVersion
+	
+	// Read MQTT environment variables from metadata
+	mqttEnvVars := e.getMQTTEnvVarsFromMetadata(metadata)
+	
+	// Generate new docker-compose content with latest image and all current config
+	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, nil, mqttEnvVars)
+	if err != nil {
+		return fmt.Errorf("failed to create docker-compose content: %w", err)
+	}
+	
+	// Save the updated docker-compose file
+	if err := e.SaveDockerCompose(dockerComposeContent); err != nil {
+		return fmt.Errorf("failed to save docker-compose file: %w", err)
+	}
+	
+	return nil
 }
 
 // getLatestVersion gets the latest version from DockerHub
 func (e *EditorService) getLatestVersion() (string, error) {
 	return dockerhub.GetLatestEditorVersion()
+}
+
+// getAOCURLFromConfig reads the AOC URL from config and transforms api. subdomain to aoc.
+func (e *EditorService) getAOCURLFromConfig() (string, error) {
+	cfg := config.NewAutomationServerConfig()
+	aocSettings, err := cfg.GetAutomationOperationsCenterSettings()
+	if err != nil {
+		return "", fmt.Errorf("failed to get AOC settings: %w", err)
+	}
+	
+	if aocSettings.AOCUrl == "" {
+		return "", fmt.Errorf("AOC URL not configured")
+	}
+	
+	// Replace api. subdomain with aoc.
+	aocURL := strings.Replace(aocSettings.AOCUrl, "api.", "aoc.", 1)
+	
+	return aocURL, nil
+}
+
+// getMQTTEnvVarsFromMetadata extracts MQTT environment variables from workspace metadata
+func (e *EditorService) getMQTTEnvVarsFromMetadata(metadata *config.WorkspaceMetadata) []string {
+	var mqttEnvVars []string
+	if metadata.MqttUsername != nil {
+		mqttEnvVars = append(mqttEnvVars, "MQTT_USERNAME="+*metadata.MqttUsername)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_PASSWORD="+*metadata.MqttPassword)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_BROKER="+*metadata.MqttBroker)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
+		mqttEnvVars = append(mqttEnvVars, "MQTT_TOPIC="+*metadata.MqttTopic)
+	}
+	return mqttEnvVars
 }
