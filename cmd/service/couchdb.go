@@ -25,6 +25,8 @@ func NewCouchDBCmd() *cobra.Command {
 	cmd.AddCommand(newCouchDBStartCmd())
 	cmd.AddCommand(newCouchDBStopCmd())
 	cmd.AddCommand(newCouchDBUpdateCmd())
+	cmd.AddCommand(newCouchDBBackupCmd())
+	cmd.AddCommand(newCouchDBRestoreCmd())
 
 	return cmd
 }
@@ -332,6 +334,102 @@ func updateCouchDBService(couchdbImage string) error {
 	}
 	
 	return nil
+}
+
+func newCouchDBBackupCmd() *cobra.Command {
+	var backupPath string
+	
+	cmd := &cobra.Command{
+		Use:   "backup",
+		Short: "Create a backup of all CouchDB databases",
+		Long:  "Creates a backup of all user databases in CouchDB. The backup will be saved as a tarball with automatic date/time naming (format: couchdb-backup-YYYYMMDD-HHMMSS.tar.gz) in the specified directory.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if backupPath == "" {
+				return fmt.Errorf("backup path is required. Use --path to specify the backup location")
+			}
+			return backupCouchDB(backupPath)
+		},
+	}
+	
+	cmd.Flags().StringVar(&backupPath, "path", "", "Directory where the backup tarball will be saved (required)")
+	cmd.MarkFlagRequired("path")
+	
+	return cmd
+}
+
+func newCouchDBRestoreCmd() *cobra.Command {
+	var backupPath string
+	
+	cmd := &cobra.Command{
+		Use:   "restore",
+		Short: "Restore CouchDB databases from a backup",
+		Long:  "Restores CouchDB databases from a backup tarball (.tar.gz) or directory. Databases will be created if they don't exist.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if backupPath == "" {
+				return fmt.Errorf("backup path is required. Use --path to specify the backup location")
+			}
+			return restoreCouchDB(backupPath)
+		},
+	}
+	
+	cmd.Flags().StringVar(&backupPath, "path", "", "Path to the backup tarball (.tar.gz) or directory (required)")
+	cmd.MarkFlagRequired("path")
+	
+	return cmd
+}
+
+func backupCouchDB(backupPath string) error {
+	// Get the active workspace
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
+	if err != nil {
+		return fmt.Errorf("failed to get active workspace: %w", err)
+	}
+	
+	if workspaceName == "" {
+		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
+	}
+	
+	// Create CouchDB service manager
+	couchdbService, err := services.NewCouchDBService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create CouchDB service: %w", err)
+	}
+	
+	// Check if enabled
+	if !couchdbService.IsEnabled() {
+		return fmt.Errorf("CouchDB service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
+	}
+	
+	// Perform backup
+	return couchdbService.Backup(backupPath)
+}
+
+func restoreCouchDB(backupPath string) error {
+	// Get the active workspace
+	cfg := config.NewAutomationServerConfig()
+	workspaceName, err := cfg.GetActiveWorkspace()
+	if err != nil {
+		return fmt.Errorf("failed to get active workspace: %w", err)
+	}
+	
+	if workspaceName == "" {
+		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
+	}
+	
+	// Create CouchDB service manager
+	couchdbService, err := services.NewCouchDBService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create CouchDB service: %w", err)
+	}
+	
+	// Check if enabled
+	if !couchdbService.IsEnabled() {
+		return fmt.Errorf("CouchDB service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
+	}
+	
+	// Perform restore
+	return couchdbService.Restore(backupPath)
 }
 
  

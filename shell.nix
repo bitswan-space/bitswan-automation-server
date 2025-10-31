@@ -2,7 +2,7 @@
 
 pkgs.mkShell {
   buildInputs = [
-    pkgs.go_1_23
+    pkgs.go_1_24
     pkgs.gcc
     pkgs.gnumake
     pkgs.git # Assuming git might be needed for go modules or pre-commit hooks
