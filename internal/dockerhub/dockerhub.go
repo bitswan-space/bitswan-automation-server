@@ -57,3 +57,13 @@ func GetLatestZookeeperVersion() (string, error) {
 func GetLatestCouchDBVersion() (string, error) {
 	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-couchdb/tags/")
 }
+
+// GetLatestEditorStagingVersion gets the latest version of the bitswan-editor-staging image
+func GetLatestEditorStagingVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor-staging/tags/")
+}
+
+// GetLatestGitopsStagingVersion gets the latest version of the gitops-staging image
+func GetLatestGitopsStagingVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops-staging/tags/")
+}

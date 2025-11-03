@@ -535,6 +535,21 @@ func (e *EditorService) UpdateToLatest() error {
 	return e.UpdateImage("")
 }
 
+// UpdateToLatestWithStaging updates the editor service to the latest version from DockerHub, optionally using staging
+func (e *EditorService) UpdateToLatestWithStaging(staging bool) error {
+	var latestVersion string
+	var err error
+	if staging {
+		latestVersion, err = dockerhub.GetLatestEditorStagingVersion()
+		if err != nil {
+			return fmt.Errorf("failed to get latest staging version: %w", err)
+		}
+		newImage := "bitswan/bitswan-editor-staging:" + latestVersion
+		return e.UpdateImage(newImage)
+	}
+	return e.UpdateToLatest()
+}
+
 // getLatestVersion gets the latest version from DockerHub
 func (e *EditorService) getLatestVersion() (string, error) {
 	return dockerhub.GetLatestEditorVersion()
