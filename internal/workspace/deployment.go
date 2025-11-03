@@ -15,7 +15,7 @@ import (
 
 
 // UpdateWorkspaceDeployment updates the workspace deployment with new AOC and MQTT configuration
-func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage ...string) error {
+func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, staging bool) error {
 	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
 	metadataPath := filepath.Join(workspacePath, "metadata.yaml")
 
@@ -53,17 +53,28 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage ...string
 
 	// Get gitops image - use custom image if provided, otherwise get latest
 	var gitopsImage string
-	if len(customGitopsImage) > 0 && customGitopsImage[0] != "" {
-		gitopsImage = customGitopsImage[0]
+	if customGitopsImage != "" {
+		gitopsImage = customGitopsImage
 		fmt.Printf("Using custom gitops image: %s\n", gitopsImage)
 	} else {
 		// Get latest gitops image
-		gitopsLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops/tags/")
-		if err != nil {
-			fmt.Printf("    ⚠️  Failed to get latest gitops version, using 'latest': %v\n", err)
-			gitopsLatestVersion = "latest"
+		var gitopsLatestVersion string
+		var err error
+		if staging {
+			gitopsLatestVersion, err = dockerhub.GetLatestGitopsStagingVersion()
+			if err != nil {
+				fmt.Printf("    ⚠️  Failed to get latest gitops-staging version, using 'latest': %v\n", err)
+				gitopsLatestVersion = "latest"
+			}
+			gitopsImage = "bitswan/gitops-staging:" + gitopsLatestVersion
+		} else {
+			gitopsLatestVersion, err = dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops/tags/")
+			if err != nil {
+				fmt.Printf("    ⚠️  Failed to get latest gitops version, using 'latest': %v\n", err)
+				gitopsLatestVersion = "latest"
+			}
+			gitopsImage = "bitswan/gitops:" + gitopsLatestVersion
 		}
-		gitopsImage = "bitswan/gitops:" + gitopsLatestVersion
 	}
 
 	// Get GitOps dev source directory if set

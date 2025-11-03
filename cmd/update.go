@@ -16,6 +16,7 @@ type updateOptions struct {
 	kafkaImage      string
 	zookeeperImage  string
 	couchdbImage    string
+	staging         bool
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -42,6 +43,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.kafkaImage, "kafka-image", "", "Custom image for Kafka")
 	cmd.Flags().StringVar(&o.zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
 	cmd.Flags().StringVar(&o.couchdbImage, "couchdb-image", "", "Custom image for CouchDB")
+	cmd.Flags().BoolVar(&o.staging, "staging", false, "Use staging images for editor and gitops")
 
 	return cmd
 }
@@ -50,7 +52,7 @@ func newUpdateCmd() *cobra.Command {
 func updateServices(workspaceName string, o *updateOptions) error {
 	// Always try to update editor service if enabled
 	fmt.Println("Checking editor service...")
-	if err := updateEditorService(workspaceName, o.editorImage); err != nil {
+	if err := updateEditorService(workspaceName, o.editorImage, o.staging); err != nil {
 		fmt.Printf("Warning: failed to update editor service: %v\n", err)
 	} else {
 		fmt.Println("Editor service updated successfully!")
@@ -76,7 +78,7 @@ func updateServices(workspaceName string, o *updateOptions) error {
 }
 
 // updateEditorService updates the editor service for a specific workspace
-func updateEditorService(workspaceName, editorImage string) error {
+func updateEditorService(workspaceName, editorImage string, staging bool) error {
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
@@ -105,7 +107,7 @@ func updateEditorService(workspaceName, editorImage string) error {
 	} else {
 		// Update to latest version
 		fmt.Println("Updating Editor service to latest version...")
-		if err := editorService.UpdateToLatest(); err != nil {
+		if err := editorService.UpdateToLatestWithStaging(staging); err != nil {
 			return fmt.Errorf("failed to update to latest version: %w", err)
 		}
 	}
@@ -244,7 +246,7 @@ func updateGitops(workspaceName string, o *updateOptions) error {
 
 	// 2. Update Docker images and docker-compose file
 	fmt.Println("Updating Docker images and docker-compose file...")
-	if err := workspace.UpdateWorkspaceDeployment(workspaceName, o.gitopsImage); err != nil {
+	if err := workspace.UpdateWorkspaceDeployment(workspaceName, o.gitopsImage, o.staging); err != nil {
 		return fmt.Errorf("failed to update workspace deployment: %w", err)
 	}
 	fmt.Println("Gitops service restarted!")
