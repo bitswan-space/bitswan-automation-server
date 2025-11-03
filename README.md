@@ -52,14 +52,14 @@ curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/dow
 Move the binary to a directory in your PATH
 
 ```
-sudo mv bitswan /usr/local/bin/
+sudo mv bitswan-automation-server-<your-version> /usr/local/bin/bitswan
 ```
 
 Alternatively, if you don't have sudo access or prefer a local installation:
 
 ```
 mkdir -p ~/bin
-mv bitswan ~/bin/
+mv bitswan-automation-server-<your-version> ~/bin/
 
 #Add to PATH if using ~/bin (add this to your ~/.bashrc or ~/.zshrc)
 export PATH="$HOME/bin:$PATH"
