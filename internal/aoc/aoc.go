@@ -407,14 +407,8 @@ func (c *AOCClient) GetAOCEnvironmentVariables(workspaceId, automationServerToke
 	aocUrl := c.settings.AOCUrl
 	// Replace .localhost hostname with Docker service name for internal communication
 	if strings.Contains(aocUrl, ".localhost") {
-		// Extract the path part after the hostname
-		urlParts := strings.Split(strings.TrimPrefix(aocUrl, "http://"), "/")
-		path := ""
-		if len(urlParts) > 1 {
-			path = "/" + strings.Join(urlParts[1:], "/")
-		}
-		aocUrl = "http://aoc-bitswan-backend:8000" + path
-	}
+		aocUrl = "http://api.bitswan.localhost"
+	}	
 
 	return []string{
 		"BITSWAN_WORKSPACE_ID=" + workspaceId,
