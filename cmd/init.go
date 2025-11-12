@@ -568,6 +568,12 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Ensure oauth2-proxy binary is available
+	if err := oauth.EnsureOAuth2Proxy(bitswanConfig); err != nil {
+		fmt.Printf("Warning: Failed to download oauth2-proxy: %v\n", err)
+		fmt.Println("OAuth authentication may not work properly without oauth2-proxy")
+	}
+
 	// Init bitswan network
 	networkName := "bitswan_network"
 	exists, err := checkNetworkExists(networkName)
@@ -963,6 +969,11 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	var oauthEnvVars []string
+	if oauthConfig != nil {
+		oauthEnvVars = oauth.CreateOAuthEnvVars(oauthConfig, "gitops", workspaceName, o.domain)
+	}
+
 	config := &dockercompose.DockerComposeConfig{
 		GitopsPath:         gitopsConfig,
 		WorkspaceName:      workspaceName,
@@ -970,6 +981,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		Domain:             o.domain,
 		MqttEnvVars:        mqttEnvVars,
 		AocEnvVars:         aocEnvVars,
+		OAuthEnvVars:       oauthEnvVars,
 		GitopsDevSourceDir: o.gitopsDevSourceDir,
 		TrustCA:            o.trustCA,
 	}

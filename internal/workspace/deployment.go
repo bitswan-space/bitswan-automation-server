@@ -10,9 +10,9 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"gopkg.in/yaml.v3"
 )
-
 
 // UpdateWorkspaceDeployment updates the workspace deployment with new AOC and MQTT configuration
 func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, staging bool, trustCA []string) error {
@@ -49,6 +49,13 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 			return fmt.Errorf("failed to get automation server token: %w", err)
 		}
 		aocEnvVars = aocClient.GetAOCEnvironmentVariables(*metadata.WorkspaceId, automationServerToken)
+	}
+
+	// Create OAuth environment variables for GitOps if OAuth is configured
+	var oauthEnvVars []string
+	oauthConfig, err := oauth.GetOauthConfig(workspaceName)
+	if err == nil && oauthConfig != nil {
+		oauthEnvVars = oauth.CreateOAuthEnvVars(oauthConfig, "gitops", workspaceName, metadata.Domain)
 	}
 
 	// Get gitops image - use custom image if provided, otherwise get latest
@@ -91,6 +98,7 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 		Domain:             metadata.Domain,
 		MqttEnvVars:        mqttEnvVars,
 		AocEnvVars:         aocEnvVars,
+		OAuthEnvVars:       oauthEnvVars,
 		GitopsDevSourceDir: gitopsDevSourceDir,
 		TrustCA:            trustCA,
 	}
