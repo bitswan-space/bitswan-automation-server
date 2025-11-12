@@ -25,6 +25,7 @@ type DockerComposeConfig struct {
 	Domain             string
 	MqttEnvVars        []string
 	AocEnvVars         []string
+	OAuthEnvVars       []string
 	GitopsDevSourceDir string
 }
 
@@ -86,6 +87,14 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	// Append MQTT env variables when workspace is registered as an automation server
 	if len(config.MqttEnvVars) > 0 {
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), config.MqttEnvVars...)
+	}
+
+	// Append OAuth env variables when OAuth is configured
+	if len(config.OAuthEnvVars) > 0 {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), config.OAuthEnvVars...)
+		// Add oauth2-proxy binary path as environment variable
+		oauth2ProxyPath := os.Getenv("HOME") + "/.config/bitswan/oauth2-proxy"
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), "OAUTH2_PROXY_PATH="+oauth2ProxyPath)
 	}
 
 	// Add dev source directory volume mount and DEBUG env var if provided
