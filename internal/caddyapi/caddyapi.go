@@ -111,12 +111,31 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 }
 
 func InstallTLSCerts(workspaceName, domain string) error {
-	certsSet :=  getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
-	caddyAPITLSBaseUrl := certsSet + "/..."
+	// Initialize TLS app structure first
+	tlsAppSet := getCaddyBaseURL() + "/config/apps/tls"
+	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS app: %w", err)
+	}
+	
+	// Initialize certificates structure
+	certsSet := getCaddyBaseURL() + "/config/apps/tls/certificates"
+	if err := InitSet(certsSet, []byte(`{}`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS certificates: %w", err)
+	}
+	
+	// Initialize load_files array
+	loadFilesSet := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
+	caddyAPITLSBaseUrl := loadFilesSet + "/..."
+	if err := InitSet(loadFilesSet, []byte(`[]`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS load_files: %w", err)
+	}
+	
+	// Initialize TLS connection policies
 	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
 	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
-	InitSet(certsSet, nil)
-	InitSet(policiesSet, nil)
+	if err := InitSet(policiesSet, []byte(`[]`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS connection policies: %w", err)
+	}
 
 	// Define TLS policies and certificates
 	tlsPolicy := []TLSPolicy{
@@ -598,8 +617,31 @@ func GenerateAndInstallCertsForHostname(hostname, domain string) error {
 
 // InstallTLSCertsForHostname installs TLS certificates and policies for a specific hostname
 func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
-    caddyAPITLSBaseUrl := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files/..."
-    caddyAPITLSPoliciesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies/..."
+	// Initialize TLS app structure first
+	tlsAppSet := getCaddyBaseURL() + "/config/apps/tls"
+	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS app: %w", err)
+	}
+	
+	// Initialize certificates structure
+	certsSet := getCaddyBaseURL() + "/config/apps/tls/certificates"
+	if err := InitSet(certsSet, []byte(`{}`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS certificates: %w", err)
+	}
+	
+	// Initialize load_files array
+	loadFilesSet := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
+	caddyAPITLSBaseUrl := loadFilesSet + "/..."
+	if err := InitSet(loadFilesSet, []byte(`[]`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS load_files: %w", err)
+	}
+	
+	// Initialize TLS connection policies
+	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
+	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
+	if err := InitSet(policiesSet, []byte(`[]`)); err != nil {
+		return fmt.Errorf("failed to initialize TLS connection policies: %w", err)
+	}
 
 	// Define TLS policies and certificates for the specific hostname
 	tlsPolicy := []TLSPolicy{
