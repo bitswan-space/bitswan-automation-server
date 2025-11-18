@@ -54,7 +54,11 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 	// Create OAuth environment variables for GitOps if OAuth is configured
 	var oauthEnvVars []string
 	oauthConfig, err := oauth.GetOauthConfig(workspaceName)
-	if err == nil && oauthConfig != nil {
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Printf("    ⚠️  Failed to load OAuth config for workspace '%s': %v\n", workspaceName, err)
+		}
+	} else if oauthConfig != nil {
 		oauthEnvVars = oauth.CreateOAuthEnvVars(oauthConfig, "gitops", workspaceName, metadata.Domain)
 	}
 
