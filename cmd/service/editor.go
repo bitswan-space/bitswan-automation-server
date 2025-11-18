@@ -33,18 +33,20 @@ func NewEditorCmd() *cobra.Command {
 func newEditorEnableCmd() *cobra.Command {
 	var editorImage string
 	var oauthConfigFile string
-	
+	var trustCA []string
+
 	cmd := &cobra.Command{
 		Use:   "enable",
 		Short: "Enable and start Editor service for the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return enableEditorService(editorImage, oauthConfigFile)
+			return enableEditorService(editorImage, oauthConfigFile, trustCA)
 		},
 	}
-	
+
 	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&oauthConfigFile, "oauth-config", "", "OAuth config file")
-	
+	cmd.Flags().StringSliceVar(&trustCA, "trust-ca", []string{}, "Certificate authorities to trust. Use --trust-ca=all to trust all CAs, or --trust-ca=cert1,cert2 for specific certificates")
+
 	return cmd
 }
 
@@ -60,7 +62,7 @@ func newEditorDisableCmd() *cobra.Command {
 
 func newEditorStatusCmd() *cobra.Command {
 	var showPasswords bool
-	
+
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Check Editor service status for the workspace",
@@ -68,9 +70,9 @@ func newEditorStatusCmd() *cobra.Command {
 			return editorStatus(showPasswords)
 		},
 	}
-	
+
 	cmd.Flags().BoolVar(&showPasswords, "passwords", false, "Show Editor credentials")
-	
+
 	return cmd
 }
 
@@ -96,59 +98,61 @@ func newEditorStopCmd() *cobra.Command {
 
 func newEditorUpdateCmd() *cobra.Command {
 	var editorImage string
-	
+	var trustCA []string
+
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update Editor service with new image",
+		Short: "Update Editor service with new image and/or certificates",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return updateEditorService(editorImage)
+			return updateEditorService(editorImage, trustCA)
 		},
 	}
-	
+
 	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
-	
+	cmd.Flags().StringSliceVar(&trustCA, "trust-ca", []string{}, "Certificate authorities to trust. Use --trust-ca=all to trust all CAs, or --trust-ca=cert1,cert2 for specific certificates")
+
 	return cmd
 }
 
-func enableEditorService(editorImage, oauthConfigFile string) error {
+func enableEditorService(editorImage, oauthConfigFile string, trustCA []string) error {
 	// Get the active workspace
 	cfg := config.NewAutomationServerConfig()
 	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
-	
+
 	if workspaceName == "" {
 		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
 	}
-	
+
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
 	}
-	
+
 	// Check if already enabled
 	if editorService.IsEnabled() {
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", workspaceName)
 	}
-	
+
 	// Get metadata to retrieve gitops secret and domain
 	metadata, err := editorService.GetMetadata()
 	if err != nil {
 		return fmt.Errorf("failed to read workspace metadata. Make sure workspace is properly initialized: %w", err)
 	}
-	
+
 	gitopsSecretToken := metadata.GitopsSecret
 	domain := metadata.Domain
-	
+
 	// Use provided image or get latest from metadata
 	bitswanEditorImage := editorImage
 	if bitswanEditorImage == "" {
 		// Try to get from metadata or use default
 		bitswanEditorImage = "bitswan/bitswan-editor:latest"
 	}
-	
+
 	// Read OAuth config if provided
 	var oauthConfig *oauth.Config
 	if oauthConfigFile != "" {
@@ -159,26 +163,26 @@ func enableEditorService(editorImage, oauthConfigFile string) error {
 		}
 		fmt.Println("OAuth config read successfully!")
 	}
-	
+
 	// Enable the service
-	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig); err != nil {
+	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, trustCA); err != nil {
 		return err
 	}
-	
+
 	// Start the editor container
 	fmt.Println("Starting editor container...")
 	if err := editorService.StartContainer(); err != nil {
 		return fmt.Errorf("failed to start editor container: %w", err)
 	}
-	
+
 	// Wait for editor to be ready
 	fmt.Println("Waiting for editor to be ready...")
 	if err := editorService.WaitForEditorReady(); err != nil {
 		return fmt.Errorf("editor failed to start properly: %w", err)
 	}
-	
+
 	fmt.Println("✅ Editor service is ready!")
-	
+
 	// Show access information
 	if err := editorService.ShowAccessInfo(); err == nil {
 		// Try to get and show password
@@ -186,7 +190,7 @@ func enableEditorService(editorImage, oauthConfigFile string) error {
 			fmt.Printf("Editor Password: %s\n", password)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -197,22 +201,22 @@ func disableEditorService() error {
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
-	
+
 	if workspaceName == "" {
 		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
 	}
-	
+
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
 	}
-	
+
 	// Check if enabled
 	if !editorService.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'", workspaceName)
 	}
-	
+
 	// Disable the service
 	return editorService.Disable()
 }
@@ -224,36 +228,36 @@ func editorStatus(showPasswords bool) error {
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
-	
+
 	if workspaceName == "" {
 		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
 	}
-	
+
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
 	}
-	
+
 	// Check status
 	if editorService.IsEnabled() {
 		fmt.Printf("Editor service is ENABLED for workspace '%s'\n", workspaceName)
 		fmt.Println("Files present:")
 		fmt.Printf("  - Docker Compose: %s/deployment/docker-compose-editor.yml\n", editorService.WorkspacePath)
 		fmt.Printf("  - Config: %s/codeserver-config\n", editorService.WorkspacePath)
-		
+
 		// Check container status
 		if editorService.IsContainerRunning() {
 			fmt.Printf("Container status: RUNNING\n")
 		} else {
 			fmt.Printf("Container status: STOPPED\n")
 		}
-		
+
 		// Show access information
 		if err := editorService.ShowAccessInfo(); err != nil {
 			fmt.Printf("Warning: could not show access URLs: %v\n", err)
 		}
-		
+
 		// Show passwords if requested
 		if showPasswords {
 			if err := editorService.ShowCredentials(); err != nil {
@@ -263,7 +267,7 @@ func editorStatus(showPasswords bool) error {
 	} else {
 		fmt.Printf("Editor service is DISABLED for workspace '%s'\n", workspaceName)
 	}
-	
+
 	return nil
 }
 
@@ -274,42 +278,42 @@ func startEditorContainer() error {
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
-	
+
 	if workspaceName == "" {
 		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
 	}
-	
+
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
 	}
-	
+
 	// Check if enabled
 	if !editorService.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
 	}
-	
+
 	// Check if already running
 	if editorService.IsContainerRunning() {
 		fmt.Printf("Editor container is already running for workspace '%s'\n", workspaceName)
 		return nil
 	}
-	
+
 	// Start the container
 	fmt.Println("Starting editor container...")
 	if err := editorService.StartContainer(); err != nil {
 		return err
 	}
-	
+
 	// Wait for editor to be ready
 	fmt.Println("Waiting for editor to be ready...")
 	if err := editorService.WaitForEditorReady(); err != nil {
 		return fmt.Errorf("editor failed to start properly: %w", err)
 	}
-	
+
 	fmt.Println("✅ Editor service is ready!")
-	
+
 	// Show access information
 	if err := editorService.ShowAccessInfo(); err == nil {
 		// Try to get and show password
@@ -317,7 +321,7 @@ func startEditorContainer() error {
 			fmt.Printf("Editor Password: %s\n", password)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -328,68 +332,76 @@ func stopEditorContainer() error {
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
-	
+
 	if workspaceName == "" {
 		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
 	}
-	
+
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
 	}
-	
+
 	// Check if enabled
 	if !editorService.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'", workspaceName)
 	}
-	
+
 	// Check if running
 	if !editorService.IsContainerRunning() {
 		fmt.Printf("Editor container is not running for workspace '%s'\n", workspaceName)
 		return nil
 	}
-	
+
 	// Stop the container
 	return editorService.StopContainer()
 }
 
-func updateEditorService(editorImage string) error {
+func updateEditorService(editorImage string, trustCA []string) error {
 	// Get the active workspace
 	cfg := config.NewAutomationServerConfig()
 	workspaceName, err := cfg.GetActiveWorkspace()
 	if err != nil {
 		return fmt.Errorf("failed to get active workspace: %w", err)
 	}
-	
+
 	if workspaceName == "" {
 		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
 	}
-	
+
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
 	}
-	
+
 	// Check if enabled
 	if !editorService.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
 	}
-	
+
 	// Get metadata to verify workspace is properly initialized
 	_, err = editorService.GetMetadata()
 	if err != nil {
 		return fmt.Errorf("failed to read workspace metadata. Make sure workspace is properly initialized: %w", err)
 	}
-	
+
 	// Stop the current container
 	fmt.Println("Stopping current editor container...")
 	if err := editorService.StopContainer(); err != nil {
 		return fmt.Errorf("failed to stop current editor container: %w", err)
 	}
-	
-	// Update the service
+
+	// Update certificates if specified
+	if len(trustCA) > 0 {
+		fmt.Println("Updating certificate configuration...")
+		if err := editorService.UpdateCertificates(trustCA); err != nil {
+			return fmt.Errorf("failed to update certificates: %w", err)
+		}
+	}
+
+	// Update the service image
 	if editorImage != "" {
 		// Use provided custom image
 		fmt.Printf("Updating Editor service with custom image: %s\n", editorImage)
@@ -403,21 +415,21 @@ func updateEditorService(editorImage string) error {
 			return fmt.Errorf("failed to update to latest version: %w", err)
 		}
 	}
-	
+
 	// Start the container with new image
 	fmt.Println("Starting editor container with new image...")
 	if err := editorService.StartContainer(); err != nil {
 		return fmt.Errorf("failed to start editor container: %w", err)
 	}
-	
+
 	// Wait for editor to be ready
 	fmt.Println("Waiting for editor to be ready...")
 	if err := editorService.WaitForEditorReady(); err != nil {
 		return fmt.Errorf("editor failed to start properly: %w", err)
 	}
-	
+
 	fmt.Println("✅ Editor service updated successfully!")
-	
+
 	// Show access information
 	if err := editorService.ShowAccessInfo(); err == nil {
 		// Try to get and show password
@@ -425,8 +437,7 @@ func updateEditorService(editorImage string) error {
 			fmt.Printf("Editor Password: %s\n", password)
 		}
 	}
-	
+
 	return nil
 }
 
- 
