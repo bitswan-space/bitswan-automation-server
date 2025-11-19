@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
@@ -103,6 +104,14 @@ func (k *KafkaService) SaveSecrets(secrets *KafkaSecrets) error {
 	secretsFile := filepath.Join(secretsDir, "kafka")
 	if err := os.WriteFile(secretsFile, []byte(secretsContent.String()), 0600); err != nil {
 		return fmt.Errorf("failed to write secrets file: %w", err)
+	}
+	
+	// Change ownership to gitops user (1000:1000) on Linux
+	if runtime.GOOS == "linux" {
+		cmd := exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to change ownership of secrets file: %w\nOutput: %s", err, string(output))
+		}
 	}
 	
 	fmt.Printf("Kafka secrets saved to: %s\n", secretsFile)
