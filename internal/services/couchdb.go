@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -74,6 +75,14 @@ func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 	secretsFile := filepath.Join(secretsDir, "couchdb")
 	if err := os.WriteFile(secretsFile, []byte(secretsContent), 0600); err != nil {
 		return fmt.Errorf("failed to write secrets file: %w", err)
+	}
+	
+	// Change ownership to gitops user (1000:1000) on Linux
+	if runtime.GOOS == "linux" {
+		cmd := exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to change ownership of secrets file: %w\nOutput: %s", err, string(output))
+		}
 	}
 	
 	fmt.Printf("CouchDB secrets saved to: %s\n", secretsFile)
