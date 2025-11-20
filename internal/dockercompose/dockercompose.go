@@ -6,7 +6,6 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/certauthority"
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
 )
@@ -27,7 +26,6 @@ type DockerComposeConfig struct {
 	MqttEnvVars        []string
 	AocEnvVars         []string
 	GitopsDevSourceDir string
-	TrustCA            []string
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -94,13 +92,6 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	if config.GitopsDevSourceDir != "" {
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), config.GitopsDevSourceDir+":/src:z")
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), "DEBUG=true")
-	}
-
-	// Mount certificate authorities if specified
-	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(config.TrustCA, config.GitopsPath)
-	if len(caVolumes) > 0 {
-		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), caVolumes...)
-		gitopsService["environment"] = append(gitopsService["environment"].([]string), caEnvVars...)
 	}
 
 	// Add workspace directory mount and rewrite git path for all OS

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
-	"github.com/bitswan-space/bitswan-workspaces/internal/certauthority"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
@@ -42,7 +41,7 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 }
 
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
-func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA []string) (string, error) {
+func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string) (string, error) {
 	gitopsPath := e.WorkspacePath
 	workspaceName := e.WorkspaceName
 	sshDir := gitopsPath + "/ssh"
@@ -170,13 +169,6 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), mqttEnvVars...)
 	}
 
-	// Mount certificate authorities if specified
-	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(trustCA, gitopsPath)
-	if len(caVolumes) > 0 {
-		bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string), caVolumes...)
-		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), caEnvVars...)
-	}
-
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",
@@ -214,7 +206,7 @@ func (e *EditorService) SaveDockerCompose(content string) error {
 }
 
 // Enable enables the Editor service for the workspace
-func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, trustCA []string) error {
+func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config) error {
 	// Check if already enabled
 	if e.IsEnabled() {
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", e.WorkspaceName)
@@ -266,7 +258,7 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 	}
 
 	// Generate docker-compose content
-	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA)
+	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
@@ -561,101 +553,4 @@ func (e *EditorService) UpdateToLatestWithStaging(staging bool) error {
 // getLatestVersion gets the latest version from DockerHub
 func (e *EditorService) getLatestVersion() (string, error) {
 	return dockerhub.GetLatestEditorVersion()
-}
-
-// UpdateCertificates updates the docker-compose file with updated certificate configuration
-func (e *EditorService) UpdateCertificates(trustCA []string) error {
-	// Check if enabled
-	if !e.IsEnabled() {
-		return fmt.Errorf("Editor service is not enabled for workspace '%s'", e.WorkspaceName)
-	}
-
-	// Get certificate mount configuration
-	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(trustCA, e.WorkspacePath)
-
-	// Read the current docker-compose-editor.yml file
-	composePath := filepath.Join(e.WorkspacePath, "deployment", "docker-compose-editor.yml")
-	data, err := os.ReadFile(composePath)
-	if err != nil {
-		return fmt.Errorf("failed to read docker-compose-editor.yml: %w", err)
-	}
-
-	// Parse the YAML
-	var compose map[string]interface{}
-	if err := yaml.Unmarshal(data, &compose); err != nil {
-		return fmt.Errorf("failed to parse docker-compose-editor.yml: %w", err)
-	}
-
-	// Update volumes and environment in the bitswan-editor service
-	if services, ok := compose["services"].(map[string]interface{}); ok {
-		if editorService, ok := services["bitswan-editor"].(map[string]interface{}); ok {
-			// Update volumes - remove old CA cert volumes and add new ones
-			if volumes, ok := editorService["volumes"].([]interface{}); ok {
-				// Filter out old CA cert volumes
-				var filteredVolumes []interface{}
-				for _, vol := range volumes {
-					volStr := fmt.Sprintf("%v", vol)
-					// Keep volumes that are not CA cert related
-					if !strings.Contains(volStr, "/usr/local/share/ca-certificates/custom") &&
-						!strings.Contains(volStr, "/ca-certs") {
-						filteredVolumes = append(filteredVolumes, vol)
-					}
-				}
-				// Add new CA cert volumes
-				for _, vol := range caVolumes {
-					filteredVolumes = append(filteredVolumes, vol)
-				}
-				editorService["volumes"] = filteredVolumes
-			} else if len(caVolumes) > 0 {
-				// No volumes exist, just add the CA cert volumes
-				volumesList := make([]interface{}, len(caVolumes))
-				for i, v := range caVolumes {
-					volumesList[i] = v
-				}
-				editorService["volumes"] = volumesList
-			}
-
-			// Update environment variables - remove old CA cert env vars and add new ones
-			if envVars, ok := editorService["environment"].([]interface{}); ok {
-				// Filter out old CA cert environment variables
-				var filteredEnvVars []interface{}
-				for _, env := range envVars {
-					envStr := fmt.Sprintf("%v", env)
-					// Keep env vars that are not CA cert related
-					if !strings.Contains(envStr, "UPDATE_CA_CERTIFICATES") &&
-						!strings.Contains(envStr, "REQUESTS_CA_BUNDLE") {
-						filteredEnvVars = append(filteredEnvVars, env)
-					}
-				}
-				// Add new CA cert environment variables
-				for _, env := range caEnvVars {
-					filteredEnvVars = append(filteredEnvVars, env)
-				}
-				editorService["environment"] = filteredEnvVars
-			} else if len(caEnvVars) > 0 {
-				// No environment exists, just add the CA cert env vars
-				envList := make([]interface{}, len(caEnvVars))
-				for i, v := range caEnvVars {
-					envList[i] = v
-				}
-				editorService["environment"] = envList
-			}
-		} else {
-			return fmt.Errorf("bitswan-editor service not found in docker-compose-editor.yml")
-		}
-	} else {
-		return fmt.Errorf("services section not found in docker-compose-editor.yml")
-	}
-
-	// Write the updated file back
-	updatedData, err := yaml.Marshal(compose)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updated docker-compose: %w", err)
-	}
-
-	if err := os.WriteFile(composePath, updatedData, 0644); err != nil {
-		return fmt.Errorf("failed to write updated docker-compose-editor.yml: %w", err)
-	}
-
-	return nil
 }

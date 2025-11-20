@@ -115,12 +115,12 @@ func connectExistingWorkspacesToAOC(aocUrl, automationServerId, accessToken stri
 	// Process each workspace
 	for i, workspaceName := range workspaceNames {
 		fmt.Printf("\n🔄 Processing workspace %d/%d: %s\n", i+1, len(workspaceNames), workspaceName)
-
+		
 		if err := connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToken); err != nil {
 			fmt.Printf("❌ Failed to connect workspace '%s' to AOC: %v\n", workspaceName, err)
 			continue
 		}
-
+		
 		fmt.Printf("✅ Successfully connected workspace '%s' to AOC\n", workspaceName)
 	}
 
@@ -178,10 +178,10 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 		// Check if this is a 404 error, which means the workspace was deleted from AOC
 		if strings.Contains(err.Error(), "404 Not Found") {
 			fmt.Printf("  ⚠️  Workspace ID %s not found in AOC (404), clearing and re-registering...\n", workspaceId)
-
+			
 			// Clear the workspace ID from metadata
 			metadata.WorkspaceId = nil
-
+			
 			// Re-register the workspace with AOC
 			fmt.Printf("  🆕 Re-registering workspace '%s' with AOC...\n", workspaceName)
 			newWorkspaceId, err := aocClient.RegisterWorkspace(workspaceName, metadata.EditorURL)
@@ -190,7 +190,7 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 			}
 			workspaceId = newWorkspaceId
 			fmt.Printf("  ✅ Workspace re-registered with ID: %s\n", workspaceId)
-
+			
 			// Try to get MQTT credentials again with the new workspace ID
 			fmt.Printf("  📡 Getting MQTT credentials for re-registered workspace...\n")
 			mqttCreds, err = aocClient.GetMQTTCredentials(workspaceId)
@@ -219,13 +219,13 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 
 	fmt.Printf("  ✅ Metadata updated successfully!\n")
 
-	// Actually update the workspace deployment
+	// Actually update the workspace deployment  
 	fmt.Printf("  🔄 Updating workspace deployment with new AOC and MQTT configuration...\n")
-	if err := workspace.UpdateWorkspaceDeployment(workspaceName, "", false, []string{}); err != nil {
+	if err := workspace.UpdateWorkspaceDeployment(workspaceName, "", false); err != nil {
 		return fmt.Errorf("failed to update workspace deployment: %w", err)
 	}
 	fmt.Printf("  ✅ Workspace deployment updated and services restarted!\n")
-
+	
 	return nil
 }
 
