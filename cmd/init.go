@@ -44,7 +44,7 @@ type initOptions struct {
 	oauthConfigFile    string
 	noOauth            bool
 	sshPort            string
-	trustCA            []string
+	trustCA            bool
 }
 
 type DockerNetwork struct {
@@ -94,7 +94,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
 	cmd.Flags().BoolVar(&o.noOauth, "no-oauth", false, "Disable automatically fetching OAuth configuration from AOC")
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
-	cmd.Flags().StringSliceVar(&o.trustCA, "trust-ca", []string{}, "Certificate authorities to trust. Use --trust-ca=all to trust all CAs, or --trust-ca=cert1,cert2 for specific certificates")
+	cmd.Flags().BoolVar(&o.trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
 	return cmd
 }
 

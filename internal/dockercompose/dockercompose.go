@@ -27,7 +27,7 @@ type DockerComposeConfig struct {
 	MqttEnvVars        []string
 	AocEnvVars         []string
 	GitopsDevSourceDir string
-	TrustCA            []string
+	TrustCA            bool
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -97,7 +97,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	}
 
 	// Mount certificate authorities if specified
-	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(config.TrustCA, config.GitopsPath)
+	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(config.TrustCA)
 	if len(caVolumes) > 0 {
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), caVolumes...)
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), caEnvVars...)

@@ -221,7 +221,7 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 
 	// Actually update the workspace deployment
 	fmt.Printf("  🔄 Updating workspace deployment with new AOC and MQTT configuration...\n")
-	if err := workspace.UpdateWorkspaceDeployment(workspaceName, "", false, []string{}); err != nil {
+	if err := workspace.UpdateWorkspaceDeployment(workspaceName, "", false, false); err != nil {
 		return fmt.Errorf("failed to update workspace deployment: %w", err)
 	}
 	fmt.Printf("  ✅ Workspace deployment updated and services restarted!\n")
