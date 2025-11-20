@@ -17,7 +17,7 @@ type updateOptions struct {
 	zookeeperImage string
 	couchdbImage   string
 	staging        bool
-	trustCA        []string
+	trustCA        bool
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -45,7 +45,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
 	cmd.Flags().StringVar(&o.couchdbImage, "couchdb-image", "", "Custom image for CouchDB")
 	cmd.Flags().BoolVar(&o.staging, "staging", false, "Use staging images for editor and gitops")
-	cmd.Flags().StringSliceVar(&o.trustCA, "trust-ca", []string{}, "Certificate authorities to trust. Use --trust-ca=all to trust all CAs, or --trust-ca=cert1,cert2 for specific certificates")
+	cmd.Flags().BoolVar(&o.trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
 
 	return cmd
 }
@@ -80,7 +80,7 @@ func updateServices(workspaceName string, o *updateOptions) error {
 }
 
 // updateEditorService updates the editor service for a specific workspace
-func updateEditorService(workspaceName, editorImage string, staging bool, trustCA []string) error {
+func updateEditorService(workspaceName, editorImage string, staging bool, trustCA bool) error {
 	// Create Editor service manager
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
@@ -100,7 +100,7 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 	}
 
 	// Update certificates if specified
-	if len(trustCA) > 0 {
+	if trustCA {
 		fmt.Println("Updating certificate configuration...")
 		if err := editorService.UpdateCertificates(trustCA); err != nil {
 			return fmt.Errorf("failed to update certificates: %w", err)

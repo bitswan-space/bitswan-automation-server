@@ -15,7 +15,7 @@ import (
 )
 
 // UpdateWorkspaceDeployment updates the workspace deployment with new AOC and MQTT configuration
-func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, staging bool, trustCA []string) error {
+func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, staging bool, trustCA bool) error {
 	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
 	metadataPath := filepath.Join(workspacePath, "metadata.yaml")
 
@@ -122,7 +122,7 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 	// Restart gitops service
 	dockerComposePath := filepath.Join(workspacePath, "deployment")
 	projectName := workspaceName + "-site"
-	
+
 	commands := [][]string{
 		{"docker", "compose", "down"},
 		{"docker", "compose", "-p", projectName, "up", "-d", "--remove-orphans"},
