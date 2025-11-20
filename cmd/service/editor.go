@@ -33,7 +33,7 @@ func NewEditorCmd() *cobra.Command {
 func newEditorEnableCmd() *cobra.Command {
 	var editorImage string
 	var oauthConfigFile string
-	var trustCA []string
+	var trustCA bool
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -45,7 +45,7 @@ func newEditorEnableCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&oauthConfigFile, "oauth-config", "", "OAuth config file")
-	cmd.Flags().StringSliceVar(&trustCA, "trust-ca", []string{}, "Certificate authorities to trust. Use --trust-ca=all to trust all CAs, or --trust-ca=cert1,cert2 for specific certificates")
+	cmd.Flags().BoolVar(&trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
 
 	return cmd
 }
@@ -98,7 +98,7 @@ func newEditorStopCmd() *cobra.Command {
 
 func newEditorUpdateCmd() *cobra.Command {
 	var editorImage string
-	var trustCA []string
+	var trustCA bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -109,12 +109,12 @@ func newEditorUpdateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
-	cmd.Flags().StringSliceVar(&trustCA, "trust-ca", []string{}, "Certificate authorities to trust. Use --trust-ca=all to trust all CAs, or --trust-ca=cert1,cert2 for specific certificates")
+	cmd.Flags().BoolVar(&trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
 
 	return cmd
 }
 
-func enableEditorService(editorImage, oauthConfigFile string, trustCA []string) error {
+func enableEditorService(editorImage, oauthConfigFile string, trustCA bool) error {
 	// Get the active workspace
 	cfg := config.NewAutomationServerConfig()
 	workspaceName, err := cfg.GetActiveWorkspace()
@@ -358,7 +358,7 @@ func stopEditorContainer() error {
 	return editorService.StopContainer()
 }
 
-func updateEditorService(editorImage string, trustCA []string) error {
+func updateEditorService(editorImage string, trustCA bool) error {
 	// Get the active workspace
 	cfg := config.NewAutomationServerConfig()
 	workspaceName, err := cfg.GetActiveWorkspace()
@@ -394,7 +394,7 @@ func updateEditorService(editorImage string, trustCA []string) error {
 	}
 
 	// Update certificates if specified
-	if len(trustCA) > 0 {
+	if trustCA {
 		fmt.Println("Updating certificate configuration...")
 		if err := editorService.UpdateCertificates(trustCA); err != nil {
 			return fmt.Errorf("failed to update certificates: %w", err)
@@ -440,4 +440,3 @@ func updateEditorService(editorImage string, trustCA []string) error {
 
 	return nil
 }
-

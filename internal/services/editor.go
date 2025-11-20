@@ -42,7 +42,7 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 }
 
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
-func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA []string) (string, error) {
+func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool) (string, error) {
 	gitopsPath := e.WorkspacePath
 	workspaceName := e.WorkspaceName
 	sshDir := gitopsPath + "/ssh"
@@ -77,7 +77,7 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 	}
 
 	// Mount certificate authorities if specified
-	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(trustCA, gitopsPath)
+	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(trustCA)
 	if len(caVolumes) > 0 {
 		bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string), caVolumes...)
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), caEnvVars...)
@@ -120,7 +120,7 @@ func (e *EditorService) SaveDockerCompose(content string) error {
 }
 
 // Enable enables the Editor service for the workspace
-func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, trustCA []string) error {
+func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, trustCA bool) error {
 	// Check if already enabled
 	if e.IsEnabled() {
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", e.WorkspaceName)
@@ -470,14 +470,14 @@ func (e *EditorService) getLatestVersion() (string, error) {
 }
 
 // UpdateCertificates updates the docker-compose file with updated certificate configuration
-func (e *EditorService) UpdateCertificates(trustCA []string) error {
+func (e *EditorService) UpdateCertificates(trustCA bool) error {
 	// Check if enabled
 	if !e.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'", e.WorkspaceName)
 	}
 
 	// Get certificate mount configuration
-	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(trustCA, e.WorkspacePath)
+	caVolumes, caEnvVars := certauthority.GetCACertMountConfig(trustCA)
 
 	// Read the current docker-compose-editor.yml file
 	composePath := filepath.Join(e.WorkspacePath, "deployment", "docker-compose-editor.yml")
