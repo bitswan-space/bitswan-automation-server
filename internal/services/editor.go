@@ -157,8 +157,11 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true")
 		}
 
+		// If no allowed groups are provided, set the default allowed groups to be /admin
 		if len(oauthConfig.AllowedGroups) > 0 {
 			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_ALLOWED_GROUPS="+strings.Join(oauthConfig.AllowedGroups, ","))
+		} else{
+			oauthEnvVars = append(oauthEnvVars, "OAUTH2_PROXY_ALLOWED_GROUPS=/admin")
 		}
 
 		// Add oauth environment variables to bitswanEditor
