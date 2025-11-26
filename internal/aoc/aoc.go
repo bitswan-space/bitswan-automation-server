@@ -292,7 +292,7 @@ func (c *AOCClient) DeleteWorkspace(workspaceId string) error {
 
 // GetMQTTCredentials gets MQTT credentials for a workspace
 func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, error) {
-	url := fmt.Sprintf("%s/api/automation_server/workspaces/%s/emqx/jwt/", c.settings.AOCUrl, workspaceId)
+	url := fmt.Sprintf("%s/api/automation_server/workspaces/%s/emqx/jwt", c.settings.AOCUrl, workspaceId)
 	resp, err := c.sendRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request to %s: %w", url, err)
