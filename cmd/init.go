@@ -44,7 +44,6 @@ type initOptions struct {
 	oauthConfigFile    string
 	noOauth            bool
 	sshPort            string
-	trustCA            bool
 }
 
 type DockerNetwork struct {
@@ -94,7 +93,6 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
 	cmd.Flags().BoolVar(&o.noOauth, "no-oauth", false, "Disable automatically fetching OAuth configuration from AOC")
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
-	cmd.Flags().BoolVar(&o.trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
 	return cmd
 }
 
@@ -983,7 +981,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		AocEnvVars:         aocEnvVars,
 		OAuthEnvVars:       oauthEnvVars,
 		GitopsDevSourceDir: o.gitopsDevSourceDir,
-		TrustCA:            o.trustCA,
+		TrustCA:            true,
 	}
 	compose, token, err := config.CreateDockerComposeFile()
 
@@ -1029,7 +1027,7 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 		}
 
 		// Enable the editor service
-		if err := editorService.Enable(token, bitswanEditorImage, o.domain, oauthConfig, o.trustCA); err != nil {
+		if err := editorService.Enable(token, bitswanEditorImage, o.domain, oauthConfig, true); err != nil {
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
 
