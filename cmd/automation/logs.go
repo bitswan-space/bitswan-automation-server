@@ -1,21 +1,12 @@
 package automation
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"net/http"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/ansi"
-	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemonapi"
 	"github.com/spf13/cobra"
 )
-
-type AutomationLog struct {
-	Status string   `json:"status"`
-	Logs   []string `json:"logs"`
-}
 
 func newLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -25,73 +16,26 @@ func newLogsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := config.NewAutomationServerConfig()
 			workspaceName, err := cfg.GetActiveWorkspace()
-			automationDeploymentId := args[0]
 			if err != nil {
-				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
+				return err
 			}
-
+			automationDeploymentId := args[0]
+			
 			lines, err := cmd.Flags().GetInt("lines")
 			if err != nil {
-				return fmt.Errorf("failed to parse lines flag: %v", err)
+				return err
 			}
-
-			err = getLogsFromAutomation(workspaceName, automationDeploymentId, lines)
-			if err != nil {
-				return fmt.Errorf("failed to get logs from an automation: %v", err)
+			
+			argsList := []string{"logs", automationDeploymentId}
+			if lines > 0 {
+				argsList = append(argsList, "--lines", fmt.Sprintf("%d", lines))
 			}
-			return nil
+			
+			return daemonapi.ExecuteViaDockerExec("automation", argsList, workspaceName)
 		},
 	}
 
 	cmd.Flags().IntP("lines", "l", 0, "Number of log lines to show (default 0 for all logs)")
 
 	return cmd
-}
-
-func getLogsFromAutomation(workspaceName string, automationDeploymentId string, lines int) error {
-	metadata, err := config.GetWorkspaceMetadata(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to get workspace metadata: %w", err)
-	}
-
-	fmt.Println("Fetching automations logs...")
-
-	// Create a new GET request
-	url := fmt.Sprintf("%s/automations/%s/logs", metadata.GitopsURL, automationDeploymentId)
-	if lines > 0 {
-		url += fmt.Sprintf("?lines=%d", lines)
-	}
-	resp, err := automations.SendAutomationRequest("GET", url, metadata.GitopsSecret)
-	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get logs from automation: %s", resp.Status)
-	}
-
-	var automationLog AutomationLog
-	body, _ := ioutil.ReadAll(resp.Body)
-	err = json.Unmarshal([]byte(body), &automationLog)
-	if err != nil {
-		return fmt.Errorf("error decoding JSON: %w", err)
-	}
-
-	fmt.Printf("Automation %s logs fetched successfully.\n", automationDeploymentId)
-	fmt.Println("=========================================")
-	if automationLog.Status != "success" {
-		fmt.Printf("Status: %s\n", ansi.RedCheck)
-		fmt.Println("No logs available => check name of the automation or if it is running")
-		return nil
-	} else {
-		fmt.Printf("Status: %s\n", ansi.GreenCheck)
-	}
-	fmt.Println("Logs:")
-	for _, log := range automationLog.Logs {
-		fmt.Printf("  %s\n", log)
-	}
-
-	return nil
 }

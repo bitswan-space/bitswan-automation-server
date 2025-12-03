@@ -29,6 +29,7 @@ type DockerComposeConfig struct {
 	OAuthEnvVars       []string
 	GitopsDevSourceDir string
 	TrustCA            bool
+	WorkspaceToken     string // Token for gitops container to use daemon API
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -79,6 +80,12 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 		},
+	}
+	
+	// Add workspace token if provided
+	if config.WorkspaceToken != "" {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), "BITSWAN_WORKSPACE_TOKEN="+config.WorkspaceToken)
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), "BITSWAN_DAEMON_API_URL=http://bitswan-automation-server-daemon:8080")
 	}
 
 	// Append AOC env variables when workspace is registered as an automation server

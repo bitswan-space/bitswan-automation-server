@@ -10,6 +10,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/cmd/automation"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/caddy"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/certauthority"
+	"github.com/bitswan-space/bitswan-workspaces/cmd/daemon"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/spf13/cobra"
@@ -30,6 +31,7 @@ func newRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(ingress.NewIngressCmd())             // ingress subcommand
 	cmd.AddCommand(caddy.NewCaddyCmd())                 // caddy subcommand (deprecated)
 	cmd.AddCommand(certauthority.NewCertAuthorityCmd()) // certificate authority subcommand
+	cmd.AddCommand(daemon.NewDaemonCmd())               // automation-server-daemon subcommand
 
 	// Check if the configuration file exists and has an active workspace
 	cfg := config.NewAutomationServerConfig()

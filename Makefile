@@ -52,3 +52,10 @@ lint: ## lint go files
 pre-commit:	## run pre-commit hooks
 	pre-commit run --all-files
 
+.PHONY: swagger
+swagger: ## generate swagger documentation
+	@echo "Generating Swagger documentation..."
+	@swag init -g internal/daemonapi/main.go -o internal/daemonapi/docs --parseDependency --parseInternal
+	@echo "Swagger documentation generated in internal/daemonapi/docs/"
+	@echo "Access Swagger UI at http://localhost:8080/swagger/index.html when the daemon is running"
+

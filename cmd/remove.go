@@ -13,6 +13,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -31,20 +32,23 @@ const (
 )
 
 func newRemoveCmd() *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:          "remove <workspace-name>",
 		Short:        "bitswan workspace remove",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workspaceName := args[0]
-			err := removeGitops(workspaceName)
+			err := removeGitops(workspaceName, yes)
 			if err != nil {
 				return fmt.Errorf("error removing gitops: %w", err)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "Skip confirmation prompts and force removal")
+	return cmd
 }
 
 func checkContainerExists(imageName string) (bool, error) {
@@ -125,25 +129,24 @@ func deleteHostsEntry(workspaceName string) error {
 
 	// Write the updated content back to /etc/hosts
 	output := strings.Join(outputLines, "\n")
-	cmd := exec.Command("sudo", "tee", hostsFilePath)
+	cmd := util.BuildSudoCommand("tee", hostsFilePath)
 	cmd.Stdin = strings.NewReader(output)
 	cmd.Stdout = nil
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Printf(yellow+"failed to write to /etc/hosts with sudo: %v\n"+reset, err)
+		fmt.Printf(yellow+"failed to write to /etc/hosts: %v\n"+reset, err)
 		return nil
 	}
 	return nil
 }
 
-func removeGitops(workspaceName string) error {
+func removeGitops(workspaceName string, skipConfirm bool) error {
 	bitswanPath := os.Getenv("HOME") + "/.config/bitswan/"
 
-	// 1. Ask user for confirmation
-	var confirm string
-
-	fmt.Println("Automations in this gitops will be removed and cannot be recovered.")
-
+	// 1. Ask user for confirmation (unless --yes flag is set)
+	if !skipConfirm {
+		fmt.Println("Automations in this gitops will be removed and cannot be recovered.")
+	}
 
 	// Parse the response
 	automationSet, err := automations.GetListAutomations(workspaceName)
@@ -152,12 +155,16 @@ func removeGitops(workspaceName string) error {
 		// Check if this is a WorkspaceMisbehavingError
 		var misbehavingErr *automations.WorkspaceMisbehavingError
 		if errors.As(err, &misbehavingErr) {
-			fmt.Printf("This workspace seems to be misbehaving. Cannot detect which automations are running within it. Would you like to stop it anyway with the risk of leaving some orphaned automations running? [y/N]: ")
-			var continueAnyway string
-			fmt.Scanln(&continueAnyway)
-			if continueAnyway != "y" && continueAnyway != "yes" {
-				fmt.Println("Remove cancelled.")
-				return nil
+			if !skipConfirm {
+				fmt.Printf("This workspace seems to be misbehaving. Cannot detect which automations are running within it. Would you like to stop it anyway with the risk of leaving some orphaned automations running? [y/N]: ")
+				var continueAnyway string
+				fmt.Scanln(&continueAnyway)
+				if continueAnyway != "y" && continueAnyway != "yes" {
+					fmt.Println("Remove cancelled.")
+					return nil
+				}
+			} else {
+				fmt.Println("Warning: Workspace seems to be misbehaving. Continuing with removal anyway (--yes flag set).")
 			}
 			skipAutomationRemoval = true
 			automationSet = nil // Clear the set since we couldn't fetch it
@@ -170,11 +177,14 @@ func removeGitops(workspaceName string) error {
 		}
 	}
 
-	fmt.Printf("Are you sure you want to remove %s? (yes/no): \n", workspaceName)
-	fmt.Scanln(&confirm)
-	if confirm != "yes" {
-		fmt.Println("Remove cancelled.")
-		return nil
+	if !skipConfirm {
+		var confirm string
+		fmt.Printf("Are you sure you want to remove %s? (yes/no): \n", workspaceName)
+		fmt.Scanln(&confirm)
+		if confirm != "yes" {
+			fmt.Println("Remove cancelled.")
+			return nil
+		}
 	}
 
 	// 2. Remove the automations from the server

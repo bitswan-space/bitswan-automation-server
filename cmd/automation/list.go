@@ -1,12 +1,10 @@
 package automation
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemonapi"
 )
 
 func newListCmd() *cobra.Command {
@@ -18,17 +16,11 @@ func newListCmd() *cobra.Command {
 			cfg := config.NewAutomationServerConfig()
 			workspaceName, err := cfg.GetActiveWorkspace()
 			if err != nil {
-				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
+				return err
 			}
-			_, err = automations.GetListAutomations(workspaceName)
-			if err != nil {
-				return fmt.Errorf("failed to list automations: %v", err)
-			}
-			return nil
+			return daemonapi.ExecuteViaDockerExec("automation", []string{"list"}, workspaceName)
 		},
 	}
-
-	// Add subcommands to workspace
 
 	return cmd
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 	"github.com/dchest/uniuri"
 	"gopkg.in/yaml.v3"
 )
@@ -108,7 +109,7 @@ func (k *KafkaService) SaveSecrets(secrets *KafkaSecrets) error {
 	
 	// Change ownership to gitops user (1000:1000) on Linux
 	if runtime.GOOS == "linux" {
-		cmd := exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		cmd := util.BuildSudoCommand("chown", "1000:1000", secretsFile)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to change ownership of secrets file: %w\nOutput: %s", err, string(output))
 		}

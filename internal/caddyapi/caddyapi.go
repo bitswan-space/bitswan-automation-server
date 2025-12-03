@@ -2,13 +2,16 @@ package caddyapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -112,10 +115,14 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 
 func InstallTLSCerts(workspaceName, domain string) error {
 	// Initialize TLS app structure first
-	tlsAppSet := getCaddyBaseURL() + "/config/apps/tls"
+	caddyURL := getCaddyBaseURL()
+	fmt.Printf("Connecting to Caddy at: %s\n", caddyURL)
+	tlsAppSet := caddyURL + "/config/apps/tls"
+	fmt.Printf("Initializing TLS app at: %s\n", tlsAppSet)
 	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS app: %w", err)
 	}
+	fmt.Printf("TLS app initialized successfully\n")
 	
 	// Initialize certificates structure
 	certsSet := getCaddyBaseURL() + "/config/apps/tls/certificates"
@@ -152,11 +159,28 @@ func InstallTLSCerts(workspaceName, domain string) error {
 		},
 	}
 
+	// Verify certificate files exist before telling Caddy to load them
+	// Certificates are mounted at /tls in Caddy container, but we need to check on the host
+	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+	caddyCertsDir := caddyConfig + "/certs"
+	sanitizedDomain := sanitizeHostname(domain)
+	certsDir := caddyCertsDir + "/" + sanitizedDomain
+	certPath := certsDir + "/full-chain.pem"
+	keyPath := certsDir + "/private-key.pem"
+	
+	if _, err := os.Stat(certPath); os.IsNotExist(err) {
+		return fmt.Errorf("certificate file does not exist at %s (expected after InstallCertsFromDir)", certPath)
+	}
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		return fmt.Errorf("key file does not exist at %s (expected after InstallCertsFromDir)", keyPath)
+	}
+	fmt.Printf("Certificate files verified: %s and %s exist\n", certPath, keyPath)
+
 	tlsLoad := []TLSFileLoad{
 		{
 			ID:          fmt.Sprintf("%s_tlscerts", workspaceName),
-			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(domain)),
-			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(domain)),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizedDomain),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizedDomain),
 			Tags:        []string{workspaceName},
 		},
 	}
@@ -167,10 +191,12 @@ func InstallTLSCerts(workspaceName, domain string) error {
 		return fmt.Errorf("failed to marshal TLS certificates payload: %w", err)
 	}
 
+	fmt.Printf("Sending TLS certificates payload: %s\n", string(jsonPayload))
 	_, err = sendRequest("POST", caddyAPITLSBaseUrl, jsonPayload)
 	if err != nil {
 		return fmt.Errorf("failed to add TLS certificates to Caddy: %w", err)
 	}
+	fmt.Printf("TLS certificates POST request completed successfully\n")
 
 	// Send TLS policies to Caddy
 	jsonPayload, err = json.Marshal(tlsPolicy)
@@ -386,20 +412,100 @@ func ListRoutes() ([]Route, error) {
 }
 
 func sendRequest(method, url string, payload []byte) ([]byte, error) {
-	client := &http.Client{}
+	fmt.Printf("Sending %s request to: %s\n", method, url)
+	if len(payload) > 0 {
+		fmt.Printf("Request payload size: %d bytes\n", len(payload))
+	}
+	
+	// Use a shorter timeout for the context to ensure we cancel quickly
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to call Caddy API: %w", err)
+	// Create a transport with aggressive timeouts including read/write timeouts
+	transport := &http.Transport{
+		ResponseHeaderTimeout: 10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       10 * time.Second,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{
+				Timeout:   5 * time.Second,
+				KeepAlive: 5 * time.Second,
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
 	}
-	defer resp.Body.Close()
+	
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
+	}
+
+	// Use a channel to detect if the request completes or times out
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	resultChan := make(chan result, 1)
+	
+	startTime := time.Now()
+	var resp *http.Response
+	
+	// Start a goroutine to log timeout progress
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				elapsed := time.Since(startTime)
+				if elapsed < 10*time.Second {
+					fmt.Printf("Still waiting for Caddy response... (elapsed: %v)\n", elapsed)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	
+	go func() {
+		respResult, err := client.Do(req)
+		select {
+		case resultChan <- result{resp: respResult, err: err}:
+		case <-ctx.Done():
+			// Context was canceled, close response if we got one
+			if respResult != nil {
+				respResult.Body.Close()
+			}
+		}
+	}()
+	
+	// Wait for either the request to complete or the context to timeout
+	select {
+	case res := <-resultChan:
+		duration := time.Since(startTime)
+		if res.err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return nil, fmt.Errorf("Failed to call Caddy API: timeout after 10 seconds connecting to %s (took %v)", url, duration)
+			}
+			return nil, fmt.Errorf("Failed to call Caddy API: %w (took %v)", res.err, duration)
+		}
+		fmt.Printf("Received response from Caddy: %d (took %v)\n", res.resp.StatusCode, duration)
+		resp = res.resp
+		defer resp.Body.Close()
+	case <-ctx.Done():
+		duration := time.Since(startTime)
+		// Cancel the request explicitly
+		cancel()
+		fmt.Printf("Context timeout triggered after %v\n", duration)
+		return nil, fmt.Errorf("Failed to call Caddy API: context timeout after 10 seconds for %s (took %v)", url, duration)
+	}
 
 	if method == http.MethodDelete && (resp.StatusCode < 200 || resp.StatusCode >= 300) && resp.StatusCode != 404 {
 		// Read the response body to get detailed error information

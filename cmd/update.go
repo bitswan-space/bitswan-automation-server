@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/commands"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/bitswan-space/bitswan-workspaces/internal/workspace"
 	"github.com/spf13/cobra"
@@ -243,10 +243,9 @@ func updateCouchDBService(workspaceName, couchdbImage string) error {
 func updateGitops(workspaceName string, o *updateOptions) error {
 	bitswanPath := os.Getenv("HOME") + "/.config/bitswan/"
 
-	repoPath := filepath.Join(bitswanPath, "bitswan-src")
 	// 1. Create or update examples directory
 	fmt.Println("Ensuring examples are up to date...")
-	err := EnsureExamples(repoPath, true)
+	err := commands.EnsureExamples(bitswanPath, true)
 	if err != nil {
 		return fmt.Errorf("failed to download examples: %w", err)
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemonapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
@@ -94,6 +95,35 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 		gitopsDevSourceDir = *metadata.GitopsDevSourceDir
 	}
 
+	// Get or create workspace token for gitops container
+	var workspaceToken string
+	bitswanConfig := filepath.Join(os.Getenv("HOME"), ".config", "bitswan")
+	tokenManager, err := daemonapi.NewTokenManager(bitswanConfig)
+	if err == nil {
+		// Try to find existing token for this workspace
+		allTokens := tokenManager.ListTokens()
+		foundToken := false
+		for tokenValue, token := range allTokens {
+			if token.Type == daemonapi.TokenTypeWorkspace && token.Workspace == workspaceName {
+				workspaceToken = tokenValue
+				foundToken = true
+				break
+			}
+		}
+		
+		// If no token exists, create a new one
+		if !foundToken {
+			workspaceToken, err = tokenManager.CreateWorkspaceToken(workspaceName, fmt.Sprintf("GitOps token for workspace %s", workspaceName))
+			if err != nil {
+				fmt.Printf("Warning: Failed to create workspace token: %v\n", err)
+			} else {
+				fmt.Printf("Generated workspace token for GitOps container\n")
+			}
+		}
+	} else {
+		fmt.Printf("Warning: Failed to initialize token manager: %v\n", err)
+	}
+
 	// Create docker-compose configuration
 	config := &dockercompose.DockerComposeConfig{
 		GitopsPath:         workspacePath,
@@ -105,6 +135,7 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 		OAuthEnvVars:       oauthEnvVars,
 		GitopsDevSourceDir: gitopsDevSourceDir,
 		TrustCA:            trustCA,
+		WorkspaceToken:     workspaceToken,
 	}
 
 	// Use existing gitops secret

@@ -17,6 +17,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -138,15 +139,15 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 
 	if hostOsTmp == "linux" {
 		// Change ownership for Linux
-		chownCom := exec.Command("sudo", "chown", "-R", "1000:1000", secretsDir)
+		chownCom := util.BuildSudoCommand("chown", "-R", "1000:1000", secretsDir)
 		if err := e.runCommand(chownCom); err != nil {
 			return fmt.Errorf("failed to change ownership of secrets folder: %w", err)
 		}
-		chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", codeserverConfigDir)
+		chownCom = util.BuildSudoCommand("chown", "-R", "1000:1000", codeserverConfigDir)
 		if err := e.runCommand(chownCom); err != nil {
 			return fmt.Errorf("failed to change ownership of codeserver config folder: %w", err)
 		}
-		chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", gitopsWorkspace)
+		chownCom = util.BuildSudoCommand("chown", "-R", "1000:1000", gitopsWorkspace)
 		if err := e.runCommand(chownCom); err != nil {
 			return fmt.Errorf("failed to change ownership of workspace folder: %w", err)
 		}
@@ -388,7 +389,6 @@ func (e *EditorService) GetMetadata() (*config.WorkspaceMetadata, error) {
 	return &metadata, nil
 }
 
-// runCommand executes a command with error handling
 func (e *EditorService) runCommand(cmd *exec.Cmd) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {

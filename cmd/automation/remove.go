@@ -1,10 +1,8 @@
 package automation
 
 import (
-	"fmt"
-
-	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemonapi"
 	"github.com/spf13/cobra"
 )
 
@@ -16,26 +14,11 @@ func newRemoveCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := config.NewAutomationServerConfig()
 			workspaceName, err := cfg.GetActiveWorkspace()
+			if err != nil {
+				return err
+			}
 			automationDeploymentId := args[0]
-			if err != nil {
-				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
-			}
-
-			// Create an Automation instance
-			automation := automations.Automation{
-				DeploymentID: automationDeploymentId,
-				Workspace:    workspaceName,
-			}
-
-			// Print a message indicating the removal process
-			fmt.Printf("Removing automation %s...\n", automationDeploymentId)
-
-			// Call the Remove method on the Automation instance
-			err = automation.Remove()
-			if err != nil {
-				return fmt.Errorf("failed to remove automation: %v", err)
-			}
-			return nil
+			return daemonapi.ExecuteViaDockerExec("automation", []string{"remove", automationDeploymentId}, workspaceName)
 		},
 	}
 

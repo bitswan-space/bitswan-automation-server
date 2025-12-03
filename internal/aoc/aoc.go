@@ -328,6 +328,64 @@ func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, er
 	}, nil
 }
 
+// GetAutomationServerMQTTCredentials gets MQTT credentials for the automation server itself
+func (c *AOCClient) GetAutomationServerMQTTCredentials() (*MQTTCredentials, error) {
+	url := fmt.Sprintf("%s/api/automation_server/emqx/jwt", c.settings.AOCUrl)
+	resp, err := c.sendRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request to %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get EMQX JWT from %s: %s - %s", url, resp.Status, string(body))
+	}
+
+	var emqxResponse EmqxGetResponse
+	body, _ := io.ReadAll(resp.Body)
+	err = json.Unmarshal([]byte(body), &emqxResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %w", err)
+	}
+
+	// Parse MQTT URL (format: "host:port" or "protocol://host:port")
+	mqttUrl := emqxResponse.Url
+	// Remove protocol prefix if present
+	if strings.Contains(mqttUrl, "://") {
+		parts := strings.Split(mqttUrl, "://")
+		if len(parts) > 1 {
+			mqttUrl = parts[1]
+		}
+	}
+	
+	urlParts := strings.Split(mqttUrl, ":")
+	if len(urlParts) < 2 {
+		return nil, fmt.Errorf("invalid MQTT URL format: %s", emqxResponse.Url)
+	}
+	
+	emqxUrl := urlParts[0]
+	emqxPort := urlParts[1]
+	emqxPortInt, err := strconv.Atoi(emqxPort)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse MQTT port: %w", err)
+	}
+	
+	// Convert WebSocket ports to standard MQTT port if needed
+	// Port 8084 is WebSocket, 1883 is standard MQTT
+	if emqxPortInt == 8084 || emqxPortInt == 8083 {
+		emqxPortInt = 1883
+	}
+
+	return &MQTTCredentials{
+		Username: c.settings.AutomationServerId, // Use automation server ID as username
+		Password: emqxResponse.Token,
+		Broker:   emqxUrl,
+		Port:     emqxPortInt,
+		Topic:    "workspace/init", // Daemon subscribes to workspace topics
+	}, nil
+}
+
 // KeycloakClientSecretResponse represents the Keycloak client secret response
 type KeycloakClientSecretResponse struct {
 	ClientID     string `json:"client_id"`
@@ -439,27 +497,12 @@ func (c *AOCClient) SaveConfig() error {
 	return c.config.UpdateAutomationServer(*c.settings)
 }
 
-// createHTTPClient creates an HTTP client that trusts mkcert certificates
+// createHTTPClient creates an HTTP client that trusts mkcert certificates and certificates from certauthorities directory
 func createHTTPClient() (*http.Client, error) {
 	// Get the user's home directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user home directory: %w", err)
-	}
-
-	// Path to mkcert root CA
-	mkcertPath := filepath.Join(homeDir, ".local", "share", "mkcert", "rootCA.pem")
-
-	// Check if mkcert root CA exists
-	if _, err := os.Stat(mkcertPath); os.IsNotExist(err) {
-		// If mkcert CA doesn't exist, use default client
-		return &http.Client{}, nil
-	}
-
-	// Read the mkcert root CA certificate
-	caCert, err := os.ReadFile(mkcertPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read mkcert root CA: %w", err)
 	}
 
 	// Create a certificate pool that includes system certificates
@@ -469,12 +512,44 @@ func createHTTPClient() (*http.Client, error) {
 		caCertPool = x509.NewCertPool()
 	}
 
-	// Add the mkcert root CA to the pool
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse mkcert root CA")
+	certsLoaded := false
+
+	// First, try to load certificates from certauthorities directory
+	certAuthDir := filepath.Join(homeDir, ".config", "bitswan", "certauthorities")
+	if entries, err := os.ReadDir(certAuthDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".pem") && !strings.HasSuffix(name, ".crt") {
+				continue
+			}
+			certPath := filepath.Join(certAuthDir, name)
+			caCert, err := os.ReadFile(certPath)
+			if err != nil {
+				continue
+			}
+			if caCertPool.AppendCertsFromPEM(caCert) {
+				certsLoaded = true
+			}
+		}
 	}
 
-	// Create TLS configuration that trusts the mkcert CA
+	// Also check for mkcert root CA as a fallback
+	mkcertPath := filepath.Join(homeDir, ".local", "share", "mkcert", "rootCA.pem")
+	if caCert, err := os.ReadFile(mkcertPath); err == nil {
+		if caCertPool.AppendCertsFromPEM(caCert) {
+			certsLoaded = true
+		}
+	}
+
+	// If no custom certificates were loaded, use default client
+	if !certsLoaded {
+		return &http.Client{}, nil
+	}
+
+	// Create TLS configuration that trusts the custom CAs
 	tlsConfig := &tls.Config{
 		RootCAs: caCertPool,
 	}
