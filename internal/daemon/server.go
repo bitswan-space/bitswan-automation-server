@@ -132,6 +132,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/ingress", s.authMiddleware(s.handleIngress))
 	mux.HandleFunc("/ingress/", s.authMiddleware(s.handleIngress))
 
+	// Service endpoints (authenticated)
+	mux.HandleFunc("/service", s.authMiddleware(s.handleService))
+	mux.HandleFunc("/service/", s.authMiddleware(s.handleService))
+
 	// Docs endpoint (unauthenticated - public access)
 	mux.HandleFunc("/api-docs", s.handleDocs)
 

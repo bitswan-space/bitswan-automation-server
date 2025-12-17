@@ -2,9 +2,10 @@ package service
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
-	"github.com/bitswan-space/bitswan-workspaces/internal/services"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -30,326 +31,266 @@ func NewKafkaCmd() *cobra.Command {
 }
 
 func newKafkaEnableCmd() *cobra.Command {
-	return &cobra.Command{
+	var workspace string
+
+	cmd := &cobra.Command{
 		Use:   "enable",
 		Short: "Enable Kafka service for the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return enableKafkaService()
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			result, err := client.EnableService("kafka", workspace, make(map[string]interface{}))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
+			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
+	return cmd
 }
 
 func newKafkaDisableCmd() *cobra.Command {
-	return &cobra.Command{
+	var workspace string
+
+	cmd := &cobra.Command{
 		Use:   "disable",
 		Short: "Disable Kafka service for the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return disableKafkaService()
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			result, err := client.DisableService("kafka", workspace)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
+			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
+	return cmd
 }
 
 func newKafkaStatusCmd() *cobra.Command {
 	var showPasswords bool
-	
+	var workspace string
+
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Check Kafka service status for the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return kafkaStatus(showPasswords)
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			result, err := client.GetServiceStatus("kafka", workspace, showPasswords)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			if statusData, ok := result.Data.(map[string]interface{}); ok {
+				if enabled, ok := statusData["enabled"].(bool); ok {
+					if enabled {
+						fmt.Printf("Kafka service is ENABLED for workspace '%s'\n", workspace)
+						if running, ok := statusData["running"].(bool); ok {
+							if running {
+								fmt.Println("Container status: RUNNING")
+							} else {
+								fmt.Println("Container status: STOPPED")
+							}
+						}
+					} else {
+						fmt.Printf("Kafka service is DISABLED for workspace '%s'\n", workspace)
+					}
+				}
+			}
+
+			return nil
 		},
 	}
-	
+
 	cmd.Flags().BoolVar(&showPasswords, "passwords", false, "Show Kafka credentials")
-	
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
 	return cmd
 }
 
 func newKafkaStartCmd() *cobra.Command {
-	return &cobra.Command{
+	var workspace string
+
+	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start Kafka containers for the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return startKafkaContainer()
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			result, err := client.StartService("kafka", workspace)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
+			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
+	return cmd
 }
 
 func newKafkaStopCmd() *cobra.Command {
-	return &cobra.Command{
+	var workspace string
+
+	cmd := &cobra.Command{
 		Use:   "stop",
 		Short: "Stop Kafka containers for the workspace",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return stopKafkaContainer()
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			result, err := client.StopService("kafka", workspace)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
+			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
+	return cmd
 }
 
 func newKafkaUpdateCmd() *cobra.Command {
 	var kafkaImage string
 	var zookeeperImage string
-	
+	var workspace string
+
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update Kafka service with new images",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return updateKafkaService(kafkaImage, zookeeperImage)
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			options := make(map[string]interface{})
+			if kafkaImage != "" {
+				options["kafka_image"] = kafkaImage
+			}
+			if zookeeperImage != "" {
+				options["zookeeper_image"] = zookeeperImage
+			}
+
+			result, err := client.UpdateService("kafka", workspace, options)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
+			return nil
 		},
 	}
-	
+
 	cmd.Flags().StringVar(&kafkaImage, "kafka-image", "", "Custom image for Kafka")
 	cmd.Flags().StringVar(&zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
-	
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
 	return cmd
 }
 
-func enableKafkaService() error {
-	// Get the active workspace
-	cfg := config.NewAutomationServerConfig()
-	workspaceName, err := cfg.GetActiveWorkspace()
-	if err != nil {
-		return fmt.Errorf("failed to get active workspace: %w", err)
-	}
-	
-	if workspaceName == "" {
-		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
-	}
-	
-	// Create Kafka service manager
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
-	}
-	
-	// Check if already enabled
-	if kafkaService.IsEnabled() {
-		return fmt.Errorf("Kafka service is already enabled for workspace '%s'", workspaceName)
-	}
-	
-	// Enable the service
-	return kafkaService.Enable()
-}
-
-func disableKafkaService() error {
-	// Get the active workspace
-	cfg := config.NewAutomationServerConfig()
-	workspaceName, err := cfg.GetActiveWorkspace()
-	if err != nil {
-		return fmt.Errorf("failed to get active workspace: %w", err)
-	}
-	
-	if workspaceName == "" {
-		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
-	}
-	
-	// Create Kafka service manager
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
-	}
-	
-	// Check if enabled
-	if !kafkaService.IsEnabled() {
-		return fmt.Errorf("Kafka service is not enabled for workspace '%s'", workspaceName)
-	}
-	
-	// Disable the service
-	return kafkaService.Disable()
-}
-
-func kafkaStatus(showPasswords bool) error {
-	// Get the active workspace
-	cfg := config.NewAutomationServerConfig()
-	workspaceName, err := cfg.GetActiveWorkspace()
-	if err != nil {
-		return fmt.Errorf("failed to get active workspace: %w", err)
-	}
-	
-	if workspaceName == "" {
-		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
-	}
-	
-	// Create Kafka service manager
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
-	}
-	
-	// Check status
-	if kafkaService.IsEnabled() {
-		fmt.Printf("Kafka service is ENABLED for workspace '%s'\n", workspaceName)
-		fmt.Println("Files present:")
-		fmt.Printf("  - Secrets: %s/secrets/kafka\n", kafkaService.WorkspacePath)
-		fmt.Printf("  - Docker Compose: %s/deployment/docker-compose-kafka.yml\n", kafkaService.WorkspacePath)
-		fmt.Printf("  - JAAS Config: %s/deployment/kafka_server_jaas.conf\n", kafkaService.WorkspacePath)
-		
-		// Check container status
-		if kafkaService.IsContainerRunning() {
-			fmt.Printf("Container status: RUNNING\n")
-		} else {
-			fmt.Printf("Container status: STOPPED\n")
-		}
-		
-		// Show access information
-		if err := kafkaService.ShowAccessInfo(); err != nil {
-			fmt.Printf("Warning: could not show access URLs: %v\n", err)
-		}
-		
-		// Show passwords if requested
-		if showPasswords {
-			if err := kafkaService.ShowCredentials(); err != nil {
-				fmt.Printf("Warning: could not show credentials: %v\n", err)
-			}
-		}
-	} else {
-		fmt.Printf("Kafka service is DISABLED for workspace '%s'\n", workspaceName)
-	}
-	
-	return nil
-}
-
-func startKafkaContainer() error {
-	// Get the active workspace
-	cfg := config.NewAutomationServerConfig()
-	workspaceName, err := cfg.GetActiveWorkspace()
-	if err != nil {
-		return fmt.Errorf("failed to get active workspace: %w", err)
-	}
-	
-	if workspaceName == "" {
-		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
-	}
-	
-	// Create Kafka service manager
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
-	}
-	
-	// Check if enabled
-	if !kafkaService.IsEnabled() {
-		return fmt.Errorf("Kafka service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
-	}
-	
-	// Check if already running
-	if kafkaService.IsContainerRunning() {
-		fmt.Printf("Kafka containers are already running for workspace '%s'\n", workspaceName)
-		return nil
-	}
-	
-	// Start the containers
-	return kafkaService.StartContainer()
-}
-
-func stopKafkaContainer() error {
-	// Get the active workspace
-	cfg := config.NewAutomationServerConfig()
-	workspaceName, err := cfg.GetActiveWorkspace()
-	if err != nil {
-		return fmt.Errorf("failed to get active workspace: %w", err)
-	}
-	
-	if workspaceName == "" {
-		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
-	}
-	
-	// Create Kafka service manager
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
-	}
-	
-	// Check if enabled
-	if !kafkaService.IsEnabled() {
-		return fmt.Errorf("Kafka service is not enabled for workspace '%s'", workspaceName)
-	}
-	
-	// Check if running
-	if !kafkaService.IsContainerRunning() {
-		fmt.Printf("Kafka containers are not running for workspace '%s'\n", workspaceName)
-		return nil
-	}
-	
-	// Stop the containers
-	return kafkaService.StopContainer()
-}
-
-func updateKafkaService(kafkaImage, zookeeperImage string) error {
-	// Get the active workspace
-	cfg := config.NewAutomationServerConfig()
-	workspaceName, err := cfg.GetActiveWorkspace()
-	if err != nil {
-		return fmt.Errorf("failed to get active workspace: %w", err)
-	}
-	
-	if workspaceName == "" {
-		return fmt.Errorf("no active workspace selected. Use 'bitswan workspace select <workspace>' first")
-	}
-	
-	// Create Kafka service manager
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
-	}
-	
-	// Check if enabled
-	if !kafkaService.IsEnabled() {
-		return fmt.Errorf("Kafka service is not enabled for workspace '%s'. Use 'enable' first", workspaceName)
-	}
-	
-	// Stop the current containers
-	fmt.Println("Stopping current Kafka containers...")
-	if err := kafkaService.StopContainer(); err != nil {
-		return fmt.Errorf("failed to stop current Kafka containers: %w", err)
-	}
-	
-	// Update the service
-	if kafkaImage != "" || zookeeperImage != "" {
-		// Use provided custom images
-		bitswanKafkaImage := kafkaImage
-		if bitswanKafkaImage == "" {
-			// For now, use latest when no custom image provided
-			bitswanKafkaImage = "bitswan/bitswan-kafka:latest"
-		}
-		
-		bitswanZookeeperImage := zookeeperImage
-		if bitswanZookeeperImage == "" {
-			// For now, use latest when no custom image provided
-			bitswanZookeeperImage = "bitswan/bitswan-zookeeper:latest"
-		}
-		
-		fmt.Printf("Updating Kafka service with custom images:\n")
-		fmt.Printf("  Kafka: %s\n", bitswanKafkaImage)
-		fmt.Printf("  Zookeeper: %s\n", bitswanZookeeperImage)
-		
-		if err := kafkaService.UpdateImages(bitswanKafkaImage, bitswanZookeeperImage); err != nil {
-			return fmt.Errorf("failed to update docker-compose file: %w", err)
-		}
-	} else {
-		// Update to latest versions
-		fmt.Println("Updating Kafka service to latest versions...")
-		if err := kafkaService.UpdateToLatest(); err != nil {
-			return fmt.Errorf("failed to update to latest versions: %w", err)
-		}
-	}
-	
-	// Start the containers with new images
-	fmt.Println("Starting Kafka containers with new images...")
-	if err := kafkaService.StartContainer(); err != nil {
-		return fmt.Errorf("failed to start Kafka containers: %w", err)
-	}
-	
-	fmt.Println("✅ Kafka service updated successfully!")
-	
-	// Show access information
-	if err := kafkaService.ShowAccessInfo(); err == nil {
-		// Try to get and show credentials
-		if err := kafkaService.ShowCredentials(); err == nil {
-			fmt.Println("Updated credentials:")
-		}
-	}
-	
-	return nil
-}
-
- 
