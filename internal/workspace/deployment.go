@@ -16,7 +16,10 @@ import (
 
 // UpdateWorkspaceDeployment updates the workspace deployment with new AOC and MQTT configuration
 func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, staging bool, trustCA bool) error {
-	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
+	// Use HOME for file operations (works inside container and outside)
+	// The workspace files are accessible via the container path
+	homeDir := os.Getenv("HOME")
+	workspacePath := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName)
 	metadataPath := filepath.Join(workspacePath, "metadata.yaml")
 
 	// Read metadata
@@ -46,9 +49,11 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 	if err == nil && metadata.WorkspaceId != nil {
 		automationServerToken, err := aocClient.GetAutomationServerToken()
 		if err != nil {
-			return fmt.Errorf("failed to get automation server token: %w", err)
+			// AOC is not configured or token is not available, skip AOC env vars
+			// This is not a fatal error - workspace can function without AOC
+		} else {
+			aocEnvVars = aocClient.GetAOCEnvironmentVariables(*metadata.WorkspaceId, automationServerToken)
 		}
-		aocEnvVars = aocClient.GetAOCEnvironmentVariables(*metadata.WorkspaceId, automationServerToken)
 	}
 
 	// Create OAuth environment variables for GitOps if OAuth is configured
@@ -94,6 +99,8 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 		gitopsDevSourceDir = *metadata.GitopsDevSourceDir
 	}
 
+	// Pass container path to CreateDockerComposeFileWithSecret
+	// It needs container path for file operations, but will convert to host path for volume mounts
 	// Create docker-compose configuration
 	config := &dockercompose.DockerComposeConfig{
 		GitopsPath:         workspacePath,
@@ -123,20 +130,25 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 	dockerComposePath := filepath.Join(workspacePath, "deployment")
 	projectName := workspaceName + "-site"
 
-	commands := [][]string{
-		{"docker", "compose", "down"},
-		{"docker", "compose", "-p", projectName, "up", "-d", "--remove-orphans"},
+	fmt.Println("Stopping existing GitOps containers...")
+	downCmd := exec.Command("docker", "compose", "down")
+	downCmd.Dir = dockerComposePath
+	downCmd.Stdout = os.Stdout
+	downCmd.Stderr = os.Stderr
+	if err := downCmd.Run(); err != nil {
+		return fmt.Errorf("failed to stop containers: %w", err)
 	}
+	fmt.Println("GitOps containers stopped.")
 
-	for _, args := range commands {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dockerComposePath
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to execute %v: %w", args, err)
-		}
+	fmt.Println("Starting GitOps containers...")
+	upCmd := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--remove-orphans")
+	upCmd.Dir = dockerComposePath
+	upCmd.Stdout = os.Stdout
+	upCmd.Stderr = os.Stderr
+	if err := upCmd.Run(); err != nil {
+		return fmt.Errorf("failed to start containers: %w", err)
 	}
+	fmt.Println("GitOps containers restarted successfully!")
 
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -162,6 +163,12 @@ func (s *Server) handleCertAuthorityAdd(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Install the certificate in the daemon's system certificate store
+	if err := installCertificateInDaemon(targetName, targetPath); err != nil {
+		// Log warning but don't fail the request - certificate is still saved
+		fmt.Printf("Warning: Failed to install certificate in daemon: %v\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(CertAuthorityAddResponse{
@@ -197,6 +204,12 @@ func (s *Server) handleCertAuthorityRemove(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Remove the certificate from the daemon's system certificate store
+	if err := removeCertificateFromDaemon(certName); err != nil {
+		// Log warning but don't fail the request
+		fmt.Printf("Warning: Failed to remove certificate from daemon: %v\n", err)
+	}
+
 	// Remove the file
 	if err := os.Remove(certPath); err != nil {
 		writeJSONError(w, "failed to remove certificate: "+err.Error(), http.StatusInternalServerError)
@@ -209,5 +222,114 @@ func (s *Server) handleCertAuthorityRemove(w http.ResponseWriter, r *http.Reques
 		Success: true,
 		Message: "Certificate authority '" + certName + "' removed successfully",
 	})
+}
+
+// installCertificateInDaemon installs a certificate in the daemon's system certificate store
+func installCertificateInDaemon(certName, certPath string) error {
+	// Ensure the target directory exists
+	targetDir := "/usr/local/share/ca-certificates"
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return fmt.Errorf("failed to create ca-certificates directory: %w", err)
+	}
+
+	// Determine target filename (must be .crt for update-ca-certificates)
+	targetName := certName
+	if strings.HasSuffix(targetName, ".pem") {
+		targetName = strings.TrimSuffix(targetName, ".pem") + ".crt"
+	} else if !strings.HasSuffix(targetName, ".crt") {
+		targetName += ".crt"
+	}
+
+	targetPath := filepath.Join(targetDir, targetName)
+
+	// Read the certificate file
+	certData, err := os.ReadFile(certPath)
+	if err != nil {
+		return fmt.Errorf("failed to read certificate file: %w", err)
+	}
+
+	// Write to the system certificate directory
+	if err := os.WriteFile(targetPath, certData, 0644); err != nil {
+		return fmt.Errorf("failed to write certificate to system directory: %w", err)
+	}
+
+	// Update the system CA certificates
+	cmd := exec.Command("update-ca-certificates")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// update-ca-certificates may return non-zero exit code but still work
+		// Check if the output contains success indicators
+		outputStr := string(output)
+		if !strings.Contains(outputStr, "Updating certificates") && !strings.Contains(outputStr, "done") {
+			return fmt.Errorf("update-ca-certificates failed: %v, output: %s", err, outputStr)
+		}
+	}
+
+	return nil
+}
+
+// removeCertificateFromDaemon removes a certificate from the daemon's system certificate store
+func removeCertificateFromDaemon(certName string) error {
+	// Determine the installed certificate name (may be .crt even if original was .pem)
+	targetDir := "/usr/local/share/ca-certificates"
+	
+	// Try both .crt and .pem variants
+	var targetPath string
+	if strings.HasSuffix(certName, ".pem") {
+		targetPath = filepath.Join(targetDir, strings.TrimSuffix(certName, ".pem")+".crt")
+	} else if strings.HasSuffix(certName, ".crt") {
+		targetPath = filepath.Join(targetDir, certName)
+	} else {
+		// Try both extensions
+		targetPath = filepath.Join(targetDir, certName+".crt")
+		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+			targetPath = filepath.Join(targetDir, certName+".pem")
+		}
+	}
+
+	// Remove the certificate file if it exists
+	if _, err := os.Stat(targetPath); err == nil {
+		if err := os.Remove(targetPath); err != nil {
+			return fmt.Errorf("failed to remove certificate from system directory: %w", err)
+		}
+	}
+
+	// Update the system CA certificates
+	cmd := exec.Command("update-ca-certificates")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		outputStr := string(output)
+		if !strings.Contains(outputStr, "Updating certificates") && !strings.Contains(outputStr, "done") {
+			return fmt.Errorf("update-ca-certificates failed: %v, output: %s", err, outputStr)
+		}
+	}
+
+	return nil
+}
+
+// installAllCertificatesInDaemon installs all certificates from the registry into the daemon
+// This should be called when the daemon starts
+func installAllCertificatesInDaemon() error {
+	certDir, err := getCertAuthoritiesDir()
+	if err != nil {
+		return fmt.Errorf("failed to get certauthorities directory: %w", err)
+	}
+
+	files, err := os.ReadDir(certDir)
+	if err != nil {
+		// Directory might not exist yet, that's okay
+		return nil
+	}
+
+	for _, file := range files {
+		if !file.IsDir() && (strings.HasSuffix(file.Name(), ".crt") || strings.HasSuffix(file.Name(), ".pem")) {
+			certPath := filepath.Join(certDir, file.Name())
+			if err := installCertificateInDaemon(file.Name(), certPath); err != nil {
+				fmt.Printf("Warning: Failed to install certificate %s: %v\n", file.Name(), err)
+			}
+		}
+	}
+
+	return nil
 }
 

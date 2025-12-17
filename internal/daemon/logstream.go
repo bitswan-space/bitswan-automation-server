@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -31,26 +32,33 @@ func NewLogStreamWriter(writer io.Writer, level string) *LogStreamWriter {
 
 // Write implements io.Writer interface
 func (l *LogStreamWriter) Write(p []byte) (n int, err error) {
-	entry := LogEntry{
-		Time:    time.Now().UTC().Format(time.RFC3339),
-		Level:   l.level,
-		Message: string(p),
-	}
+	// Split input by newlines to handle multi-line messages
+	lines := strings.Split(strings.TrimSuffix(string(p), "\n"), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		entry := LogEntry{
+			Time:    time.Now().UTC().Format(time.RFC3339),
+			Level:   l.level,
+			Message: line,
+		}
 
-	jsonData, err := json.Marshal(entry)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal log entry: %w", err)
-	}
+		jsonData, err := json.Marshal(entry)
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal log entry: %w", err)
+		}
 
-	// Write NDJSON (newline-delimited JSON)
-	_, err = l.writer.Write(append(jsonData, '\n'))
-	if err != nil {
-		return 0, err
-	}
+		// Write NDJSON (newline-delimited JSON)
+		_, err = l.writer.Write(append(jsonData, '\n'))
+		if err != nil {
+			return 0, err
+		}
 
-	// Flush if the writer supports it
-	if flusher, ok := l.writer.(http.Flusher); ok {
-		flusher.Flush()
+		// Flush if the writer supports it
+		if flusher, ok := l.writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
 	}
 
 	return len(p), nil

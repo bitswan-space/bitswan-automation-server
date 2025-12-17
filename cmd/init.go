@@ -75,7 +75,21 @@ func newInitCmd() *cobra.Command {
 		Use:   "init [flags] <workspace-name>",
 		Short: "Initializes a new GitOps, Caddy and Bitswan editor",
 		Args:  cobra.RangeArgs(1, 2),
-		RunE:  o.run,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			// Pass through original args (excluding binary)
+			if err := client.WorkspaceInit(os.Args[1:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			return nil
+		},
 	}
 
 	cmd.Flags().StringVar(&o.remoteRepo, "remote", "", "The remote repository to clone")
@@ -95,6 +109,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
 	return cmd
 }
+
 
 func checkNetworkExists(networkName string) (bool, error) {
 	// Run docker network ls command with JSON format
@@ -234,7 +249,9 @@ func UpdateExamples(bitswanConfig string, verbose bool) error {
 		fmt.Printf("Updating BitSwan repository at %s\n", repoPath)
 	}
 
-	cmd := exec.Command("git", "pull")
+	// Git can refuse to operate when ownership differs (common when daemon runs as root
+	// against a bind-mounted repo owned by the host user). Allow this repo explicitly.
+	cmd := exec.Command("git", "-c", fmt.Sprintf("safe.directory=%s", repoPath), "pull")
 	cmd.Dir = repoPath
 
 	if err := runCommandVerbose(cmd, verbose); err != nil {

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	httplocalhost "github.com/bitswan-space/bitswan-workspaces/internal/http"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 )
@@ -490,8 +491,28 @@ func createHTTPClient() (*http.Client, error) {
 }
 
 // sendRequest is a helper method for making HTTP requests
-func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Response, error) {
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
+// It automatically retries with Docker network alias if localhost connection fails
+func (c *AOCClient) sendRequest(method, requestURL string, payload []byte) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+
+	// Use the retry wrapper
+	err = httplocalhost.RetryWithLocalhostAlias(requestURL, func() error {
+		var retryErr error
+		resp, retryErr = c.sendRequestOnce(method, requestURL, payload)
+		return retryErr
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// sendRequestOnce performs a single HTTP request without retry logic
+func (c *AOCClient) sendRequestOnce(method, requestURL string, payload []byte) (*http.Response, error) {
+	req, err := http.NewRequest(method, requestURL, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -509,7 +530,7 @@ func (c *AOCClient) sendRequest(method, url string, payload []byte) (*http.Respo
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("error creating client: %w", err)
+		return nil, fmt.Errorf("error sending request: %w", err)
 	}
 	return resp, nil
 }

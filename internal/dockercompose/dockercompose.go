@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/certauthority"
 	"github.com/dchest/uniuri"
@@ -38,7 +39,17 @@ func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, er
 
 // CreateDockerComposeFileWithSecret creates a docker-compose YAML content with an optional existing secret
 func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSecret string) (string, string, error) {
-	sshDir := config.GitopsPath + "/ssh"
+	// Convert container path to host path for volume mounts (docker-compose runs on host)
+	// But use container path for file operations
+	gitopsPathForVolumes := config.GitopsPath
+	homeDir := os.Getenv("HOME")
+	hostHomeDir := os.Getenv("HOST_HOME")
+	if hostHomeDir != "" && homeDir != hostHomeDir && strings.HasPrefix(config.GitopsPath, homeDir) {
+		// Replace container home with host home for docker-compose volume paths
+		gitopsPathForVolumes = strings.Replace(config.GitopsPath, homeDir, hostHomeDir, 1)
+	}
+	
+	sshDir := gitopsPathForVolumes + "/ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
 	hostOsTmp := runtime.GOOS
@@ -67,14 +78,14 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		"hostname": config.WorkspaceName + "-gitops",
 		"networks": []string{"bitswan_network"},
 		"volumes": []string{
-			config.GitopsPath + "/gitops:/gitops/gitops:z",
-			config.GitopsPath + "/secrets:/gitops/secrets:z",
+			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
+			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
-			"BITSWAN_GITOPS_DIR_HOST=" + config.GitopsPath,
+			"BITSWAN_GITOPS_DIR_HOST=" + gitopsPathForVolumes,
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
@@ -113,7 +124,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	}
 
 	// Add workspace directory mount and rewrite git path for all OS
-	workspaceDir := config.GitopsPath + "/workspace/:/workspace-repo/:z"
+	workspaceDir := gitopsPathForVolumes + "/workspace/:/workspace-repo/:z"
 	if hostOs == WindowsMac {
 		gitopsVolumes := []string{
 			gitConfig + ":/root/.gitconfig:z",

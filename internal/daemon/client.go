@@ -60,6 +60,15 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
+func (c *Client) doStreamingRequest(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	streamingClient := &http.Client{
+		Transport: c.httpClient.Transport,
+		Timeout:   0,
+	}
+	return streamingClient.Do(req)
+}
+
 // Ping checks if the daemon is running
 func (c *Client) Ping() error {
 	req, err := http.NewRequest("GET", "http://unix/ping", nil)
@@ -724,14 +733,7 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// Use a streaming client with no timeout for long-running operations
-	streamingClient := &http.Client{
-		Transport: c.httpClient.Transport,
-		Timeout:   0, // No timeout for streaming operations
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := streamingClient.Do(req)
+	resp, err := c.doStreamingRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
@@ -762,6 +764,76 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	}
 
 	return &result, nil
+}
+
+// WorkspaceInit runs `bitswan workspace init ...` via the daemon with NDJSON streaming.
+func (c *Client) WorkspaceInit(args []string) error {
+	bodyBytes, err := json.Marshal(WorkspaceRunRequest{Args: args})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/workspace/init", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	_, err = c.streamLogs(resp.Body, os.Stdout)
+	return err
+}
+
+// WorkspaceUpdate runs `bitswan workspace update ...` via the daemon with NDJSON streaming.
+func (c *Client) WorkspaceUpdate(args []string) error {
+	bodyBytes, err := json.Marshal(WorkspaceRunRequest{Args: args})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/workspace/update", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	_, err = c.streamLogs(resp.Body, os.Stdout)
+	return err
 }
 
 // streamLogs reads NDJSON from the response and displays logs in real-time
