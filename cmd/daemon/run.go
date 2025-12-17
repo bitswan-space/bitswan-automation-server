@@ -23,19 +23,19 @@ import (
 
 // WorkspaceInitMessage represents the JSON message for workspace/init topic
 type WorkspaceInitMessage struct {
-	Name              string `json:"name"`
-	Remote            string `json:"remote,omitempty"`
-	Branch            string `json:"branch,omitempty"`
-	Domain            string `json:"domain,omitempty"`
-	EditorImage       string `json:"editor-image,omitempty"`
-	GitopsImage       string `json:"gitops-image,omitempty"`
-	OauthConfig       string `json:"oauth-config,omitempty"`
-	NoOauth           bool   `json:"no-oauth,omitempty"`
-	SSHPort           string `json:"ssh-port,omitempty"`
-	MkCerts           bool   `json:"mkcerts,omitempty"`
-	SetHosts          bool   `json:"set-hosts,omitempty"`
-	Local             bool   `json:"local,omitempty"`
-	NoIde             bool   `json:"no-ide,omitempty"`
+	Name        string `json:"name"`
+	Remote      string `json:"remote,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+	EditorImage string `json:"editor-image,omitempty"`
+	GitopsImage string `json:"gitops-image,omitempty"`
+	OauthConfig string `json:"oauth-config,omitempty"`
+	NoOauth     bool   `json:"no-oauth,omitempty"`
+	SSHPort     string `json:"ssh-port,omitempty"`
+	MkCerts     bool   `json:"mkcerts,omitempty"`
+	SetHosts    bool   `json:"set-hosts,omitempty"`
+	Local       bool   `json:"local,omitempty"`
+	NoIde       bool   `json:"no-ide,omitempty"`
 }
 
 // WorkspaceRemoveMessage represents the JSON message for workspace/remove topic
@@ -108,7 +108,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Connecting to MQTT broker at %s...\n", brokerURL)
 	fmt.Printf("  Username: %s\n", mqttCreds.Username)
 	fmt.Printf("  Port: %d\n", mqttCreds.Port)
-	
+
 	// Connect with timeout
 	connectChan := make(chan error, 1)
 	go func() {
@@ -119,7 +119,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			connectChan <- fmt.Errorf("connection token wait failed")
 		}
 	}()
-	
+
 	select {
 	case err := <-connectChan:
 		if err != nil {
@@ -155,12 +155,12 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	} else {
 		configDir = filepath.Join(os.Getenv("HOME"), ".config", "bitswan")
 	}
-	
+
 	apiServer, err := daemonapi.NewServer(configDir, 8080)
 	if err != nil {
 		return fmt.Errorf("failed to create REST API server: %w", err)
 	}
-	
+
 	// Start REST API server in a goroutine
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -171,7 +171,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
-	
+
 	// Give the server a moment to start
 	time.Sleep(500 * time.Millisecond)
 
@@ -307,6 +307,20 @@ func runCommandWithLogging(client mqtt.Client, cmd *exec.Cmd, commandName, objec
 		return fmt.Errorf("failed to start command: %w", err)
 	}
 
+	// Mutex to serialize MQTT publish operations and prevent race conditions
+	var publishMutex sync.Mutex
+
+	// Helper function to safely publish MQTT messages
+	safePublish := func(topic string, payload []byte) error {
+		publishMutex.Lock()
+		defer publishMutex.Unlock()
+		token := client.Publish(topic, 0, false, payload)
+		if token.Wait() && token.Error() != nil {
+			return token.Error()
+		}
+		return nil
+	}
+
 	// Function to read and publish lines from a reader
 	streamLines := func(reader io.Reader, isStderr bool) {
 		scanner := bufio.NewScanner(reader)
@@ -329,9 +343,8 @@ func runCommandWithLogging(client mqtt.Client, cmd *exec.Cmd, commandName, objec
 				continue
 			}
 
-			token := client.Publish(logsTopic, 0, false, jsonData)
-			if token.Wait() && token.Error() != nil {
-				fmt.Printf("Error publishing log message: %v\n", token.Error())
+			if err := safePublish(logsTopic, jsonData); err != nil {
+				fmt.Printf("Error publishing log message: %v\n", err)
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -369,9 +382,8 @@ func runCommandWithLogging(client mqtt.Client, cmd *exec.Cmd, commandName, objec
 		}
 		jsonData, err := json.Marshal(logMsg)
 		if err == nil {
-			token := client.Publish(logsTopic, 0, false, jsonData)
-			if token.Wait() && token.Error() != nil {
-				fmt.Printf("Error publishing failure status: %v\n", token.Error())
+			if err := safePublish(logsTopic, jsonData); err != nil {
+				fmt.Printf("Error publishing failure status: %v\n", err)
 			}
 		}
 		return fmt.Errorf("command failed: %w", err)
@@ -387,12 +399,10 @@ func runCommandWithLogging(client mqtt.Client, cmd *exec.Cmd, commandName, objec
 	}
 	jsonData, err := json.Marshal(logMsg)
 	if err == nil {
-		token := client.Publish(logsTopic, 0, false, jsonData)
-		if token.Wait() && token.Error() != nil {
-			fmt.Printf("Error publishing success status: %v\n", token.Error())
+		if err := safePublish(logsTopic, jsonData); err != nil {
+			fmt.Printf("Error publishing success status: %v\n", err)
 		}
 	}
 
 	return nil
 }
-
