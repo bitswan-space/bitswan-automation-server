@@ -16,7 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -626,10 +626,16 @@ func (o *initOptions) run(cmd *cobra.Command, args []string) error {
 	}
 
 	if !caddy_running {
-		err = ingress.InitIngress(o.verbose)
+		daemonClient, err := daemon.NewClient()
+		if err != nil {
+			return fmt.Errorf("failed to create daemon client: %w", err)
+		}
+
+		result, err := daemonClient.InitIngress(o.verbose)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
+		fmt.Println(result.Message)
 	} else {
 		fmt.Println("A running instance of Caddy with admin found")
 	}

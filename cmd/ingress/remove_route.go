@@ -2,8 +2,9 @@ package ingress
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -20,9 +21,19 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hostname := args[0]
 
-			if err := caddyapi.RemoveRoute(hostname); err != nil {
-				return fmt.Errorf("failed to remove route: %w", err)
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
+
+			if err := client.RemoveIngressRoute(hostname); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Removed route: %s\n", hostname)
 			return nil
 		},
 	}
