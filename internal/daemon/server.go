@@ -24,11 +24,13 @@ const (
 
 // Server represents the automation server daemon HTTP server
 type Server struct {
-	version   string
-	startTime time.Time
-	listener  net.Listener
-	server    *http.Server
-	token     string
+	version      string
+	startTime    time.Time
+	listener     net.Listener
+	server       *http.Server
+	docsServer   *http.Server
+	docsListener net.Listener
+	token        string
 }
 
 // LoadToken reads the token from the config file
@@ -130,6 +132,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/ingress", s.authMiddleware(s.handleIngress))
 	mux.HandleFunc("/ingress/", s.authMiddleware(s.handleIngress))
 
+	// Docs endpoint (unauthenticated - public access)
+	mux.HandleFunc("/api-docs", s.handleDocs)
+
 	return mux
 }
 
@@ -183,21 +188,59 @@ func (s *Server) Run() error {
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
-	// Create HTTP server
+	// Create HTTP server for Unix socket
 	s.server = &http.Server{
 		Handler: s.setupRoutes(),
 	}
+
+	// Create HTTP server for docs (listens on TCP port 8080)
+	docsMux := http.NewServeMux()
+	docsMux.HandleFunc("/", s.handleDocs) // Root path serves docs
+	docsMux.HandleFunc("/api-docs", s.handleDocs)
+	s.docsServer = &http.Server{
+		Handler: docsMux,
+	}
+
+	// Start docs HTTP server on port 8080
+	docsListener, err := net.Listen("tcp", fmt.Sprintf(":%d", docsPort))
+	if err != nil {
+		return fmt.Errorf("failed to create docs HTTP listener: %w", err)
+	}
+	s.docsListener = docsListener
+
+	// Set up ingress route for docs (with retry logic)
+	go func() {
+		// Wait a bit for Caddy to be ready
+		time.Sleep(2 * time.Second)
+		maxRetries := 5
+		for i := 0; i < maxRetries; i++ {
+			if err := s.setupDocsIngress(); err == nil {
+				fmt.Printf("Docs available at http://%s\n", docsHostname)
+				break
+			}
+			if i < maxRetries-1 {
+				time.Sleep(2 * time.Second)
+			}
+		}
+	}()
 
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start server in goroutine
+	// Start servers in goroutines
 	errChan := make(chan error, 1)
 	go func() {
 		fmt.Printf("Automation server daemon listening on %s\n", SocketPath)
 		fmt.Printf("Version: %s\n", s.version)
 		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			errChan <- err
+		}
+	}()
+
+	go func() {
+		fmt.Printf("Docs server listening on :%d\n", docsPort)
+		if err := s.docsServer.Serve(docsListener); err != nil && err != http.ErrServerClosed {
 			errChan <- err
 		}
 	}()
@@ -216,6 +259,10 @@ func (s *Server) Run() error {
 
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server shutdown error: %w", err)
+	}
+
+	if err := s.docsServer.Shutdown(ctx); err != nil {
+		return fmt.Errorf("docs server shutdown error: %w", err)
 	}
 
 	// Clean up socket file
