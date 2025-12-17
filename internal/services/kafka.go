@@ -108,7 +108,15 @@ func (k *KafkaService) SaveSecrets(secrets *KafkaSecrets) error {
 	
 	// Change ownership to gitops user (1000:1000) on Linux
 	if runtime.GOOS == "linux" {
-		cmd := exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		// Check if we're running as root (daemon runs as root)
+		var cmd *exec.Cmd
+		if os.Geteuid() == 0 {
+			// Running as root, no need for sudo
+			cmd = exec.Command("chown", "1000:1000", secretsFile)
+		} else {
+			// Not root, use sudo
+			cmd = exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		}
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to change ownership of secrets file: %w\nOutput: %s", err, string(output))
 		}
@@ -293,13 +301,32 @@ func (k *KafkaService) Enable() error {
 	}
 	
 	fmt.Println("Kafka service enabled successfully!")
-	fmt.Printf("Kafka Admin Password: %s\n", secrets.KafkaAdminPassword)
-	fmt.Printf("Kafka UI Password: %s\n", secrets.KafkaUIPassword)
-	
-	// Show access URLs
-	if err := k.ShowAccessInfo(); err != nil {
-		fmt.Printf("Warning: could not show access URLs: %v\n", err)
+
+	// Print connection info in a single, logically-grouped block:
+	// 1) Kafka UI URL + UI username + UI password
+	// 2) Kafka broker username + broker password
+	metadata, err := k.getWorkspaceMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
+
+	fmt.Println()
+	fmt.Println("Kafka UI:")
+	if metadata.Domain != "" {
+		hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
+		fmt.Printf("  URL:      https://%s/kafka\n", hostname)
+	} else {
+		fmt.Printf("  URL:      (no domain configured)\n")
+	}
+	fmt.Println("  Username: admin")
+	fmt.Printf("  Password: %s\n", secrets.KafkaUIPassword)
+
+	fmt.Println()
+	fmt.Println("Kafka Broker (SASL_PLAINTEXT):")
+	fmt.Printf("  Address:  %s--kafka:9092\n", k.WorkspaceName)
+	fmt.Println("  Username: admin")
+	fmt.Printf("  Password: %s\n", secrets.KafkaAdminPassword)
+	fmt.Println()
 	
 	return nil
 }

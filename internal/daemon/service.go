@@ -3,12 +3,18 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 )
+
+// stdoutMutex protects stdout redirection from concurrent requests
+var stdoutMutex sync.Mutex
 
 // ServiceEnableRequest represents the request to enable a service
 type ServiceEnableRequest struct {
@@ -139,30 +145,86 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 		return
 	}
 
-	var err error
+	// Set up streaming response
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Create a pipe to capture stdout
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
+		return
+	}
+
+	// Redirect stdout to the pipe
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		// Always restore stdout, even on error
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	// Create a log stream writer that formats output as NDJSON
+	logWriter := NewLogStreamWriter(w, "info")
+
+	// Use a WaitGroup to wait for goroutines
+	var wg sync.WaitGroup
+
+	// Start goroutine to read from pipe and stream logs
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := rPipe.Read(buf)
+			if n > 0 {
+				// Write to log stream writer (which formats as NDJSON)
+				logWriter.Write(buf[:n])
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", err))
+				break
+			}
+		}
+	}()
+
+	// Run the service enable operation
+	var operationErr error
 	switch serviceType {
 	case "editor":
-		err = s.enableEditorService(req)
+		operationErr = s.enableEditorService(req)
 	case "kafka":
-		err = s.enableKafkaService(req)
+		operationErr = s.enableKafkaService(req)
 	case "couchdb":
-		err = s.enableCouchDBService(req)
+		operationErr = s.enableCouchDBService(req)
 	default:
-		writeJSONError(w, "unknown service type: "+serviceType, http.StatusBadRequest)
-		return
+		operationErr = fmt.Errorf("unknown service type: %s", serviceType)
 	}
 
-	if err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// Close the write end of the pipe to signal EOF
+	wPipe.Close()
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(ServiceResponse{
-		Success: true,
-		Message: fmt.Sprintf("%s service enabled successfully", serviceType),
-	})
+	// Wait for log streaming to finish
+	wg.Wait()
+
+	// Send final result only if there was an error (success message already printed by service)
+	if operationErr != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", operationErr))
+	}
+	// Don't send duplicate success message - the service already printed it
 }
 
 // handleServiceDisable handles POST /service/{service_type}/disable

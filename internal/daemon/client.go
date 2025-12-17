@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -685,7 +686,7 @@ func (c *Client) RemoveIngressRoute(hostname string) error {
 	return nil
 }
 
-// EnableService enables a service (editor, kafka, or couchdb)
+// EnableService enables a service (editor, kafka, or couchdb) with streaming logs
 func (c *Client) EnableService(serviceType, workspace string, options map[string]interface{}) (*ServiceResponse, error) {
 	reqBody := ServiceEnableRequest{
 		ServiceType: serviceType,
@@ -723,7 +724,14 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.doRequest(req)
+	// Use a streaming client with no timeout for long-running operations
+	streamingClient := &http.Client{
+		Transport: c.httpClient.Transport,
+		Timeout:   0, // No timeout for streaming operations
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := streamingClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
@@ -742,12 +750,78 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
+	// Check if response is streaming NDJSON
+	if resp.Header.Get("Content-Type") == "application/x-ndjson" {
+		return c.streamLogs(resp.Body, os.Stdout)
+	}
+
+	// Fallback to regular JSON response
 	var result ServiceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	return &result, nil
+}
+
+// streamLogs reads NDJSON from the response and displays logs in real-time
+func (c *Client) streamLogs(body io.Reader, output io.Writer) (*ServiceResponse, error) {
+	scanner := bufio.NewScanner(body)
+	var lastEntry LogEntry
+	var hasError bool
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var entry LogEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			// If it's not valid JSON, print it as-is
+			s := string(line)
+			if strings.HasSuffix(s, "\n") {
+				fmt.Fprint(output, s)
+			} else {
+				fmt.Fprintln(output, s)
+			}
+			continue
+		}
+
+		lastEntry = entry
+
+		// Display the log message
+		// entry.Message often already contains trailing newlines; avoid adding extras.
+		if strings.HasSuffix(entry.Message, "\n") {
+			fmt.Fprint(output, entry.Message)
+		} else {
+			fmt.Fprintln(output, entry.Message)
+		}
+
+		// Track if we encountered an error
+		if entry.Level == "error" {
+			hasError = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading stream: %w", err)
+	}
+
+	// Return result based on last entry
+	if hasError {
+		msg := strings.TrimSpace(lastEntry.Message)
+		if msg == "" {
+			msg = "operation failed"
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+
+	return &ServiceResponse{
+		Success: true,
+		// The stream already printed everything; keep Message empty to avoid CLI re-printing
+		Message: "",
+	}, nil
 }
 
 // DisableService disables a service
