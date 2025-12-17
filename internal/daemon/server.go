@@ -114,6 +114,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 		json.NewEncoder(w).Encode(response)
 	}))
 
+	// Automation endpoints (authenticated)
+	mux.HandleFunc("/automations", s.authMiddleware(s.handleAutomations))
+	mux.HandleFunc("/automations/", s.authMiddleware(s.handleAutomations))
+
 	return mux
 }
 
