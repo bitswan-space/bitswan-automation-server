@@ -59,7 +59,9 @@ func newKafkaEnableCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			fmt.Println(result.Message)
+			if result != nil && result.Message != "" {
+				fmt.Println(result.Message)
+			}
 			return nil
 		},
 	}

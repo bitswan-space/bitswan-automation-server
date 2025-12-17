@@ -138,15 +138,31 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 
 	if hostOsTmp == "linux" {
 		// Change ownership for Linux
-		chownCom := exec.Command("sudo", "chown", "-R", "1000:1000", secretsDir)
+		// Check if we're running as root (daemon runs as root)
+		var chownCom *exec.Cmd
+		if os.Geteuid() == 0 {
+			// Running as root, no need for sudo
+			chownCom = exec.Command("chown", "-R", "1000:1000", secretsDir)
+		} else {
+			// Not root, use sudo
+			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", secretsDir)
+		}
 		if err := e.runCommand(chownCom); err != nil {
 			return fmt.Errorf("failed to change ownership of secrets folder: %w", err)
 		}
-		chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", codeserverConfigDir)
+		if os.Geteuid() == 0 {
+			chownCom = exec.Command("chown", "-R", "1000:1000", codeserverConfigDir)
+		} else {
+			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", codeserverConfigDir)
+		}
 		if err := e.runCommand(chownCom); err != nil {
 			return fmt.Errorf("failed to change ownership of codeserver config folder: %w", err)
 		}
-		chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", gitopsWorkspace)
+		if os.Geteuid() == 0 {
+			chownCom = exec.Command("chown", "-R", "1000:1000", gitopsWorkspace)
+		} else {
+			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", gitopsWorkspace)
+		}
 		if err := e.runCommand(chownCom); err != nil {
 			return fmt.Errorf("failed to change ownership of workspace folder: %w", err)
 		}

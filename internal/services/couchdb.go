@@ -79,7 +79,15 @@ func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 	
 	// Change ownership to gitops user (1000:1000) on Linux
 	if runtime.GOOS == "linux" {
-		cmd := exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		// Check if we're running as root (daemon runs as root)
+		var cmd *exec.Cmd
+		if os.Geteuid() == 0 {
+			// Running as root, no need for sudo
+			cmd = exec.Command("chown", "1000:1000", secretsFile)
+		} else {
+			// Not root, use sudo
+			cmd = exec.Command("sudo", "chown", "1000:1000", secretsFile)
+		}
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to change ownership of secrets file: %w\nOutput: %s", err, string(output))
 		}
@@ -176,13 +184,39 @@ func (c *CouchDBService) Enable() error {
 	}
 	
 	fmt.Println("CouchDB service enabled successfully!")
-	fmt.Printf("Username: %s\n", secrets.User)
-	fmt.Printf("Password: %s\n", secrets.Password)
-	
-	// Show access URLs
-	if err := c.ShowAccessInfo(); err != nil {
-		fmt.Printf("Warning: could not show access URLs: %v\n", err)
+
+	// Print connection info in a single, logically-grouped block:
+	// 1) Admin UI URL + username + password
+	// 2) Base CouchDB URL + username + password
+	metadata, err := c.getWorkspaceMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
+
+	fmt.Println()
+	fmt.Println("CouchDB Admin UI:")
+	if metadata.Domain != "" {
+		hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
+		fmt.Printf("  URL:      https://%s/_utils/\n", hostname)
+		fmt.Println("  Username: admin")
+		fmt.Printf("  Password: %s\n", secrets.Password)
+	} else {
+		fmt.Printf("  URL:      (no domain configured)\n")
+		fmt.Println("  Username: admin")
+		fmt.Printf("  Password: %s\n", secrets.Password)
+	}
+
+	fmt.Println()
+	fmt.Println("CouchDB API:")
+	if metadata.Domain != "" {
+		hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
+		fmt.Printf("  URL:      https://%s/\n", hostname)
+	} else {
+		fmt.Printf("  URL:      (no domain configured)\n")
+	}
+	fmt.Println("  Username: admin")
+	fmt.Printf("  Password: %s\n", secrets.Password)
+	fmt.Println()
 	
 	return nil
 }
