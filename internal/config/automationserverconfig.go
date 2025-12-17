@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
@@ -15,9 +16,14 @@ type AutomationServerConfig struct {
 
 // Config represents the combined TOML configuration
 type Config struct {
-	ActiveWorkspace    string                    `toml:"active_workspace"`
-	AutomationOperationsCenter   AutomationOperationsCenterSettings  `toml:"aoc"`
+	ActiveWorkspace            string                             `toml:"active_workspace"`
+	AutomationOperationsCenter AutomationOperationsCenterSettings `toml:"aoc"`
+	LocalServer                LocalServerSettings                `toml:"local_server"`
+}
 
+// LocalServerSettings represents the local automation server daemon settings
+type LocalServerSettings struct {
+	Token string `toml:"token"`
 }
 
 // AutomationOperationsCenterSettings represents the automation operations center connection settings in TOML
@@ -28,10 +34,43 @@ type AutomationOperationsCenterSettings struct {
 	ExpiresAt          string `toml:"expires_at,omitempty"`
 }
 
+// GetRealUserHomeDir returns the home directory of the actual user,
+// even when running via sudo. It checks SUDO_USER first, then falls back to HOME.
+func GetRealUserHomeDir() (string, error) {
+	// Check if we're running under sudo
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser != "" {
+		// Look up the original user's home directory
+		u, err := user.Lookup(sudoUser)
+		if err != nil {
+			return "", fmt.Errorf("failed to lookup user %s: %w", sudoUser, err)
+		}
+		return u.HomeDir, nil
+	}
+
+	// Not running under sudo, use HOME or current user
+	homeDir := os.Getenv("HOME")
+	if homeDir != "" {
+		return homeDir, nil
+	}
+
+	// Fallback to current user lookup
+	u, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current user: %w", err)
+	}
+	return u.HomeDir, nil
+}
+
 // NewAutomationServerConfig creates a new automation server configuration manager
 func NewAutomationServerConfig() *AutomationServerConfig {
+	homeDir, err := GetRealUserHomeDir()
+	if err != nil {
+		// Fallback to HOME if we can't determine the real user
+		homeDir = os.Getenv("HOME")
+	}
 	return &AutomationServerConfig{
-		configDir: filepath.Join(os.Getenv("HOME"), ".config", "bitswan"),
+		configDir: filepath.Join(homeDir, ".config", "bitswan"),
 	}
 }
 
@@ -133,6 +172,32 @@ func (m *AutomationServerConfig) SetActiveWorkspace(workspace string) error {
 	}
 
 	config.ActiveWorkspace = workspace
+	return m.SaveConfig(config)
+}
+
+// GetLocalServerToken returns the local server daemon token
+func (m *AutomationServerConfig) GetLocalServerToken() (string, error) {
+	config, err := m.LoadConfig()
+	if err != nil {
+		return "", err
+	}
+
+	if config.LocalServer.Token == "" {
+		return "", fmt.Errorf("local server token not configured")
+	}
+
+	return config.LocalServer.Token, nil
+}
+
+// SetLocalServerToken updates the local server daemon token
+func (m *AutomationServerConfig) SetLocalServerToken(token string) error {
+	config, err := m.LoadConfig()
+	if err != nil {
+		// If no config exists, create a new one
+		config = &Config{}
+	}
+
+	config.LocalServer.Token = token
 	return m.SaveConfig(config)
 }
 
