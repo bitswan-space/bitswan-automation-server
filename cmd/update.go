@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/bitswan-space/bitswan-workspaces/internal/workspace"
 	"github.com/spf13/cobra"
@@ -28,13 +28,18 @@ func newUpdateCmd() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workspaceName := args[0]
-			fmt.Printf("Updating Gitops: %s...\n", workspaceName)
-			err := updateGitops(workspaceName, o)
+			client, err := daemon.NewClient()
 			if err != nil {
-				return fmt.Errorf("error updating workspace: %w", err)
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
-			fmt.Printf("Gitops %s updated successfully!\n", workspaceName)
+
+			// Pass through original args (excluding binary)
+			if err := client.WorkspaceUpdate(os.Args[1:]); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
 			return nil
 		},
 	}
@@ -49,6 +54,7 @@ func newUpdateCmd() *cobra.Command {
 
 	return cmd
 }
+
 
 // updateServices updates all enabled services for the workspace
 func updateServices(workspaceName string, o *updateOptions) error {
@@ -243,10 +249,9 @@ func updateCouchDBService(workspaceName, couchdbImage string) error {
 func updateGitops(workspaceName string, o *updateOptions) error {
 	bitswanPath := os.Getenv("HOME") + "/.config/bitswan/"
 
-	repoPath := filepath.Join(bitswanPath, "bitswan-src")
 	// 1. Create or update examples directory
 	fmt.Println("Ensuring examples are up to date...")
-	err := EnsureExamples(repoPath, true)
+	err := EnsureExamples(bitswanPath, true)
 	if err != nil {
 		return fmt.Errorf("failed to download examples: %w", err)
 	}

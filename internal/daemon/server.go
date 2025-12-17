@@ -170,6 +170,11 @@ func (s *Server) Run() error {
 	}
 	s.token = token
 
+	// Install all certificates from the registry into the daemon's certificate store
+	if err := installAllCertificatesInDaemon(); err != nil {
+		fmt.Printf("Warning: Failed to install certificates in daemon: %v\n", err)
+	}
+
 	// Ensure the socket directory exists
 	if err := os.MkdirAll(SocketDir, 0755); err != nil {
 		return fmt.Errorf("failed to create socket directory: %w", err)

@@ -133,11 +133,14 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 	// Remove existing socket file if it exists (stale socket from previous run)
 	_ = os.Remove(socketPath)
 
+	// Set HOST_HOME so the daemon knows the host home directory
+	// This is needed when fixing permissions and creating docker-compose files with correct paths
 	dockerCmd := exec.Command("docker", "run",
 		"-d",
 		"--name", "bitswan-automation-server-daemon",
 		"--restart", "unless-stopped",
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
+		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", binaryPath),
 		"-v", fmt.Sprintf("%s:/root/.config/bitswan", bitswanConfig),
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),

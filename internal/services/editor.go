@@ -28,7 +28,10 @@ type EditorService struct {
 
 // NewEditorService creates a new Editor service manager
 func NewEditorService(workspaceName string) (*EditorService, error) {
-	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
+	// Always use HOME for file operations (works inside container and outside)
+	// WorkspacePath will be used for docker-compose files, which need host paths
+	homeDir := os.Getenv("HOME")
+	workspacePath := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName)
 
 	// Check if workspace exists
 	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
@@ -43,9 +46,26 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
 func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool) (string, error) {
+	// For docker-compose files, use HOST_HOME if available (docker-compose runs on host)
+	// Convert container path to host path for volume mounts
+	homeDir := os.Getenv("HOME")
+	hostHomeDir := os.Getenv("HOST_HOME")
+	if hostHomeDir == "" {
+		hostHomeDir = homeDir
+	}
+	
+	// Convert WorkspacePath (container path) to host path for docker-compose
 	gitopsPath := e.WorkspacePath
+	if homeDir != hostHomeDir && strings.HasPrefix(gitopsPath, homeDir) {
+		// Replace container home with host home for docker-compose volume paths
+		gitopsPath = strings.Replace(gitopsPath, homeDir, hostHomeDir, 1)
+	}
+	
 	workspaceName := e.WorkspaceName
 	sshDir := gitopsPath + "/ssh"
+	
+	// Also convert bitswan-src path for examples mount
+	bitswanSrcPath := filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src"
 
 	bitswanEditor := map[string]interface{}{
 		"image":    bitswanEditorImage,
@@ -61,7 +81,7 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 			gitopsPath + "/workspace:/home/coder/workspace/workspace:z",
 			gitopsPath + "/secrets:/home/coder/workspace/secrets:z",
 			gitopsPath + "/codeserver-config:/home/coder/.config/code-server/:z",
-			filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src/examples:/home/coder/workspace/examples:ro",
+			bitswanSrcPath + "/examples:/home/coder/workspace/examples:ro",
 			sshDir + ":/home/coder/.ssh:z",
 		},
 	}
