@@ -1,0 +1,135 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"time"
+)
+
+// Client is an HTTP client that communicates with the daemon over Unix socket
+type Client struct {
+	httpClient *http.Client
+	socketPath string
+	token      string
+}
+
+// NewClient creates a new daemon client
+func NewClient() (*Client, error) {
+	return NewClientWithSocket(SocketPath)
+}
+
+// NewClientWithSocket creates a new daemon client with a custom socket path
+func NewClientWithSocket(socketPath string) (*Client, error) {
+	token, err := LoadToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load token: %w", err)
+	}
+
+	return &Client{
+		socketPath: socketPath,
+		token:      token,
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return net.Dial("unix", socketPath)
+				},
+			},
+			Timeout: 10 * time.Second,
+		},
+	}, nil
+}
+
+// doRequest performs an HTTP request with authentication
+func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	return c.httpClient.Do(req)
+}
+
+// Ping checks if the daemon is running
+func (c *Client) Ping() error {
+	req, err := http.NewRequest("GET", "http://unix/ping", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// GetStatus returns the daemon status
+func (c *Client) GetStatus() (*StatusResponse, error) {
+	req, err := http.NewRequest("GET", "http://unix/status", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var status StatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &status, nil
+}
+
+// GetVersion returns the daemon version
+func (c *Client) GetVersion() (string, error) {
+	req, err := http.NewRequest("GET", "http://unix/version", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result["version"], nil
+}
+
