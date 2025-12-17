@@ -23,14 +23,14 @@ func NewClient() (*Client, error) {
 	return NewClientWithSocket(SocketPath)
 }
 
-// NewClientWithSocket creates a new daemon client with a custom socket path
+// NewClientWithSocket creates a new daemon client with a custom socket path and verifies the daemon is running
 func NewClientWithSocket(socketPath string) (*Client, error) {
 	token, err := LoadToken()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load token: %w", err)
+		return nil, fmt.Errorf("automation server daemon is not initialized: %w", err)
 	}
 
-	return &Client{
+	client := &Client{
 		socketPath: socketPath,
 		token:      token,
 		httpClient: &http.Client{
@@ -41,7 +41,14 @@ func NewClientWithSocket(socketPath string) (*Client, error) {
 			},
 			Timeout: 10 * time.Second,
 		},
-	}, nil
+	}
+
+	// Verify the daemon is running by pinging it
+	if err := client.Ping(); err != nil {
+		return nil, fmt.Errorf("automation server daemon is not running: %w", err)
+	}
+
+	return client, nil
 }
 
 // doRequest performs an HTTP request with authentication
@@ -338,5 +345,75 @@ func (c *Client) RemoveAutomation(deploymentID string, workspace string) error {
 	}
 
 	return nil
+}
+
+// SelectWorkspace selects a workspace as the active workspace
+func (c *Client) SelectWorkspace(workspace string) error {
+	reqBody := WorkspaceSelectRequest{Workspace: workspace}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/workspace/select", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// ListWorkspaces returns the list of workspaces and the active workspace
+func (c *Client) ListWorkspaces() (*WorkspaceListResponse, error) {
+	req, err := http.NewRequest("GET", "http://unix/workspace/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("%s", errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result WorkspaceListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
 }
 

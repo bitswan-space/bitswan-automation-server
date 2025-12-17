@@ -118,6 +118,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/automations", s.authMiddleware(s.handleAutomations))
 	mux.HandleFunc("/automations/", s.authMiddleware(s.handleAutomations))
 
+	// Workspace endpoints (authenticated)
+	mux.HandleFunc("/workspace", s.authMiddleware(s.handleWorkspace))
+	mux.HandleFunc("/workspace/", s.authMiddleware(s.handleWorkspace))
+
 	return mux
 }
 
