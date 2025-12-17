@@ -45,6 +45,8 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkspaceInit(w, r)
 	case path == "update":
 		s.handleWorkspaceUpdate(w, r)
+	case path == "remove":
+		s.handleWorkspaceRemove(w, r)
 	default:
 		writeJSONError(w, "not found", http.StatusNotFound)
 	}
@@ -54,6 +56,11 @@ type WorkspaceRunRequest struct {
 	// Args are the original CLI args excluding the binary, e.g.:
 	// ["workspace","init","foo","--domain","bs-foo.localhost"]
 	Args []string `json:"args"`
+}
+
+// WorkspaceRemoveRequest represents the request body for removing a workspace
+type WorkspaceRemoveRequest struct {
+	Workspace string `json:"workspace"`
 }
 
 func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
@@ -301,5 +308,81 @@ func (s *Server) handleWorkspaceSelect(w http.ResponseWriter, r *http.Request) {
 		Message:   "Active workspace set to '" + req.Workspace + "'",
 		Workspace: req.Workspace,
 	})
+}
+
+func (s *Server) handleWorkspaceRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req WorkspaceRemoveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Workspace == "" {
+		writeJSONError(w, "workspace name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Stream logs (NDJSON)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Redirect stdout to stream logs
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
+		return
+	}
+
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	logWriter := NewLogStreamWriter(w, "info")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := rPipe.Read(buf)
+			if n > 0 {
+				logWriter.Write(buf[:n])
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", err))
+				break
+			}
+		}
+	}()
+
+	// Run remove logic
+	err = RunWorkspaceRemove(req.Workspace, wPipe)
+	wPipe.Close()
+	wg.Wait()
+
+	if err != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", err))
+	}
 }
 
