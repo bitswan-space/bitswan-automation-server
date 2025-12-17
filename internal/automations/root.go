@@ -5,13 +5,42 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/ansi"
-	"github.com/bitswan-space/bitswan-workspaces/internal/httpReq"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/httpReq"
 )
+
+// isRunningInDaemon returns true if we're running inside the automation server daemon container
+func isRunningInDaemon() bool {
+	return os.Getenv("BITSWAN_CADDY_HOST") != ""
+}
+
+// transformURLForDaemon converts a public gitops URL to an internal Docker network URL
+// e.g., https://foo-gitops.bs-foo.localhost/automations -> http://foo-gitops:8079/automations
+func transformURLForDaemon(originalURL string, workspaceName string) string {
+	if !isRunningInDaemon() {
+		return originalURL
+	}
+
+	// Parse the URL to get the path
+	parsed, err := url.Parse(originalURL)
+	if err != nil {
+		return originalURL
+	}
+
+	// Construct the internal URL using the workspace name
+	// The gitops container hostname is {workspaceName}-gitops and listens on port 8079
+	internalHost := fmt.Sprintf("%s-gitops:8079", workspaceName)
+	parsed.Scheme = "http"
+	parsed.Host = internalHost
+
+	return parsed.String()
+}
 
 // WorkspaceMisbehavingError is a custom error type for when the workspace API returns 500 errors
 type WorkspaceMisbehavingError struct {
@@ -36,6 +65,12 @@ type Automation struct {
 	Workspace    string `json:"workspace"`
 }
 
+// AutomationLog represents the logs response from the gitops API
+type AutomationLog struct {
+	Status string   `json:"status"`
+	Logs   []string `json:"logs"`
+}
+
 // Remove sends a request to remove the automation associated with the Automation object
 func (a *Automation) Remove() error {
 	// Retrieve workspace metadata
@@ -45,28 +80,148 @@ func (a *Automation) Remove() error {
 	}
 
 	// Construct the URL for stopping the automation
-	url := fmt.Sprintf("%s/automations/%s", metadata.GitopsURL, a.DeploymentID)
+	reqURL := fmt.Sprintf("%s/automations/%s", metadata.GitopsURL, a.DeploymentID)
+	reqURL = transformURLForDaemon(reqURL, a.Workspace)
 
-	// Send the request to stop the automation
-	resp, err := SendAutomationRequest("DELETE", url, metadata.GitopsSecret)
+	// Send the request to remove the automation
+	resp, err := SendAutomationRequest("DELETE", reqURL, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to remove automation: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("no automation named '%s' found", a.DeploymentID)
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to remove automation, status code: %d", resp.StatusCode)
 	}
 
-	fmt.Printf("Automation %s removed successfully.\n", a.DeploymentID)
 	return nil
 }
 
-func SendAutomationRequest(method, url string, workspaceSecret string) (*http.Response, error) {
-	// Create a new GET request
-	req, err := httpReq.NewRequest(method, url, nil)
+// Start sends a request to start the automation
+func (a *Automation) Start() error {
+	metadata, err := config.GetWorkspaceMetadata(a.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
 
+	reqURL := fmt.Sprintf("%s/automations/%s/start", metadata.GitopsURL, a.DeploymentID)
+	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	resp, err := SendAutomationRequest("POST", reqURL, metadata.GitopsSecret)
+	if err != nil {
+		return fmt.Errorf("failed to send request to start automation: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("no automation named '%s' found", a.DeploymentID)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to start automation, status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// Stop sends a request to stop the automation
+func (a *Automation) Stop() error {
+	metadata, err := config.GetWorkspaceMetadata(a.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
+
+	reqURL := fmt.Sprintf("%s/automations/%s/stop", metadata.GitopsURL, a.DeploymentID)
+	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	resp, err := SendAutomationRequest("POST", reqURL, metadata.GitopsSecret)
+	if err != nil {
+		return fmt.Errorf("failed to send request to stop automation: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("no automation named '%s' found", a.DeploymentID)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to stop automation, status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// Restart sends a request to restart the automation
+func (a *Automation) Restart() error {
+	metadata, err := config.GetWorkspaceMetadata(a.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
+
+	reqURL := fmt.Sprintf("%s/automations/%s/restart", metadata.GitopsURL, a.DeploymentID)
+	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	resp, err := SendAutomationRequest("POST", reqURL, metadata.GitopsSecret)
+	if err != nil {
+		return fmt.Errorf("failed to send request to restart automation: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("no automation named '%s' found", a.DeploymentID)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to restart automation, status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// GetLogs fetches logs for the automation
+func (a *Automation) GetLogs(lines int) (*AutomationLog, error) {
+	metadata, err := config.GetWorkspaceMetadata(a.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace metadata: %w", err)
+	}
+
+	reqURL := fmt.Sprintf("%s/automations/%s/logs", metadata.GitopsURL, a.DeploymentID)
+	if lines > 0 {
+		reqURL += fmt.Sprintf("?lines=%d", lines)
+	}
+	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+
+	resp, err := SendAutomationRequest("GET", reqURL, metadata.GitopsSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch logs: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("no automation named '%s' found", a.DeploymentID)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to get logs from automation: %s", resp.Status)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var automationLog AutomationLog
+	if err := json.Unmarshal(body, &automationLog); err != nil {
+		return nil, fmt.Errorf("failed to parse logs response: %w", err)
+	}
+
+	return &automationLog, nil
+}
+
+func SendAutomationRequest(method, requestURL string, workspaceSecret string) (*http.Response, error) {
+	// Create a new request
+	req, err := httpReq.NewRequest(method, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -75,7 +230,11 @@ func SendAutomationRequest(method, url string, workspaceSecret string) (*http.Re
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Authorization", "Bearer "+workspaceSecret)
 
-	// Use ExecuteRequestWithLocalhostResolution for .localhost domains
+	// When running in daemon, use simple HTTP client (URLs are already transformed)
+	// When running on host, use localhost resolution for .localhost domains
+	if isRunningInDaemon() {
+		return http.DefaultClient.Do(req)
+	}
 	return httpReq.ExecuteRequestWithLocalhostResolution(req)
 }
 
@@ -86,12 +245,11 @@ func GetAutomations(workspaceName string) ([]Automation, error) {
 		return nil, fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
 
-	fmt.Println("Fetching automations...")
-
-	url := fmt.Sprintf("%s/automations", metadata.GitopsURL)
+	reqURL := fmt.Sprintf("%s/automations", metadata.GitopsURL)
+	reqURL = transformURLForDaemon(reqURL, workspaceName)
 
 	// Send the request
-	resp, err := SendAutomationRequest("GET", url, metadata.GitopsSecret)
+	resp, err := SendAutomationRequest("GET", reqURL, metadata.GitopsSecret)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request: %w", err)
 	}

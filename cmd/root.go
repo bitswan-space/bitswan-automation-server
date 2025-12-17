@@ -12,7 +12,6 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/cmd/caddy"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/certauthority"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
-	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -32,19 +31,10 @@ func newRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(caddy.NewCaddyCmd())                                       // caddy subcommand (deprecated)
 	cmd.AddCommand(certauthority.NewCertAuthorityCmd())                       // certificate authority subcommand
 	cmd.AddCommand(automationserverdaemon.NewAutomationServerDaemonCmd())     // automation server daemon subcommand
+	cmd.AddCommand(automation.NewAutomationCmd())                             // automation subcommand
 
 	// Set the version for the daemon server
 	automationserverdaemon.SetVersion(version)
-
-	// Check if the configuration file exists and has an active workspace
-	cfg := config.NewAutomationServerConfig()
-	if cfg.ConfigExists() {
-		// Config exists, check if it has an active workspace
-		activeWorkspace, err := cfg.GetActiveWorkspace()
-		if err == nil && activeWorkspace != "" {
-			cmd.AddCommand(automation.NewAutomationCmd())
-		}
-	}
 
 	// Find and add external commands
 	addExternalCommands(cmd)

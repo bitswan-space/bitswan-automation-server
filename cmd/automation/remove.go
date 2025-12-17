@@ -2,42 +2,47 @@ package automation
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
-	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
 func newRemoveCmd() *cobra.Command {
+	var workspace string
+
 	cmd := &cobra.Command{
 		Use:   "remove",
 		Short: "Remove the automation",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.NewAutomationServerConfig()
-			workspaceName, err := cfg.GetActiveWorkspace()
 			automationDeploymentId := args[0]
+
+			client, err := daemon.NewClient()
 			if err != nil {
-				return fmt.Errorf("failed to get active workspace from automation server config: %v", err)
+				fmt.Fprintln(os.Stderr, "Error: Automation server daemon is not initialized.")
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			// Create an Automation instance
-			automation := automations.Automation{
-				DeploymentID: automationDeploymentId,
-				Workspace:    workspaceName,
+			// Check if daemon is reachable
+			if err := client.Ping(); err != nil {
+				fmt.Fprintln(os.Stderr, "Error: Automation server daemon is not running.")
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			// Print a message indicating the removal process
-			fmt.Printf("Removing automation %s...\n", automationDeploymentId)
-
-			// Call the Remove method on the Automation instance
-			err = automation.Remove()
-			if err != nil {
-				return fmt.Errorf("failed to remove automation: %v", err)
+			if err := client.RemoveAutomation(automationDeploymentId, workspace); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
 			}
+
+			fmt.Printf("Automation %s removed successfully.\n", automationDeploymentId)
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
 
 	return cmd
 }
