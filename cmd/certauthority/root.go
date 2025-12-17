@@ -2,11 +2,11 @@ package certauthority
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -28,49 +28,35 @@ func NewCertAuthorityCmd() *cobra.Command {
 	return cmd
 }
 
-func getCertAuthoritiesDir() (string, error) {
-	certDir := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "certauthorities")
-	if err := os.MkdirAll(certDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create certauthorities directory: %w", err)
-	}
-	return certDir, nil
-}
-
 func newListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List all certificate authorities",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			certDir, err := getCertAuthoritiesDir()
+			client, err := daemon.NewClient()
 			if err != nil {
-				return err
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			files, err := os.ReadDir(certDir)
+			result, err := client.ListCertAuthorities()
 			if err != nil {
-				return fmt.Errorf("failed to read certauthorities directory: %w", err)
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
 			}
 
-			if len(files) == 0 {
+			if len(result.CertAuthorities) == 0 {
 				fmt.Println("No certificate authorities found.")
-				fmt.Printf("Directory: %s\n", certDir)
+				fmt.Printf("Directory: %s\n", result.Directory)
 				return nil
 			}
 
 			fmt.Println("Certificate Authorities:")
-			count := 0
-			for _, file := range files {
-				if !file.IsDir() && (strings.HasSuffix(file.Name(), ".crt") || strings.HasSuffix(file.Name(), ".pem")) {
-					info, _ := file.Info()
-					fmt.Printf("  - %s (%.2f KB)\n", file.Name(), float64(info.Size())/1024)
-					count++
-				}
+			for _, cert := range result.CertAuthorities {
+				fmt.Printf("  - %s (%.2f KB)\n", cert.Name, cert.Size)
 			}
-
-			if count == 0 {
-				fmt.Println("No certificate authorities found (no .crt or .pem files).")
-			}
-			fmt.Printf("\nDirectory: %s\n", certDir)
+			fmt.Printf("\nDirectory: %s\n", result.Directory)
 			return nil
 		},
 	}
@@ -87,7 +73,8 @@ func newAddCmd() *cobra.Command {
 
 			// Check if source file exists
 			if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
-				return fmt.Errorf("source file does not exist: %s", sourcePath)
+				fmt.Fprintf(os.Stderr, "Error: source file does not exist: %s\n", sourcePath)
+				os.Exit(1)
 			}
 
 			// Determine the target filename
@@ -107,37 +94,21 @@ func newAddCmd() *cobra.Command {
 				targetName = filepath.Base(sourcePath)
 			}
 
-			certDir, err := getCertAuthoritiesDir()
+			client, err := daemon.NewClient()
 			if err != nil {
-				return err
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			targetPath := filepath.Join(certDir, targetName)
-
-			// Check if file already exists
-			if _, err := os.Stat(targetPath); err == nil {
-				return fmt.Errorf("certificate authority '%s' already exists", targetName)
-			}
-
-			// Copy the certificate file
-			sourceFile, err := os.Open(sourcePath)
+			result, err := client.AddCertAuthority(sourcePath, targetName)
 			if err != nil {
-				return fmt.Errorf("failed to open source file: %w", err)
-			}
-			defer sourceFile.Close()
-
-			targetFile, err := os.Create(targetPath)
-			if err != nil {
-				return fmt.Errorf("failed to create target file: %w", err)
-			}
-			defer targetFile.Close()
-
-			if _, err := io.Copy(targetFile, sourceFile); err != nil {
-				return fmt.Errorf("failed to copy certificate: %w", err)
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
 			}
 
-			fmt.Printf("✓ Certificate authority '%s' added successfully.\n", targetName)
-			fmt.Printf("  Location: %s\n", targetPath)
+			fmt.Printf("✓ %s\n", result.Message)
+			fmt.Printf("  Location: %s\n", result.Location)
 			return nil
 		},
 	}
@@ -152,21 +123,16 @@ func newRemoveCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			certName := args[0]
 
-			certDir, err := getCertAuthoritiesDir()
+			client, err := daemon.NewClient()
 			if err != nil {
-				return err
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			certPath := filepath.Join(certDir, certName)
-
-			// Check if file exists
-			if _, err := os.Stat(certPath); os.IsNotExist(err) {
-				return fmt.Errorf("certificate authority '%s' not found", certName)
-			}
-
-			// Remove the file
-			if err := os.Remove(certPath); err != nil {
-				return fmt.Errorf("failed to remove certificate: %w", err)
+			if err := client.RemoveCertAuthority(certName); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
 			}
 
 			fmt.Printf("✓ Certificate authority '%s' removed successfully.\n", certName)
