@@ -2,11 +2,13 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -415,5 +417,121 @@ func (c *Client) ListWorkspaces() (*WorkspaceListResponse, error) {
 	}
 
 	return &result, nil
+}
+
+// ListCertAuthorities returns the list of certificate authorities
+func (c *Client) ListCertAuthorities() (*CertAuthorityListResponse, error) {
+	req, err := http.NewRequest("GET", "http://unix/certauthority/list", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("%s", errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result CertAuthorityListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// AddCertAuthority adds a certificate authority from a file
+func (c *Client) AddCertAuthority(sourcePath string, targetName string) (*CertAuthorityAddResponse, error) {
+	// Read the source file
+	fileContent, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read source file: %w", err)
+	}
+
+	// Encode as base64
+	encodedContent := base64.StdEncoding.EncodeToString(fileContent)
+
+	reqBody := CertAuthorityAddRequest{
+		FileName:    targetName,
+		FileContent: encodedContent,
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/certauthority/add", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("%s", errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result CertAuthorityAddResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// RemoveCertAuthority removes a certificate authority
+func (c *Client) RemoveCertAuthority(certName string) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("http://unix/certauthority/remove/%s", certName), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 

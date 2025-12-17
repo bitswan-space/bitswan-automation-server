@@ -122,6 +122,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/workspace", s.authMiddleware(s.handleWorkspace))
 	mux.HandleFunc("/workspace/", s.authMiddleware(s.handleWorkspace))
 
+	// Certificate authority endpoints (authenticated)
+	mux.HandleFunc("/certauthority", s.authMiddleware(s.handleCertAuthority))
+	mux.HandleFunc("/certauthority/", s.authMiddleware(s.handleCertAuthority))
+
 	return mux
 }
 
