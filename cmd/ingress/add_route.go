@@ -3,9 +3,8 @@ package ingress
 import (
 	"fmt"
 	"os"
-	"strings"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -28,36 +27,20 @@ Examples:
 			hostname := args[0]
 			upstream := args[1]
 
-			// Handle certificate generation and installation
-			if mkcert {
-				// Extract domain from hostname
-				parts := strings.Split(hostname, ".")
-				if len(parts) < 2 {
-					return fmt.Errorf("invalid hostname format: %s (must contain at least one dot)", hostname)
-				}
-				domain := strings.Join(parts[1:], ".")
-
-				// Generate certificate for the specific hostname
-				if err := caddyapi.GenerateAndInstallCertsForHostname(hostname, domain); err != nil {
-					return fmt.Errorf("failed to generate and install certificates: %w", err)
-				}
-
-				// Install TLS policies for the specific hostname
-				// Use "default" as workspace name when none is provided
-				if err := caddyapi.InstallTLSCertsForHostname(hostname, domain, "default"); err != nil {
-					return fmt.Errorf("failed to install TLS policies: %w", err)
-				}
-			} else if certsDir != "" {
-				// Install certificates from directory
-				caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-				if err := caddyapi.InstallCertsFromDir(certsDir, hostname, caddyConfig); err != nil {
-					return fmt.Errorf("failed to install certificates from directory: %w", err)
-				}
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			if err := caddyapi.AddRoute(hostname, upstream); err != nil {
-				return fmt.Errorf("failed to add route: %w", err)
+			result, err := client.AddIngressRoute(hostname, upstream, mkcert, certsDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
 			}
+
+			fmt.Println(result.Message)
 			return nil
 		},
 	}

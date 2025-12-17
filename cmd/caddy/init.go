@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -18,9 +18,21 @@ func newInitCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Print deprecation warning to STDERR
 			fmt.Fprintln(os.Stderr, "WARNING: The 'caddy init' command is deprecated and will be removed in a future version. Please use 'ingress init' instead.")
-			if err := ingress.InitIngress(verbose); err != nil {
-				return fmt.Errorf("failed to initialize Caddy: %w", err)
+			
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
+
+			result, err := client.InitIngress(verbose)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
 			return nil
 		},
 	}

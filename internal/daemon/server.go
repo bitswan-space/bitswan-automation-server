@@ -126,6 +126,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/certauthority", s.authMiddleware(s.handleCertAuthority))
 	mux.HandleFunc("/certauthority/", s.authMiddleware(s.handleCertAuthority))
 
+	// Ingress endpoints (authenticated)
+	mux.HandleFunc("/ingress", s.authMiddleware(s.handleIngress))
+	mux.HandleFunc("/ingress/", s.authMiddleware(s.handleIngress))
+
 	return mux
 }
 
