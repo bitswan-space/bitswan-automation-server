@@ -27,8 +27,19 @@ type WorkspaceSelectResponse struct {
 
 // WorkspaceListResponse represents the response from listing workspaces
 type WorkspaceListResponse struct {
-	Workspaces      []string `json:"workspaces"`
-	ActiveWorkspace string   `json:"active_workspace"`
+	Workspaces      []WorkspaceInfo `json:"workspaces"`
+	ActiveWorkspace string          `json:"active_workspace"`
+}
+
+// WorkspaceInfo contains detailed information about a workspace
+type WorkspaceInfo struct {
+	Name         string `json:"name"`
+	Domain       string `json:"domain,omitempty"`
+	EditorURL    string `json:"editor_url,omitempty"`
+	GitopsURL    string `json:"gitops_url,omitempty"`
+	SSHPublicKey string `json:"ssh_public_key,omitempty"`
+	VSCodePassword string `json:"vscode_password,omitempty"`
+	GitopsSecret string `json:"gitops_secret,omitempty"`
 }
 
 // handleWorkspace routes workspace-related requests
@@ -222,35 +233,19 @@ func (s *Server) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bitswanDir := filepath.Join(os.Getenv("HOME"), ".config", "bitswan")
-	workspacesDir := filepath.Join(bitswanDir, "workspaces")
+	// Parse query parameters
+	long := r.URL.Query().Get("long") == "true"
+	showPasswords := r.URL.Query().Get("passwords") == "true"
 
-	var workspaces []string
-
-	// Check if workspaces directory exists
-	if _, err := os.Stat(workspacesDir); !os.IsNotExist(err) {
-		files, err := os.ReadDir(workspacesDir)
-		if err != nil {
-			writeJSONError(w, "failed to read workspaces directory: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, file := range files {
-			if file.IsDir() {
-				workspaces = append(workspaces, file.Name())
-			}
-		}
+	result, err := GetWorkspaceList(long, showPasswords)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-
-	// Get active workspace
-	cfg := config.NewAutomationServerConfig()
-	activeWorkspace, _ := cfg.GetActiveWorkspace()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(WorkspaceListResponse{
-		Workspaces:      workspaces,
-		ActiveWorkspace: activeWorkspace,
-	})
+	json.NewEncoder(w).Encode(result)
 }
 
 // handleWorkspaceSelect handles POST /workspace/select

@@ -396,8 +396,21 @@ func (c *Client) SelectWorkspace(workspace string) error {
 }
 
 // ListWorkspaces returns the list of workspaces and the active workspace
-func (c *Client) ListWorkspaces() (*WorkspaceListResponse, error) {
-	req, err := http.NewRequest("GET", "http://unix/workspace/list", nil)
+func (c *Client) ListWorkspaces(long, showPasswords bool) (*WorkspaceListResponse, error) {
+	url := "http://unix/workspace/list"
+	if long || showPasswords {
+		url += "?"
+		params := []string{}
+		if long {
+			params = append(params, "long=true")
+		}
+		if showPasswords {
+			params = append(params, "passwords=true")
+		}
+		url += strings.Join(params, "&")
+	}
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

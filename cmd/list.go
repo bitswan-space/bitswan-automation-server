@@ -3,14 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/services"
-	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
-
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 func newListCmd() *cobra.Command {
@@ -23,61 +18,44 @@ func newListCmd() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workspacesDir := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces")
-
-			// Check if directory exists
-			if _, err := os.Stat(workspacesDir); os.IsNotExist(err) {
-				return fmt.Errorf("workspaces directory not found: %s", workspacesDir)
-			}
-
-			// Read directory entries
-			entries, err := os.ReadDir(workspacesDir)
+			client, err := daemon.NewClient()
 			if err != nil {
-				return fmt.Errorf("failed to read workspaces directory: %w", err)
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
 			}
 
-			// Print each subdirectory
-			for _, entry := range entries {
-				if entry.IsDir() {
-					workspaceName := entry.Name()
-					fmt.Fprintln(cmd.OutOrStdout(), workspaceName)
-					if long {
-						domain, editorURL, gitopsURL := getMetaData(workspaceName, workspacesDir)
-						if domain != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "  Workspace Domain: %s\n", domain)
-						}
-						if editorURL != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "  Editor URL: %s\n", editorURL)
-						}
-						if gitopsURL != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "  Gitops URL: %s\n", gitopsURL)
-						}
-						
-						// Show SSH public key
-						workspacePath := filepath.Join(workspacesDir, workspaceName)
-						if ssh.SSHKeyExists(workspacePath) {
-							publicKey, err := ssh.GetSSHPublicKey(workspacePath)
-							if err == nil {
-								fmt.Fprintf(cmd.OutOrStdout(), "  SSH Public Key: %s", strings.TrimSpace(publicKey))
-							}
-						}
+			result, err := client.ListWorkspaces(long, showPasswords)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Print workspaces
+			for _, workspace := range result.Workspaces {
+				fmt.Fprintln(cmd.OutOrStdout(), workspace.Name)
+				
+				if long {
+					if workspace.Domain != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  Workspace Domain: %s\n", workspace.Domain)
 					}
+					if workspace.EditorURL != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  Editor URL: %s\n", workspace.EditorURL)
+					}
+					if workspace.GitopsURL != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  Gitops URL: %s\n", workspace.GitopsURL)
+					}
+					if workspace.SSHPublicKey != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  SSH Public Key: %s\n", workspace.SSHPublicKey)
+					}
+				}
 
-					if showPasswords {
-						// Get VSCode server password
-						editorService, err := services.NewEditorService(workspaceName)
-						if err == nil {
-							vscodePassword, _ := editorService.GetEditorPassword()
-							if vscodePassword != "" {
-								fmt.Fprintf(cmd.OutOrStdout(), "  VSCode Password: %s\n", vscodePassword)
-							}
-						}
-
-						// Get GitOps secret
-						gitopsSecret, _ := getGitOpsSecret(workspaceName, workspacesDir)
-						if gitopsSecret != "" {
-							fmt.Fprintf(cmd.OutOrStdout(), "  GitOps Secret: %s\n", gitopsSecret)
-						}
+				if showPasswords {
+					if workspace.VSCodePassword != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  VSCode Password: %s\n", workspace.VSCodePassword)
+					}
+					if workspace.GitopsSecret != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "  GitOps Secret: %s\n", workspace.GitopsSecret)
 					}
 				}
 			}
@@ -90,82 +68,4 @@ func newListCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&long, "long", "l", false, "Show verbose output")
 
 	return cmd
-}
-
-func getMetaData(workspaceName string, workspacesDir string) (string, string, string) {
-	// Path to metadata.yaml file
-	metadataPath := filepath.Join(workspacesDir, workspaceName, "metadata.yaml")
-
-	// Check if metadata file exists
-	if _, err := os.Stat(metadataPath); os.IsNotExist(err) {
-		return "", "", ""
-	}
-
-	// Read metadata file
-	data, err := os.ReadFile(metadataPath)
-	if err != nil {
-		return "", "", ""
-	}
-
-	// Parse YAML
-	var metadata struct {
-		Domain    string `yaml:"domain"`
-		EditorURL string `yaml:"editor-url"`
-		GitopsURL string `yaml:"gitops-url"`
-	}
-
-	if err := yaml.Unmarshal(data, &metadata); err != nil {
-		return "", "", ""
-	}
-
-	return metadata.Domain, metadata.EditorURL, metadata.GitopsURL
-}
-
-func getGitOpsSecret(workspace string, workspacesDir string) (string, error) {
-	// Read docker-compose.yml file
-	composeFilePath := filepath.Join(workspacesDir, workspace, "deployment", "docker-compose.yml")
-
-	data, err := os.ReadFile(composeFilePath)
-	if err != nil {
-		return "", err
-	}
-
-	// Parse YAML to extract the secret
-	var composeConfig map[string]interface{}
-	if err := yaml.Unmarshal(data, &composeConfig); err != nil {
-		return "", err
-	}
-
-	// Navigate through the YAML structure to find the secret
-	services, ok := composeConfig["services"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("services section not found")
-	}
-
-	editorService, ok := services["bitswan-gitops"].(map[string]interface{})
-	if !ok {
-		return "", fmt.Errorf("editor service not found")
-	}
-
-	env, ok := editorService["environment"].([]interface{})
-	if !ok {
-		return "", fmt.Errorf("environment section not found")
-	}
-
-	// Look for the BITSWAN_GITOPS_SECRET in the environment variables
-	for _, item := range env {
-		envVar, ok := item.(string)
-		if !ok {
-			continue
-		}
-
-		if strings.HasPrefix(envVar, "BITSWAN_GITOPS_SECRET=") {
-			parts := strings.SplitN(envVar, "=", 2)
-			if len(parts) == 2 {
-				return parts[1], nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("GitOps secret not found")
 }
