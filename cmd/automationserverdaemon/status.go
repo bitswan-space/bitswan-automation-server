@@ -19,20 +19,16 @@ func newStatusCmd() *cobra.Command {
 func runStatusCmd(cmd *cobra.Command, args []string) error {
 	client, err := daemon.NewClient()
 	if err != nil {
-		return fmt.Errorf("failed to create daemon client: %w", err)
-	}
-
-	// First check if daemon is reachable
-	if err := client.Ping(); err != nil {
-		fmt.Fprintln(os.Stderr, "Automation server daemon is not running")
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it")
-		return fmt.Errorf("daemon not reachable: %w", err)
+		os.Exit(1)
 	}
 
 	// Get status from daemon
 	status, err := client.GetStatus()
 	if err != nil {
-		return fmt.Errorf("failed to get daemon status: %w", err)
+		fmt.Fprintf(os.Stderr, "Error: failed to get daemon status: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Display status

@@ -20,14 +20,7 @@ func newStartCmd() *cobra.Command {
 
 			client, err := daemon.NewClient()
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "Error: Automation server daemon is not initialized.")
-				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
-				os.Exit(1)
-			}
-
-			// Check if daemon is reachable
-			if err := client.Ping(); err != nil {
-				fmt.Fprintln(os.Stderr, "Error: Automation server daemon is not running.")
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
 				os.Exit(1)
 			}
