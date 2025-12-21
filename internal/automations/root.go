@@ -20,9 +20,9 @@ func isRunningInDaemon() bool {
 	return os.Getenv("BITSWAN_CADDY_HOST") != ""
 }
 
-// transformURLForDaemon converts a public gitops URL to an internal Docker network URL
+// TransformURLForDaemon converts a public gitops URL to an internal Docker network URL
 // e.g., https://foo-gitops.bs-foo.localhost/automations -> http://foo-gitops:8079/automations
-func transformURLForDaemon(originalURL string, workspaceName string) string {
+func TransformURLForDaemon(originalURL string, workspaceName string) string {
 	if !isRunningInDaemon() {
 		return originalURL
 	}
@@ -81,7 +81,7 @@ func (a *Automation) Remove() error {
 
 	// Construct the URL for stopping the automation
 	reqURL := fmt.Sprintf("%s/automations/%s", metadata.GitopsURL, a.DeploymentID)
-	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	reqURL = TransformURLForDaemon(reqURL, a.Workspace)
 
 	// Send the request to remove the automation
 	resp, err := SendAutomationRequest("DELETE", reqURL, metadata.GitopsSecret)
@@ -109,7 +109,7 @@ func (a *Automation) Start() error {
 	}
 
 	reqURL := fmt.Sprintf("%s/automations/%s/start", metadata.GitopsURL, a.DeploymentID)
-	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	reqURL = TransformURLForDaemon(reqURL, a.Workspace)
 	resp, err := SendAutomationRequest("POST", reqURL, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to start automation: %w", err)
@@ -135,7 +135,7 @@ func (a *Automation) Stop() error {
 	}
 
 	reqURL := fmt.Sprintf("%s/automations/%s/stop", metadata.GitopsURL, a.DeploymentID)
-	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	reqURL = TransformURLForDaemon(reqURL, a.Workspace)
 	resp, err := SendAutomationRequest("POST", reqURL, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to stop automation: %w", err)
@@ -161,7 +161,7 @@ func (a *Automation) Restart() error {
 	}
 
 	reqURL := fmt.Sprintf("%s/automations/%s/restart", metadata.GitopsURL, a.DeploymentID)
-	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	reqURL = TransformURLForDaemon(reqURL, a.Workspace)
 	resp, err := SendAutomationRequest("POST", reqURL, metadata.GitopsSecret)
 	if err != nil {
 		return fmt.Errorf("failed to send request to restart automation: %w", err)
@@ -190,7 +190,7 @@ func (a *Automation) GetLogs(lines int) (*AutomationLog, error) {
 	if lines > 0 {
 		reqURL += fmt.Sprintf("?lines=%d", lines)
 	}
-	reqURL = transformURLForDaemon(reqURL, a.Workspace)
+	reqURL = TransformURLForDaemon(reqURL, a.Workspace)
 
 	resp, err := SendAutomationRequest("GET", reqURL, metadata.GitopsSecret)
 	if err != nil {
@@ -246,7 +246,7 @@ func GetAutomations(workspaceName string) ([]Automation, error) {
 	}
 
 	reqURL := fmt.Sprintf("%s/automations", metadata.GitopsURL)
-	reqURL = transformURLForDaemon(reqURL, workspaceName)
+	reqURL = TransformURLForDaemon(reqURL, workspaceName)
 
 	// Send the request
 	resp, err := SendAutomationRequest("GET", reqURL, metadata.GitopsSecret)
