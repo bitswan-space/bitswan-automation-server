@@ -2,9 +2,13 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -270,4 +274,93 @@ func (s *Server) handleAutomations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSONError(w, "invalid path", http.StatusNotFound)
+}
+
+// PullAndDeployRequest represents the request body for pull-and-deploy
+type PullAndDeployRequest struct {
+	Workspace string `json:"workspace"`
+	Branch    string `json:"branch"`
+	Force     bool   `json:"force"`
+	NoBuild   bool   `json:"no_build"`
+}
+
+func (s *Server) handlePullAndDeploy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req PullAndDeployRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Workspace == "" {
+		writeJSONError(w, "workspace is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Branch == "" {
+		writeJSONError(w, "branch is required", http.StatusBadRequest)
+		return
+	}
+
+	// Stream logs (NDJSON)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Redirect stdout to stream logs
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
+		return
+	}
+
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	logWriter := NewLogStreamWriter(w, "info")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := rPipe.Read(buf)
+			if n > 0 {
+				logWriter.Write(buf[:n])
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", err))
+				break
+			}
+		}
+	}()
+
+	// Run pull-and-deploy logic
+	err = RunPullAndDeploy(req.Workspace, req.Branch, req.Force, req.NoBuild, wPipe)
+	wPipe.Close()
+	wg.Wait()
+
+	if err != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", err))
+	}
 }

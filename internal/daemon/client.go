@@ -884,6 +884,46 @@ func (c *Client) WorkspaceRemove(workspaceName string) error {
 	return err
 }
 
+// PullAndDeploy runs `bitswan pull-and-deploy ...` via the daemon with NDJSON streaming.
+func (c *Client) PullAndDeploy(workspaceName, branchName string, force, noBuild bool) error {
+	bodyBytes, err := json.Marshal(PullAndDeployRequest{
+		Workspace: workspaceName,
+		Branch:    branchName,
+		Force:     force,
+		NoBuild:   noBuild,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/automations/pull-and-deploy/", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	_, err = c.streamLogs(resp.Body, os.Stdout)
+	return err
+}
+
 // streamLogs reads NDJSON from the response and displays logs in real-time
 func (c *Client) streamLogs(body io.Reader, output io.Writer) (*ServiceResponse, error) {
 	scanner := bufio.NewScanner(body)
