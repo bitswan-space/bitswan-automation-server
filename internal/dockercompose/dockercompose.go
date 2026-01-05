@@ -30,6 +30,8 @@ type DockerComposeConfig struct {
 	OAuthEnvVars       []string
 	GitopsDevSourceDir string
 	TrustCA            bool
+	LocalRemotePath string // Host path to local repository (if using local remote)
+	LocalRemoteName string // Mount name for local repository (used for mount point path)
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -137,6 +139,14 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			workspaceDir,
 		}
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
+	}
+	
+	// If this workspace has a local remote repository, mount it so GitOps can access it
+	if config.LocalRemotePath != "" && config.LocalRemoteName != "" {
+		// Mount local repository to /remote-repos/<name> for GitOps to access
+		// The mount name is used to construct the mount point path
+		localRemoteMount := config.LocalRemotePath + ":/remote-repos/" + config.LocalRemoteName + ":ro"
+		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), localRemoteMount)
 	}
 
 	// Rewrite .git in worktree for all OS to use container path

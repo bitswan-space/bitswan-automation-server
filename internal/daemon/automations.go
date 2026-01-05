@@ -242,6 +242,18 @@ func (s *Server) handleAutomations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle special endpoints first
+	if strings.HasPrefix(path, "pull-and-deploy") {
+		s.handlePullAndDeploy(w, r)
+		return
+	}
+	
+	// Also handle pull-and-deploy with trailing slash
+	if path == "pull-and-deploy/" || path == "pull-and-deploy" {
+		s.handlePullAndDeploy(w, r)
+		return
+	}
+
 	// Parse the path to get deployment ID and action
 	parts := strings.Split(path, "/")
 	deploymentID := parts[0]

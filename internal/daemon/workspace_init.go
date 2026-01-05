@@ -157,97 +157,220 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create GitOps directory: %w", err)
 	}
+	
+	// Ensure user1000 exists (create if it doesn't)
+	checkUserCmd := exec.Command("id", "-u", "1000")
+	if checkUserCmd.Run() != nil {
+		// User doesn't exist, create it
+		createUserCmd := exec.Command("useradd", "-u", "1000", "-m", "-s", "/bin/sh", "user1000")
+		createUserCmd.Run() // Ignore errors, might already exist
+	}
+	
+	// Ensure the entire path is accessible to user1000 by chowning parent directories
+	// Chown /root/.config/bitswan to ensure user1000 can access workspaces
+	// Also need to ensure /root is accessible (at least execute permission)
+	chownRootCmd := exec.Command("chmod", "755", "/root")
+	chownRootCmd.Run() // Ignore errors
+	chownRootConfigCmd := exec.Command("chmod", "755", "/root/.config")
+	chownRootConfigCmd.Run() // Ignore errors
+	
+	bitswanConfigDir := bitswanConfig
+	chownBitswanCmd := exec.Command("chown", "-R", "1000:1000", bitswanConfigDir)
+	chownBitswanCmd.Run() // Ignore errors, might already be correct
+	
+	// Ensure the directory is owned by user1000 from the start
+	chownConfigCmd := exec.Command("chown", "-R", "1000:1000", gitopsConfig)
+	if err := chownConfigCmd.Run(); err != nil {
+		return fmt.Errorf("failed to chown gitops config directory: %w", err)
+	}
 
 	// Initialize Bitswan workspace
 	gitopsWorkspace := gitopsConfig + "/workspace"
+	var localRemoteName string
+	var localRemotePath string
 	if *remoteRepo != "" {
-		// Generate SSH key pair for the workspace before cloning
-		fmt.Println("Generating SSH key pair for workspace...")
-		sshKeyPair, err := ssh.GenerateSSHKeyPair(gitopsConfig)
-		if err != nil {
-			return fmt.Errorf("failed to generate SSH key pair: %w", err)
-		}
-		fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
-
-		// Parse repository URL to get hostname, org, and repo
-		repoInfo, err := parseRepositoryURL(*remoteRepo)
-		if err != nil {
-			return fmt.Errorf("failed to parse repository URL: %w", err)
-		}
-
-		// Display the public key and wait for user confirmation
-		fmt.Println("\n" + strings.Repeat("=", 60))
-		fmt.Println("IMPORTANT: SSH Key Setup Required")
-		fmt.Println(strings.Repeat("=", 60))
-		fmt.Printf("Your SSH public key is:\n\n%s\n", sshKeyPair.PublicKey)
-		fmt.Println("\nPlease add this key as a deploy key to your repository:")
-		fmt.Printf("Repository: %s/%s\n", repoInfo.Org, repoInfo.Repo)
-		fmt.Println("\nSteps:")
-		fmt.Println("1. Go to your repository settings")
-		fmt.Println("2. Navigate to Deploy keys section")
-		fmt.Println("3. Add a new deploy key")
-		fmt.Println("4. Paste the public key above")
-		fmt.Println("5. Give it a descriptive name (e.g., 'bitswan-workspace')")
-		fmt.Println("6. Make sure to check 'Allow write access' if you plan to push changes")
-		fmt.Println("\nPress ENTER to continue once you've added the deploy key...")
-
-		// Wait for user input
-		var input string
-		fmt.Scanln(&input)
-
-		var cloneURL string
-		// Clone using SSH key
-		cloneURL = fmt.Sprintf("git@%s:%s/%s.git", repoInfo.Hostname, repoInfo.Org, repoInfo.Repo)
-		com := exec.Command("git", "clone", cloneURL, gitopsWorkspace) //nolint:gosec
-
-		// Set up SSH command based on whether custom SSH port is specified
-		if *sshPort != "" {
-			// Create SSH config file for custom port access
-			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo, *sshPort)
-			if err != nil {
-				return fmt.Errorf("failed to create SSH config: %w", err)
+		// Check if this is a local file path (starts with / or file://)
+		isLocalPath := strings.HasPrefix(*remoteRepo, "/") || strings.HasPrefix(*remoteRepo, "file://")
+		
+		if isLocalPath {
+			// Handle local file path - clone directly without SSH setup
+			clonePath := *remoteRepo
+			if strings.HasPrefix(clonePath, "file://") {
+				clonePath = strings.TrimPrefix(clonePath, "file://")
+			}
+			
+			fmt.Println("Cloning local repository...")
+		// Run git clone as user1000 to ensure the cloned repository is owned by user1000
+		// Use su to switch to user1000 for git operations
+		// Escape the paths for shell safety
+		com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git clone %q %q", clonePath, gitopsWorkspace)) //nolint:gosec
+			if err := runCommandVerbose(com, *verbose); err != nil {
+				return fmt.Errorf("failed to clone local repository: %w", err)
+			}
+			fmt.Println("Local repository cloned!")
+			
+			// For local remotes, we need to mount the repository in the GitOps container
+			// so it can fetch from it. Determine the host path and mount name.
+			hostHomeDir := os.Getenv("HOST_HOME")
+			
+			if strings.HasPrefix(clonePath, "/root/.config/bitswan/workspaces/") {
+				// Extract workspace name from path: /root/.config/bitswan/workspaces/<workspace-name>/workspace
+				parts := strings.Split(strings.TrimPrefix(clonePath, "/root/.config/bitswan/workspaces/"), "/")
+				if len(parts) >= 1 && parts[0] != "" {
+					localRemoteName = parts[0]
+					// Get the host path for the local repository
+					if hostHomeDir != "" {
+						localRemotePath = filepath.Join(hostHomeDir, ".config", "bitswan", "workspaces", localRemoteName, "workspace")
+						// Store the mount point URL for later (after push)
+						// We'll update the remote URL after the push succeeds
+						fmt.Printf("Detected workspace repository remote. Will update remote URL after push to: /remote-repos/%s\n", localRemoteName)
+					} else {
+						fmt.Printf("Warning: HOST_HOME not set, cannot set up local remote mount\n")
+					}
+				}
+			} else {
+				// For other local paths, we need to mount them too so GitOps can access them
+				// Convert container path to host path if needed
+				if hostHomeDir != "" && strings.HasPrefix(clonePath, "/root/.config/bitswan/") {
+					// Convert container path to host path
+					relativePath := strings.TrimPrefix(clonePath, "/root/.config/bitswan")
+					localRemotePath = filepath.Join(hostHomeDir, ".config", "bitswan") + relativePath
+					// Use a generic mount point name
+					localRemoteName = "remote-repo"
+					// Update remote URL to use mount point
+					remoteURLForGitOps := filepath.Join("/remote-repos", "remote-repo")
+					fmt.Printf("Detected local repository remote. Will update remote URL after push to: %s\n", remoteURLForGitOps)
+				} else if strings.HasPrefix(clonePath, "/host/") {
+					// Already a /host/ path, use it directly
+					localRemotePath = clonePath
+					localRemoteName = "remote-repo"
+					remoteURLForGitOps := strings.TrimPrefix(clonePath, "/host")
+					fmt.Printf("Detected /host/ path remote. Will update remote URL after push to: %s\n", remoteURLForGitOps)
+				} else {
+					// Absolute path on host, use as-is
+					localRemotePath = clonePath
+					localRemoteName = "remote-repo"
+					remoteURLForGitOps := filepath.Join("/remote-repos", "remote-repo")
+					fmt.Printf("Detected local path remote. Will update remote URL after push to: %s\n", remoteURLForGitOps)
+				}
 			}
 
-			// Replace hostname with our SSH config host
-			cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
-
-			// Update the clone command with the new URL
-			com = exec.Command("git", "clone", cloneURL, gitopsWorkspace)
-
-			// Set up SSH to use the config file
-			com.Env = append(os.Environ(),
-				fmt.Sprintf("GIT_SSH_COMMAND=ssh -F %s -o StrictHostKeyChecking=no", sshConfigPath))
+			// Checkout specified branch if provided
+			if *workspaceBranch != "" {
+				fmt.Printf("Checking out branch '%s'...\n", *workspaceBranch)
+				// First check if branch exists - run as user1000
+				checkBranchCmd := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git rev-parse --verify origin/%s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
+				if checkBranchCmd.Run() == nil {
+					// Branch exists in remote, checkout it
+					checkoutCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout -b %s origin/%s", gitopsWorkspace, *workspaceBranch, *workspaceBranch)) //nolint:gosec
+					if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+						// Try just checking out if branch already exists locally
+						checkoutCom = exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout %s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
+						if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+							fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
+							fmt.Printf("Continuing with the default branch...\n")
+						} else {
+							fmt.Printf("Successfully checked out branch '%s'!\n", *workspaceBranch)
+						}
+					} else {
+						fmt.Printf("Successfully checked out branch '%s'!\n", *workspaceBranch)
+					}
+				} else {
+					// Branch doesn't exist in remote, it will be created as orphan branch later
+					fmt.Printf("Branch '%s' does not exist in remote, will be created as orphan branch\n", *workspaceBranch)
+				}
+			}
 		} else {
-			// Set up SSH to use the generated key directly
-			com.Env = append(os.Environ(),
-				fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPair.PrivateKeyPath))
-		}
+			// Generate SSH key pair for the workspace before cloning
+			fmt.Println("Generating SSH key pair for workspace...")
+			sshKeyPair, err := ssh.GenerateSSHKeyPair(gitopsConfig)
+			if err != nil {
+				return fmt.Errorf("failed to generate SSH key pair: %w", err)
+			}
+			fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
 
-		fmt.Println("Cloning remote repository...")
-		if err := runCommandVerbose(com, *verbose); err != nil {
-			return fmt.Errorf("failed to clone remote repository: %w", err)
-		}
-		fmt.Println("Remote repository cloned!")
+			// Parse repository URL to get hostname, org, and repo
+			repoInfo, err := parseRepositoryURL(*remoteRepo)
+			if err != nil {
+				return fmt.Errorf("failed to parse repository URL: %w", err)
+			}
 
-		// Checkout specified branch if provided
-		if *workspaceBranch != "" {
-			fmt.Printf("Checking out branch '%s'...\n", *workspaceBranch)
-			checkoutCom := exec.Command("git", "checkout", *workspaceBranch)
-			checkoutCom.Dir = gitopsWorkspace
-			if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
-				fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
-				fmt.Printf("Continuing with the default branch...\n")
+			// Display the public key and wait for user confirmation
+			fmt.Println("\n" + strings.Repeat("=", 60))
+			fmt.Println("IMPORTANT: SSH Key Setup Required")
+			fmt.Println(strings.Repeat("=", 60))
+			fmt.Printf("Your SSH public key is:\n\n%s\n", sshKeyPair.PublicKey)
+			fmt.Println("\nPlease add this key as a deploy key to your repository:")
+			fmt.Printf("Repository: %s/%s\n", repoInfo.Org, repoInfo.Repo)
+			fmt.Println("\nSteps:")
+			fmt.Println("1. Go to your repository settings")
+			fmt.Println("2. Navigate to Deploy keys section")
+			fmt.Println("3. Add a new deploy key")
+			fmt.Println("4. Paste the public key above")
+			fmt.Println("5. Give it a descriptive name (e.g., 'bitswan-workspace')")
+			fmt.Println("6. Make sure to check 'Allow write access' if you plan to push changes")
+			fmt.Println("\nPress ENTER to continue once you've added the deploy key...")
+
+			// Wait for user input
+			var input string
+			fmt.Scanln(&input)
+
+			var cloneURL string
+			// Clone using SSH key as user1000
+			cloneURL = fmt.Sprintf("git@%s:%s/%s.git", repoInfo.Hostname, repoInfo.Org, repoInfo.Repo)
+			
+			// Build SSH command
+			var sshCmd string
+			if *sshPort != "" {
+				// Create SSH config file for custom port access
+				sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo, *sshPort)
+				if err != nil {
+					return fmt.Errorf("failed to create SSH config: %w", err)
+				}
+				// Replace hostname with our SSH config host
+				cloneURL = fmt.Sprintf("ssh://git@git-%s/%s/%s.git", workspaceName, repoInfo.Org, repoInfo.Repo)
+				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -F %s -o StrictHostKeyChecking=no' git clone %s %s", sshConfigPath, cloneURL, gitopsWorkspace)
 			} else {
-				fmt.Printf("Successfully checked out branch '%s'!\n", *workspaceBranch)
+				// Set up SSH to use the generated key directly
+				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s -o StrictHostKeyChecking=no' git clone %s %s", sshKeyPair.PrivateKeyPath, cloneURL, gitopsWorkspace)
+			}
+			
+			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
+
+			fmt.Println("Cloning remote repository...")
+			if err := runCommandVerbose(com, *verbose); err != nil {
+				return fmt.Errorf("failed to clone remote repository: %w", err)
+			}
+			fmt.Println("Remote repository cloned!")
+			
+			// Ensure the cloned repository is owned by user1000
+			chownCloneCmd := exec.Command("chown", "-R", "1000:1000", gitopsWorkspace)
+			chownCloneCmd.Run() // Ignore errors
+
+			// Checkout specified branch if provided
+			if *workspaceBranch != "" {
+				fmt.Printf("Checking out branch '%s'...\n", *workspaceBranch)
+				checkoutCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout %s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
+				if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+					fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
+					fmt.Printf("Continuing with the default branch...\n")
+				} else {
+					fmt.Printf("Successfully checked out branch '%s'!\n", *workspaceBranch)
+				}
 			}
 		}
 	} else {
-		if err := os.Mkdir(gitopsWorkspace, 0755); err != nil {
+		if err := os.MkdirAll(gitopsWorkspace, 0755); err != nil {
 			return fmt.Errorf("failed to create GitOps workspace directory %s: %w", gitopsWorkspace, err)
 		}
-		com := exec.Command("git", "init")
-		com.Dir = gitopsWorkspace
-
+		// Ensure the workspace directory is owned by user1000
+		chownWorkspaceCmd := exec.Command("chown", "-R", "1000:1000", gitopsWorkspace)
+		if err := chownWorkspaceCmd.Run(); err != nil {
+			return fmt.Errorf("failed to chown workspace directory: %w", err)
+		}
+		
+		// Run git init as user1000 using -C flag to avoid cd issues
+		com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s init", gitopsWorkspace)) //nolint:gosec
 		fmt.Println("Initializing git in workspace...")
 
 		if err := runCommandVerbose(com, *verbose); err != nil {
@@ -257,64 +380,106 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("Git initialized in workspace!")
 	}
 
-	// Add GitOps worktree
+	// Configure git user globally as user1000 (needed for commits)
+	gitConfigGlobalCmd := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", "git config --global user.name 'BitSwan Workspace'") //nolint:gosec
+	gitConfigGlobalCmd.Run() // Ignore errors, might already be set
+
+	gitConfigGlobalCmd = exec.Command("su", "-s", "/bin/sh", "user1000", "-c", "git config --global user.email 'workspace@bitswan.local'") //nolint:gosec
+	gitConfigGlobalCmd.Run() // Ignore errors, might already be set
+
+	// Add GitOps worktree as user1000
 	gitopsWorktree := gitopsConfig + "/gitops"
-	worktreeAddCom := exec.Command("git", "worktree", "add", "--orphan", "-b", workspaceName, gitopsWorktree)
-	worktreeAddCom.Dir = gitopsWorkspace
+	worktreeAddCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s worktree add --orphan -b %s %s", gitopsWorkspace, workspaceName, gitopsWorktree)) //nolint:gosec
 
 	fmt.Println("Setting up GitOps worktree...")
 	if err := runCommandVerbose(worktreeAddCom, *verbose); err != nil {
 		return fmt.Errorf("failed to create GitOps worktree: %w", err)
 	}
 
-	// Add repo as safe directory
-	safeDirCom := exec.Command("git", "config", "--global", "--add", "safe.directory", gitopsWorktree)
-	if err := runCommandVerbose(safeDirCom, *verbose); err != nil {
-		return fmt.Errorf("failed to add safe directory: %w", err)
-	}
 
 	if *remoteRepo != "" {
-		// Create empty commit
-		emptyCommitCom := exec.Command("git", "commit", "--allow-empty", "-m", "Initial commit")
-		emptyCommitCom.Dir = gitopsWorktree
+		// Check if this is a local file path
+		isLocalPath := strings.HasPrefix(*remoteRepo, "/") || strings.HasPrefix(*remoteRepo, "file://")
+		
+		// Create empty commit as user1000
+		emptyCommitCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git commit --allow-empty -m 'Initial commit'", gitopsWorktree)) //nolint:gosec
 		if err := runCommandVerbose(emptyCommitCom, *verbose); err != nil {
 			return fmt.Errorf("failed to create empty commit: %w", err)
 		}
 
-		// Push to remote using SSH key
-		setUpstreamCom := exec.Command("git", "push", "-u", "origin", workspaceName)
-		setUpstreamCom.Dir = gitopsWorktree
-
-		// Set up SSH command based on whether custom SSH port is specified
-		if *sshPort != "" {
-			// Parse repository URL to get hostname, org, and repo
-			repoInfo, err := parseRepositoryURL(*remoteRepo)
-			if err != nil {
-				return fmt.Errorf("failed to parse repository URL: %w", err)
+		if isLocalPath {
+			// For local paths, just push directly without SSH setup as user1000
+			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git push -u origin %s", gitopsWorktree, workspaceName)) //nolint:gosec
+			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
+				return fmt.Errorf("failed to set upstream: %w", err)
 			}
-
-			// Create SSH config file for custom port access
-			sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo, *sshPort)
-			if err != nil {
-				return fmt.Errorf("failed to create SSH config: %w", err)
+			
+			// If this is a local remote, update the remote URL to use the mount point
+			// after the push succeeds (so GitOps containers can fetch from it)
+			if localRemoteName != "" && localRemotePath != "" {
+				var remoteURLForGitOps string
+				// Determine the mount point path based on the mount name
+				// All local remotes are mounted to /remote-repos/<name>
+				remoteURLForGitOps = filepath.Join("/remote-repos", localRemoteName)
+				fmt.Printf("Updating remote URL to mount point: %s\n", remoteURLForGitOps)
+				// Update in both the main workspace repo and the gitops worktree (they share the same remote config)
+				// Update in main workspace repo
+				updateRemoteCmd := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git remote set-url origin %s", gitopsWorkspace, remoteURLForGitOps)) //nolint:gosec
+				if err := runCommandVerbose(updateRemoteCmd, *verbose); err != nil {
+					fmt.Printf("Warning: Failed to update remote URL to mount point in main repo: %v\n", err)
+				}
+				// Also update in gitops worktree explicitly (though they share .git, being explicit helps)
+				updateRemoteCmdWorktree := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git remote set-url origin %s", gitopsWorktree, remoteURLForGitOps)) //nolint:gosec
+				if err := runCommandVerbose(updateRemoteCmdWorktree, *verbose); err != nil {
+					fmt.Printf("Warning: Failed to update remote URL to mount point in worktree: %v\n", err)
+				} else {
+					fmt.Printf("Remote URL updated to mount point successfully\n")
+				}
 			}
-
-			// Set up SSH to use the config file
-			setUpstreamCom.Env = append(os.Environ(),
-				fmt.Sprintf("GIT_SSH_COMMAND=ssh -F %s -o StrictHostKeyChecking=no", sshConfigPath))
 		} else {
-			// Set up SSH to use the generated key for push operations
-			sshKeyPath := filepath.Join(gitopsConfig, "ssh", "id_ed25519")
-			setUpstreamCom.Env = append(os.Environ(),
-				fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o StrictHostKeyChecking=no", sshKeyPath))
-		}
+			// Push to remote using SSH key as user1000
+			var sshCmd string
+			if *sshPort != "" {
+				// Parse repository URL to get hostname, org, and repo
+				repoInfo, err := parseRepositoryURL(*remoteRepo)
+				if err != nil {
+					return fmt.Errorf("failed to parse repository URL: %w", err)
+				}
 
-		if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
-			return fmt.Errorf("failed to set upstream: %w", err)
+				// Create SSH config file for custom port access
+				sshConfigPath, err := createSSHConfig(gitopsConfig, workspaceName, repoInfo, *sshPort)
+				if err != nil {
+					return fmt.Errorf("failed to create SSH config: %w", err)
+				}
+
+				// Set up SSH to use the config file
+				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -F %s -o StrictHostKeyChecking=no' cd %s && git push -u origin %s", sshConfigPath, gitopsWorktree, workspaceName)
+			} else {
+				// Set up SSH to use the generated key for push operations
+				sshKeyPath := filepath.Join(gitopsConfig, "ssh", "id_ed25519")
+				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s -o StrictHostKeyChecking=no' cd %s && git push -u origin %s", sshKeyPath, gitopsWorktree, workspaceName)
+			}
+
+			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
+			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
+				return fmt.Errorf("failed to set upstream: %w", err)
+			}
 		}
 	}
 
 	fmt.Println("GitOps worktree set up successfully!")
+
+	// Fix ownership of gitops worktree to user1000:1000 so the GitOps container can access it
+	// The daemon runs as root, but the GitOps container runs as user1000
+	// NOTE: We do NOT chown the workspace directory itself, as it may be used as a source
+	// for cloning by other workspaces. The daemon (root) needs to be able to clone from it.
+	// Only the gitops worktree needs to be owned by user1000 for the GitOps container.
+	fmt.Println("Fixing ownership of gitops worktree...")
+	chownGitopsCmd := exec.Command("chown", "-R", "1000:1000", gitopsWorktree)
+	if err := runCommandVerbose(chownGitopsCmd, *verbose); err != nil {
+		return fmt.Errorf("failed to fix ownership of gitops directory: %w", err)
+	}
+	fmt.Println("Ownership fixed successfully!")
 
 	// Create secrets directory
 	secretsDir := gitopsConfig + "/secrets"
@@ -451,16 +616,23 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		oauthEnvVars = oauth.CreateOAuthEnvVars(oauthConfig, "gitops", workspaceName, *domain)
 	}
 
+	// Log local remote info for debugging
+	if localRemotePath != "" && localRemoteName != "" {
+		fmt.Printf("Configuring local repository mount: %s -> /remote-repos/%s\n", localRemotePath, localRemoteName)
+	}
+	
 	config := &dockercompose.DockerComposeConfig{
-		GitopsPath:         gitopsConfig,
-		WorkspaceName:      workspaceName,
-		GitopsImage:        imgopsImage,
-		Domain:             *domain,
-		MqttEnvVars:        mqttEnvVars,
-		AocEnvVars:         aocEnvVars,
-		OAuthEnvVars:       oauthEnvVars,
-		GitopsDevSourceDir: *gitopsDevSourceDir,
-		TrustCA:            true,
+		GitopsPath:          gitopsConfig,
+		WorkspaceName:       workspaceName,
+		GitopsImage:         imgopsImage,
+		Domain:              *domain,
+		MqttEnvVars:         mqttEnvVars,
+		AocEnvVars:          aocEnvVars,
+		OAuthEnvVars:         oauthEnvVars,
+		GitopsDevSourceDir:  *gitopsDevSourceDir,
+		TrustCA:             true,
+		LocalRemotePath: localRemotePath,
+		LocalRemoteName: localRemoteName,
 	}
 	compose, token, err := config.CreateDockerComposeFile()
 
@@ -486,12 +658,13 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	projectName := workspaceName + "-site"
-	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d")
+	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--pull", "never")
 
 	fmt.Println("Launching BitSwan Workspace services...")
 	if err := runCommandVerbose(dockerComposeCom, true); err != nil {
 		return fmt.Errorf("failed to start docker-compose: %w", err)
 	}
+
 
 	fmt.Println("BitSwan GitOps initialized successfully!")
 

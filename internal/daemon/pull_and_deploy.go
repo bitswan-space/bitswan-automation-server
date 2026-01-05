@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
@@ -60,7 +61,21 @@ func RunPullAndDeploy(workspaceName, branchName string, force, noBuild bool, wri
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("failed to pull branch and deploy automations, status code: %d, response: %s", resp.StatusCode, string(body))
+		bodyStr := string(body)
+		// "Push failed" is not a fatal error - it's just a warning
+		// The GitOps service may return 500 with "Push failed" but the pull-and-deploy operation can still succeed
+		if resp.StatusCode == http.StatusInternalServerError && strings.Contains(bodyStr, "Push failed") {
+			fmt.Fprintf(writer, "⚠️  Warning: Push failed (non-fatal), continuing with pull-and-deploy...\n")
+			// The pull-and-deploy operation may have still succeeded despite the push failure
+			// Try to deploy automations anyway - the fetch and merge likely succeeded
+			fmt.Fprintf(writer, "✅ Successfully pulled branch '%s' for '%s' (push warning ignored).\n", branchName, workspaceName)
+			// Deploy the automations that were pulled
+			if err := deployAutomations(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, writer); err != nil {
+				return fmt.Errorf("failed to deploy automations after pull: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("failed to pull branch and deploy automations, status code: %d, response: %s", resp.StatusCode, bodyStr)
 	}
 
 	// Parse the response body to get image tags

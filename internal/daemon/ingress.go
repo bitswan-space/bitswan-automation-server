@@ -184,7 +184,7 @@ func initIngress(verbose bool) error {
 func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
-	if verbose {
+		if verbose {
 		// Set up pipes for real-time streaming
 		stdoutPipe, err := cmd.StdoutPipe()
 		if err != nil {
@@ -197,8 +197,8 @@ func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
 		}
 
 		// Create multi-writers to both stream and capture output
-		stdoutWriter := io.MultiWriter(&stdoutBuf)
-		stderrWriter := io.MultiWriter(&stderrBuf)
+		stdoutWriter := io.MultiWriter(os.Stdout, &stdoutBuf)
+		stderrWriter := io.MultiWriter(os.Stderr, &stderrBuf)
 
 		// Start the command
 		if err := cmd.Start(); err != nil {
@@ -223,7 +223,13 @@ func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
 		wg.Wait()
 
 		// Wait for command to complete
-		return cmd.Wait()
+		err = cmd.Wait()
+		if err != nil {
+			// Include captured output in error message
+			fullOutput := stdoutBuf.String() + stderrBuf.String()
+			return fmt.Errorf("%w\nOutput:\n%s", err, fullOutput)
+		}
+		return nil
 	} else {
 		// Not verbose, just capture output for potential error reporting
 		cmd.Stdout = &stdoutBuf
