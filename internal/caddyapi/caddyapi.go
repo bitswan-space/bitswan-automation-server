@@ -457,7 +457,12 @@ func generateWildcardCerts(domain string) (string, error) {
 	}
 
 	// Ensure we change back to original directory when function returns
-	defer os.Chdir(originalDir)
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			// If we can't change back, try /tmp as fallback
+			os.Chdir("/tmp")
+		}
+	}()
 
 	// Generate wildcard certificate
 	wildcardDomain := "*." + domain
@@ -563,7 +568,8 @@ func generateCertsForHostname(hostname string) (string, error) {
 	// Store current working directory
 	originalDir, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %w", err)
+		// If we can't get the current directory, use /tmp as fallback
+		originalDir = "/tmp"
 	}
 
 	// Change to temp directory

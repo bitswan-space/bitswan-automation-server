@@ -12,6 +12,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/cmd/caddy"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/certauthority"
 	"github.com/bitswan-space/bitswan-workspaces/cmd/ingress"
+	"github.com/bitswan-space/bitswan-workspaces/cmd/test"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +33,7 @@ func newRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(certauthority.NewCertAuthorityCmd())                       // certificate authority subcommand
 	cmd.AddCommand(automationserverdaemon.NewAutomationServerDaemonCmd())     // automation server daemon subcommand
 	cmd.AddCommand(automation.NewAutomationCmd())                             // automation subcommand
+	cmd.AddCommand(test.NewTestCmd())                                         // _test subcommand (hidden)
 
 	// Set the version for the daemon server
 	automationserverdaemon.SetVersion(version)
