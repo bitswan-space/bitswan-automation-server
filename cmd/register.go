@@ -8,7 +8,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
-	"github.com/bitswan-space/bitswan-workspaces/internal/workspace"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -219,9 +219,19 @@ func connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId, accessToke
 
 	fmt.Printf("  ✅ Metadata updated successfully!\n")
 
-	// Actually update the workspace deployment
+	// Actually update the workspace deployment via daemon
 	fmt.Printf("  🔄 Updating workspace deployment with new AOC and MQTT configuration...\n")
-	if err := workspace.UpdateWorkspaceDeployment(workspaceName, "", false, false); err != nil {
+	client, err := daemon.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create daemon client (daemon may not be running): %w", err)
+	}
+
+	// Use workspace update command to refresh the deployment with new AOC/MQTT config
+	updateArgs := []string{
+		"workspace", "update",
+		workspaceName,
+	}
+	if err := client.WorkspaceUpdate(updateArgs); err != nil {
 		return fmt.Errorf("failed to update workspace deployment: %w", err)
 	}
 	fmt.Printf("  ✅ Workspace deployment updated and services restarted!\n")
