@@ -21,6 +21,49 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInitCmd(cmd *cobra.Command, args []string) error {
+	// Generate and save the authentication token to the config file
+	cfg := config.NewAutomationServerConfig()
+	existingToken, err := cfg.GetLocalServerToken()
+	if err != nil || existingToken == "" {
+		// Generate a new random token (64 characters)
+		token := uniuri.NewLen(64)
+		if err := cfg.SetLocalServerToken(token); err != nil {
+			return fmt.Errorf("failed to save token to config: %w", err)
+		}
+		fmt.Println("Generated new authentication token")
+
+		// Set restrictive permissions on the config file (owner read/write only)
+		configPath := cfg.GetConfigPath()
+		if err := os.Chmod(configPath, 0600); err != nil {
+			return fmt.Errorf("failed to set config file permissions: %w", err)
+		}
+	}
+
+	// Check if container already exists
+	checkCmd := exec.Command("docker", "ps", "-a", "--filter", "name=bitswan-automation-server-daemon", "--format", "{{.Names}}")
+	output, err := checkCmd.Output()
+	if err == nil && len(output) > 0 {
+		// Container exists, check if it's running
+		checkRunningCmd := exec.Command("docker", "ps", "--filter", "name=bitswan-automation-server-daemon", "--format", "{{.Names}}")
+		runningOutput, err := checkRunningCmd.Output()
+		if err == nil && len(runningOutput) > 0 {
+			fmt.Println("Automation server daemon is already running")
+			return nil
+		}
+
+		// Container exists but is not running, remove it first
+		fmt.Println("Removing existing stopped container...")
+		removeCmd := exec.Command("docker", "rm", "bitswan-automation-server-daemon")
+		if err := removeCmd.Run(); err != nil {
+			return fmt.Errorf("failed to remove existing container: %w", err)
+		}
+	}
+
+	return startDaemonContainer("Starting automation server daemon container...", "Automation server daemon started successfully")
+}
+
+// startDaemonContainer sets up and starts the daemon container with the current binary
+func startDaemonContainer(startMessage, successMessage string) error {
 	// Get the current binary path by inspecting the running process
 	var binaryPath string
 	var err error
@@ -71,47 +114,9 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create bitswan config directory: %w", err)
 	}
 
-	// Generate and save the authentication token to the config file
-	cfg := config.NewAutomationServerConfig()
-	existingToken, err := cfg.GetLocalServerToken()
-	if err != nil || existingToken == "" {
-		// Generate a new random token (64 characters)
-		token := uniuri.NewLen(64)
-		if err := cfg.SetLocalServerToken(token); err != nil {
-			return fmt.Errorf("failed to save token to config: %w", err)
-		}
-		fmt.Println("Generated new authentication token")
-
-		// Set restrictive permissions on the config file (owner read/write only)
-		configPath := cfg.GetConfigPath()
-		if err := os.Chmod(configPath, 0600); err != nil {
-			return fmt.Errorf("failed to set config file permissions: %w", err)
-		}
-	}
-
 	// Ensure mkcert directory exists (create if it doesn't, but it's okay if it doesn't exist)
 	// We'll mount it anyway so mkcert can use it if it exists
 	_ = os.MkdirAll(mkcertDir, 0755)
-
-	// Check if container already exists
-	checkCmd := exec.Command("docker", "ps", "-a", "--filter", "name=bitswan-automation-server-daemon", "--format", "{{.Names}}")
-	output, err := checkCmd.Output()
-	if err == nil && len(output) > 0 {
-		// Container exists, check if it's running
-		checkRunningCmd := exec.Command("docker", "ps", "--filter", "name=bitswan-automation-server-daemon", "--format", "{{.Names}}")
-		runningOutput, err := checkRunningCmd.Output()
-		if err == nil && len(runningOutput) > 0 {
-			fmt.Println("Automation server daemon is already running")
-			return nil
-		}
-
-		// Container exists but is not running, remove it first
-		fmt.Println("Removing existing stopped container...")
-		removeCmd := exec.Command("docker", "rm", "bitswan-automation-server-daemon")
-		if err := removeCmd.Run(); err != nil {
-			return fmt.Errorf("failed to remove existing container: %w", err)
-		}
-	}
 
 	// Launch the daemon container
 	// Mount the binary, config directory, docker socket, and mkcert directory
@@ -146,6 +151,7 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"-v", fmt.Sprintf("%s:%s", socketDir, socketDir),
+		"-v", "/:/host:ro",
 		"--network", "bitswan_network",
 		daemonImage,
 		"/usr/local/bin/bitswan", "automation-server-daemon", "__run",
@@ -154,12 +160,12 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 	dockerCmd.Stdout = os.Stdout
 	dockerCmd.Stderr = os.Stderr
 
-	fmt.Println("Starting automation server daemon container...")
+	fmt.Println(startMessage)
 	if err := dockerCmd.Run(); err != nil {
 		return fmt.Errorf("failed to start daemon container: %w", err)
 	}
 
-	fmt.Println("Automation server daemon started successfully")
+	fmt.Println(successMessage)
 	return nil
 }
 
