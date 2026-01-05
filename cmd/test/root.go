@@ -17,6 +17,7 @@ func NewTestCmd() *cobra.Command {
 
 	// Add subcommands
 	cmd.AddCommand(newInitCmd())
+	cmd.AddCommand(newPullAndDeployCmd())
 
 	return cmd
 }

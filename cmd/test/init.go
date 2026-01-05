@@ -25,18 +25,26 @@ import (
 )
 
 func newInitCmd() *cobra.Command {
+	var noRemove bool
+	var gitopsImage string
+	var editorImage string
+
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Test workspace initialization and FastAPI deployment",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTestInit()
+			return runTestInit(noRemove, gitopsImage, editorImage)
 		},
 	}
+
+	cmd.Flags().BoolVar(&noRemove, "no-remove", false, "Leave workspace and deployment running (skip cleanup)")
+	cmd.Flags().StringVar(&gitopsImage, "gitops-image", "", "Custom GitOps image to use (default: production image)")
+	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom editor image to use (default: production image)")
 
 	return cmd
 }
 
-func runTestInit() error {
+func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	fmt.Println("=== BitSwan Test Suite: Init ===")
 	fmt.Println()
 
@@ -81,8 +89,14 @@ func runTestInit() error {
 		"--local",
 		"--no-ide",
 		"--no-oauth",
-		workspaceName,
 	}
+	if gitopsImage != "" {
+		initArgs = append(initArgs, "--gitops-image", gitopsImage)
+	}
+	if editorImage != "" {
+		initArgs = append(initArgs, "--editor-image", editorImage)
+	}
+	initArgs = append(initArgs, workspaceName)
 
 	if err := client.WorkspaceInit(initArgs); err != nil {
 		return fmt.Errorf("failed to initialize workspace: %w", err)
@@ -162,10 +176,20 @@ func runTestInit() error {
 
 	fmt.Println("\n[6/8] Testing endpoint...")
 	if err := testEndpoint(endpointURL, workspaceName); err != nil {
-		cleanupWorkspace(workspaceName)
+		if !noRemove {
+			cleanupWorkspace(workspaceName)
+		}
 		return fmt.Errorf("endpoint test failed: %w", err)
 	}
 	fmt.Println("✓ Endpoint test passed")
+
+	if noRemove {
+		fmt.Println("\n[7/8] Skipping cleanup (--no-remove flag set)...")
+		fmt.Printf("Workspace '%s' is still running\n", workspaceName)
+		fmt.Printf("Endpoint: %s\n", endpointURL)
+		fmt.Println("\n=== Test Suite: SUCCESS (workspace left running) ===")
+		return nil
+	}
 
 	// Step 6: Remove deployment
 	fmt.Println("\n[7/8] Cleaning up...")

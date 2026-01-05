@@ -448,7 +448,8 @@ func generateWildcardCerts(domain string) (string, error) {
 	// Store current working directory
 	originalDir, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("failed to get current directory: %w", err)
+		// If we can't get the current directory, use /tmp as fallback
+		originalDir = "/tmp"
 	}
 
 	// Change to temp directory
