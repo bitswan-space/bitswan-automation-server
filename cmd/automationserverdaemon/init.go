@@ -1,11 +1,14 @@
 package automationserverdaemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/dchest/uniuri"
@@ -138,6 +141,52 @@ func startDaemonContainer(startMessage, successMessage string) error {
 	// Remove existing socket file if it exists (stale socket from previous run)
 	_ = os.Remove(socketPath)
 
+	// Ensure bitswan_network exists before starting the container
+	networkName := "bitswan_network"
+	networkExists, err := checkNetworkExists(networkName)
+	if err != nil {
+		return fmt.Errorf("failed to check if network exists: %w", err)
+	}
+
+	if !networkExists {
+		fmt.Println("Creating BitSwan Docker network...")
+		createNetworkCmd := exec.Command("docker", "network", "create", networkName)
+		createNetworkCmd.Stdout = os.Stdout
+		createNetworkCmd.Stderr = os.Stderr
+		if err := createNetworkCmd.Run(); err != nil {
+			// Network might have been created by another process, check again
+			networkExists, checkErr := checkNetworkExists(networkName)
+			if checkErr != nil || !networkExists {
+				return fmt.Errorf("failed to create Docker network: %w", err)
+			}
+			fmt.Println("BitSwan Docker network already exists!")
+		} else {
+			fmt.Println("BitSwan Docker network created!")
+		}
+		// Verify the network exists before proceeding (handles race conditions)
+		verified := false
+		for i := 0; i < 5; i++ {
+			networkExists, err := checkNetworkExists(networkName)
+			if err == nil && networkExists {
+				verified = true
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !verified {
+			return fmt.Errorf("network was created but could not be verified: network %s not found", networkName)
+		}
+	}
+
+	// Final verification right before using the network (handles any edge cases)
+	networkExists, err = checkNetworkExists(networkName)
+	if err != nil {
+		return fmt.Errorf("failed to verify network before starting container: %w", err)
+	}
+	if !networkExists {
+		return fmt.Errorf("network %s does not exist and could not be created", networkName)
+	}
+
 	// Set HOST_HOME so the daemon knows the host home directory
 	// This is needed when fixing permissions and creating docker-compose files with correct paths
 	dockerCmd := exec.Command("docker", "run",
@@ -167,5 +216,36 @@ func startDaemonContainer(startMessage, successMessage string) error {
 
 	fmt.Println(successMessage)
 	return nil
+}
+
+// checkNetworkExists checks if a Docker network exists
+func checkNetworkExists(networkName string) (bool, error) {
+	cmd := exec.Command("docker", "network", "ls", "--format=json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("error running docker command: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+
+	type DockerNetwork struct {
+		Name string `json:"Name"`
+	}
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var network DockerNetwork
+		if err := json.Unmarshal([]byte(line), &network); err != nil {
+			return false, fmt.Errorf("error parsing JSON: %v", err)
+		}
+
+		if network.Name == networkName {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 

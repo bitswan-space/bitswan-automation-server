@@ -29,3 +29,116 @@ jobs:
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
         run: bash <(curl -s https://codecov.io/bash)
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    # Integration tests require Docker and root access
+    # Only run on pull requests to avoid running on every push
+    if: github.event_name == 'pull_request'
+
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.19.x'
+
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Configure Docker
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2376"]}' | sudo tee /etc/docker/daemon.json
+          sudo service docker start || true
+
+      - name: Install and configure dnsmasq for .localhost resolution
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dnsmasq
+          # Stop systemd-resolved which might conflict with dnsmasq
+          sudo systemctl stop systemd-resolved || true
+          sudo systemctl disable systemd-resolved || true
+          # Configure dnsmasq to resolve .localhost domains to 127.0.0.1
+          sudo mkdir -p /etc/dnsmasq.d
+          echo "address=/.localhost/127.0.0.1" | sudo tee /etc/dnsmasq.d/localhost.conf
+          echo "listen-address=127.0.0.1" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "port=53" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "no-resolv" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "server=8.8.8.8" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "server=8.8.4.4" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          # Test configuration
+          sudo dnsmasq --test || true
+          # Start dnsmasq
+          sudo systemctl start dnsmasq || sudo dnsmasq --no-daemon --log-queries &
+          # Update resolv.conf to use dnsmasq first, then fallback to Google DNS
+          echo "nameserver 127.0.0.1" | sudo tee /etc/resolv.conf
+          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
+          # Make resolv.conf immutable to prevent systemd-resolved from overwriting it
+          sudo chattr +i /etc/resolv.conf || true
+          # Verify dnsmasq is working
+          sleep 3
+          dig @127.0.0.1 test.localhost +short || nslookup test.localhost 127.0.0.1 || echo "DNS resolution check skipped"
+
+      - name: Install and configure mkcert for TLS certificates
+        run: |
+          # Install mkcert
+          sudo apt-get install -y libnss3-tools
+          curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+          chmod +x mkcert-v*-linux-amd64
+          sudo mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+          # Initialize mkcert CA
+          mkcert -install
+          # Verify mkcert is working
+          mkcert -CAROOT
+
+      - name: Install and configure mkcert for TLS certificates
+        run: |
+          # Install mkcert
+          sudo apt-get install -y libnss3-tools
+          curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+          chmod +x mkcert-v*-linux-amd64
+          sudo mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+          # Generate local CA
+          mkcert -install
+          # Verify mkcert is working
+          mkcert -CAROOT
+
+      - name: Build bitswan binary
+        run: go build -o bitswan ./main.go
+
+      - name: Initialize daemon
+        run: |
+          sudo ./bitswan automation-server-daemon init
+          # Fix permissions on config file so runner user can read it
+          sudo chmod 644 /home/runner/.config/bitswan/automation_server_config.toml || true
+          # Wait for daemon to be ready
+          sleep 5
+          # Verify daemon is running
+          ./bitswan automation-server-daemon status || exit 1
+
+      - name: Run init test
+        timeout-minutes: 20
+        run: |
+          ./bitswan _test init --no-remove || exit 1
+          # Cleanup after test
+          ./bitswan _test cleanup || true
+
+      - name: Run update test
+        timeout-minutes: 20
+        run: |
+          ./bitswan _test update --no-remove || exit 1
+          # Cleanup after test
+          ./bitswan _test cleanup || true
+
+      - name: Final cleanup
+        if: always()
+        run: |
+          ./bitswan _test cleanup || true
