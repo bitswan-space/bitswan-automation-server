@@ -108,7 +108,10 @@ func (s *Server) handleIngressInit(w http.ResponseWriter, r *http.Request) {
 
 // initIngress initializes the ingress proxy (extracted from cmd/ingress/init.go)
 func initIngress(verbose bool) error {
-	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
+	// Use HOME for file operations (works inside container and outside)
+	// The files are accessible via the container path
+	homeDir := os.Getenv("HOME")
+	bitswanConfig := homeDir + "/.config/bitswan/"
 	caddyConfig := bitswanConfig + "caddy"
 	caddyCertsDir := caddyConfig + "/certs"
 
@@ -138,7 +141,39 @@ func initIngress(verbose bool) error {
 		return fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
 
-	caddyDockerCompose, err := dockercompose.CreateCaddyDockerComposeFile(caddyConfig)
+	// For docker-compose, use HOST_HOME if available (docker-compose runs on host)
+	// Convert container path to host path for volume mounts
+	hostHomeDir := os.Getenv("HOST_HOME")
+	caddyConfigForCompose := caddyConfig
+	if hostHomeDir != "" && homeDir != hostHomeDir && strings.HasPrefix(caddyConfig, homeDir) {
+		// Replace container home with host home for docker-compose volume paths
+		caddyConfigForCompose = strings.Replace(caddyConfig, homeDir, hostHomeDir, 1)
+		
+		// Ensure directories exist on host before docker-compose tries to mount them
+		// Create the directories on the host if they don't exist
+		if err := os.MkdirAll(caddyConfigForCompose, 0755); err != nil {
+			return fmt.Errorf("failed to create ingress config directory on host: %w", err)
+		}
+		if err := os.MkdirAll(caddyConfigForCompose+"/data", 0755); err != nil {
+			return fmt.Errorf("failed to create ingress data directory on host: %w", err)
+		}
+		if err := os.MkdirAll(caddyConfigForCompose+"/config", 0755); err != nil {
+			return fmt.Errorf("failed to create ingress config subdirectory on host: %w", err)
+		}
+		if err := os.MkdirAll(caddyConfigForCompose+"/certs", 0755); err != nil {
+			return fmt.Errorf("failed to create ingress certs directory on host: %w", err)
+		}
+		
+		// Also create/ensure Caddyfile exists on host
+		caddyfilePathHost := caddyConfigForCompose + "/Caddyfile"
+		if _, err := os.Stat(caddyfilePathHost); os.IsNotExist(err) {
+			if err := os.WriteFile(caddyfilePathHost, []byte(caddyfile), 0755); err != nil {
+				return fmt.Errorf("failed to write Caddyfile on host: %w", err)
+			}
+		}
+	}
+
+	caddyDockerCompose, err := dockercompose.CreateCaddyDockerComposeFile(caddyConfigForCompose)
 	if err != nil {
 		return fmt.Errorf("failed to create ingress docker-compose file: %w", err)
 	}

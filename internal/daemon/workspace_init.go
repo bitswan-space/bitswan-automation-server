@@ -658,7 +658,8 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	projectName := workspaceName + "-site"
-	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--pull", "never")
+	// Use --pull missing to pull images if they don't exist locally (needed for CI)
+	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--pull", "missing")
 
 	fmt.Println("Launching BitSwan Workspace services...")
 	if err := runCommandVerbose(dockerComposeCom, true); err != nil {
