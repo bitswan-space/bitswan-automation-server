@@ -37,4 +37,4 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 
 	return cmd
-} 
+}

@@ -112,11 +112,9 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	if !caddy_running {
-		if err := initIngress(*verbose); err != nil {
-			// Check if error is "caddy already initialized" - that's OK
-			if !strings.Contains(err.Error(), "already initialized") {
-				return fmt.Errorf("failed to initialize Caddy: %w", err)
-			}
+		_, err := initIngress(*verbose)
+		if err != nil {
+			return fmt.Errorf("failed to initialize Caddy: %w", err)
 		}
 		fmt.Println("Ingress proxy is ready!")
 	} else {
@@ -157,7 +155,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create GitOps directory: %w", err)
 	}
-	
+
 	// Ensure user1000 exists (create if it doesn't)
 	checkUserCmd := exec.Command("id", "-u", "1000")
 	if checkUserCmd.Run() != nil {
@@ -165,7 +163,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		createUserCmd := exec.Command("useradd", "-u", "1000", "-m", "-s", "/bin/sh", "user1000")
 		createUserCmd.Run() // Ignore errors, might already exist
 	}
-	
+
 	// Ensure the entire path is accessible to user1000 by chowning parent directories
 	// Chown /root/.config/bitswan to ensure user1000 can access workspaces
 	// Also need to ensure /root is accessible (at least execute permission)
@@ -173,11 +171,11 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	chownRootCmd.Run() // Ignore errors
 	chownRootConfigCmd := exec.Command("chmod", "755", "/root/.config")
 	chownRootConfigCmd.Run() // Ignore errors
-	
+
 	bitswanConfigDir := bitswanConfig
 	chownBitswanCmd := exec.Command("chown", "-R", "1000:1000", bitswanConfigDir)
 	chownBitswanCmd.Run() // Ignore errors, might already be correct
-	
+
 	// Ensure the directory is owned by user1000 from the start
 	chownConfigCmd := exec.Command("chown", "-R", "1000:1000", gitopsConfig)
 	if err := chownConfigCmd.Run(); err != nil {
@@ -191,28 +189,28 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	if *remoteRepo != "" {
 		// Check if this is a local file path (starts with / or file://)
 		isLocalPath := strings.HasPrefix(*remoteRepo, "/") || strings.HasPrefix(*remoteRepo, "file://")
-		
+
 		if isLocalPath {
 			// Handle local file path - clone directly without SSH setup
 			clonePath := *remoteRepo
 			if strings.HasPrefix(clonePath, "file://") {
 				clonePath = strings.TrimPrefix(clonePath, "file://")
 			}
-			
+
 			fmt.Println("Cloning local repository...")
-		// Run git clone as user1000 to ensure the cloned repository is owned by user1000
-		// Use su to switch to user1000 for git operations
-		// Escape the paths for shell safety
-		com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git clone %q %q", clonePath, gitopsWorkspace)) //nolint:gosec
+			// Run git clone as user1000 to ensure the cloned repository is owned by user1000
+			// Use su to switch to user1000 for git operations
+			// Escape the paths for shell safety
+			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git clone %q %q", clonePath, gitopsWorkspace)) //nolint:gosec
 			if err := runCommandVerbose(com, *verbose); err != nil {
 				return fmt.Errorf("failed to clone local repository: %w", err)
 			}
 			fmt.Println("Local repository cloned!")
-			
+
 			// For local remotes, we need to mount the repository in the GitOps container
 			// so it can fetch from it. Determine the host path and mount name.
 			hostHomeDir := os.Getenv("HOST_HOME")
-			
+
 			if strings.HasPrefix(clonePath, "/root/.config/bitswan/workspaces/") {
 				// Extract workspace name from path: /root/.config/bitswan/workspaces/<workspace-name>/workspace
 				parts := strings.Split(strings.TrimPrefix(clonePath, "/root/.config/bitswan/workspaces/"), "/")
@@ -318,7 +316,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			var cloneURL string
 			// Clone using SSH key as user1000
 			cloneURL = fmt.Sprintf("git@%s:%s/%s.git", repoInfo.Hostname, repoInfo.Org, repoInfo.Repo)
-			
+
 			// Build SSH command
 			var sshCmd string
 			if *sshPort != "" {
@@ -334,7 +332,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 				// Set up SSH to use the generated key directly
 				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s -o StrictHostKeyChecking=no' git clone %s %s", sshKeyPair.PrivateKeyPath, cloneURL, gitopsWorkspace)
 			}
-			
+
 			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
 
 			fmt.Println("Cloning remote repository...")
@@ -342,7 +340,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 				return fmt.Errorf("failed to clone remote repository: %w", err)
 			}
 			fmt.Println("Remote repository cloned!")
-			
+
 			// Ensure the cloned repository is owned by user1000
 			chownCloneCmd := exec.Command("chown", "-R", "1000:1000", gitopsWorkspace)
 			chownCloneCmd.Run() // Ignore errors
@@ -368,7 +366,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		if err := chownWorkspaceCmd.Run(); err != nil {
 			return fmt.Errorf("failed to chown workspace directory: %w", err)
 		}
-		
+
 		// Run git init as user1000 using -C flag to avoid cd issues
 		com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s init", gitopsWorkspace)) //nolint:gosec
 		fmt.Println("Initializing git in workspace...")
@@ -382,10 +380,10 @@ func (s *Server) runWorkspaceInit(args []string) error {
 
 	// Configure git user globally as user1000 (needed for commits)
 	gitConfigGlobalCmd := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", "git config --global user.name 'BitSwan Workspace'") //nolint:gosec
-	gitConfigGlobalCmd.Run() // Ignore errors, might already be set
+	gitConfigGlobalCmd.Run()                                                                                                         // Ignore errors, might already be set
 
 	gitConfigGlobalCmd = exec.Command("su", "-s", "/bin/sh", "user1000", "-c", "git config --global user.email 'workspace@bitswan.local'") //nolint:gosec
-	gitConfigGlobalCmd.Run() // Ignore errors, might already be set
+	gitConfigGlobalCmd.Run()                                                                                                               // Ignore errors, might already be set
 
 	// Add GitOps worktree as user1000
 	gitopsWorktree := gitopsConfig + "/gitops"
@@ -396,11 +394,10 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		return fmt.Errorf("failed to create GitOps worktree: %w", err)
 	}
 
-
 	if *remoteRepo != "" {
 		// Check if this is a local file path
 		isLocalPath := strings.HasPrefix(*remoteRepo, "/") || strings.HasPrefix(*remoteRepo, "file://")
-		
+
 		// Create empty commit as user1000
 		emptyCommitCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git commit --allow-empty -m 'Initial commit'", gitopsWorktree)) //nolint:gosec
 		if err := runCommandVerbose(emptyCommitCom, *verbose); err != nil {
@@ -413,7 +410,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
 				return fmt.Errorf("failed to set upstream: %w", err)
 			}
-			
+
 			// If this is a local remote, update the remote URL to use the mount point
 			// after the push succeeds (so GitOps containers can fetch from it)
 			if localRemoteName != "" && localRemotePath != "" {
@@ -620,19 +617,19 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	if localRemotePath != "" && localRemoteName != "" {
 		fmt.Printf("Configuring local repository mount: %s -> /remote-repos/%s\n", localRemotePath, localRemoteName)
 	}
-	
+
 	config := &dockercompose.DockerComposeConfig{
-		GitopsPath:          gitopsConfig,
-		WorkspaceName:       workspaceName,
-		GitopsImage:         imgopsImage,
-		Domain:              *domain,
-		MqttEnvVars:         mqttEnvVars,
-		AocEnvVars:          aocEnvVars,
-		OAuthEnvVars:         oauthEnvVars,
-		GitopsDevSourceDir:  *gitopsDevSourceDir,
-		TrustCA:             true,
-		LocalRemotePath: localRemotePath,
-		LocalRemoteName: localRemoteName,
+		GitopsPath:         gitopsConfig,
+		WorkspaceName:      workspaceName,
+		GitopsImage:        imgopsImage,
+		Domain:             *domain,
+		MqttEnvVars:        mqttEnvVars,
+		AocEnvVars:         aocEnvVars,
+		OAuthEnvVars:       oauthEnvVars,
+		GitopsDevSourceDir: *gitopsDevSourceDir,
+		TrustCA:            true,
+		LocalRemotePath:    localRemotePath,
+		LocalRemoteName:    localRemoteName,
 	}
 	compose, token, err := config.CreateDockerComposeFile()
 
@@ -665,7 +662,6 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	if err := runCommandVerbose(dockerComposeCom, true); err != nil {
 		return fmt.Errorf("failed to start docker-compose: %w", err)
 	}
-
 
 	fmt.Println("BitSwan GitOps initialized successfully!")
 
@@ -1077,4 +1073,3 @@ func createSSHConfig(workspacePath, workspaceName string, repoInfo *RepositoryIn
 
 	return configPath, nil
 }
-
