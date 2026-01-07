@@ -93,21 +93,30 @@ func (s *Server) handleIngressInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := initIngress(req.Verbose); err != nil {
+	newlyInitialized, err := initIngress(req.Verbose)
+	if err != nil {
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	var message string
+	if newlyInitialized {
+		message = "Ingress proxy is ready!"
+	} else {
+		message = "Ingress proxy is already initialized."
+	}
 	json.NewEncoder(w).Encode(IngressInitResponse{
 		Success: true,
-		Message: "Ingress proxy is ready!",
+		Message: message,
 	})
 }
 
 // initIngress initializes the ingress proxy (extracted from cmd/ingress/init.go)
-func initIngress(verbose bool) error {
+// Returns (newlyInitialized, error) where newlyInitialized is true if initialization happened,
+// false if it was already initialized.
+func initIngress(verbose bool) (bool, error) {
 	// Use HOME for file operations (works inside container and outside)
 	// The files are accessible via the container path
 	homeDir := os.Getenv("HOME")
@@ -116,17 +125,17 @@ func initIngress(verbose bool) error {
 	caddyCertsDir := caddyConfig + "/certs"
 
 	caddyProjectName := "bitswan-caddy"
-	// If caddy container exists and caddy dir exists, return
+	// If caddy container exists and caddy dir exists, return success (already initialized)
 	caddyContainerId, err := exec.Command("docker", "ps", "-q", "-f", "name=caddy").Output()
 	if err != nil {
-		return fmt.Errorf("failed to check if caddy container exists: %w", err)
+		return false, fmt.Errorf("failed to check if caddy container exists: %w", err)
 	}
 	if string(caddyContainerId) != "" {
-		return fmt.Errorf("caddy already initialized")
+		return false, nil
 	}
 
 	if err := os.MkdirAll(caddyConfig, 0755); err != nil {
-		return fmt.Errorf("failed to create ingress config directory: %w", err)
+		return false, fmt.Errorf("failed to create ingress config directory: %w", err)
 	}
 
 	// Create Caddyfile with email and modify admin listener
@@ -138,7 +147,7 @@ func initIngress(verbose bool) error {
 
 	caddyfilePath := caddyConfig + "/Caddyfile"
 	if err := os.WriteFile(caddyfilePath, []byte(caddyfile), 0755); err != nil {
-		return fmt.Errorf("failed to write Caddyfile: %w", err)
+		return false, fmt.Errorf("failed to write Caddyfile: %w", err)
 	}
 
 	// For docker-compose, use HOST_HOME if available (docker-compose runs on host)
@@ -152,45 +161,45 @@ func initIngress(verbose bool) error {
 		// Ensure directories exist on host before docker-compose tries to mount them
 		// Create the directories on the host if they don't exist
 		if err := os.MkdirAll(caddyConfigForCompose, 0755); err != nil {
-			return fmt.Errorf("failed to create ingress config directory on host: %w", err)
+			return false, fmt.Errorf("failed to create ingress config directory on host: %w", err)
 		}
 		if err := os.MkdirAll(caddyConfigForCompose+"/data", 0755); err != nil {
-			return fmt.Errorf("failed to create ingress data directory on host: %w", err)
+			return false, fmt.Errorf("failed to create ingress data directory on host: %w", err)
 		}
 		if err := os.MkdirAll(caddyConfigForCompose+"/config", 0755); err != nil {
-			return fmt.Errorf("failed to create ingress config subdirectory on host: %w", err)
+			return false, fmt.Errorf("failed to create ingress config subdirectory on host: %w", err)
 		}
 		if err := os.MkdirAll(caddyConfigForCompose+"/certs", 0755); err != nil {
-			return fmt.Errorf("failed to create ingress certs directory on host: %w", err)
+			return false, fmt.Errorf("failed to create ingress certs directory on host: %w", err)
 		}
 		
 		// Also create/ensure Caddyfile exists on host
 		caddyfilePathHost := caddyConfigForCompose + "/Caddyfile"
 		if _, err := os.Stat(caddyfilePathHost); os.IsNotExist(err) {
 			if err := os.WriteFile(caddyfilePathHost, []byte(caddyfile), 0755); err != nil {
-				return fmt.Errorf("failed to write Caddyfile on host: %w", err)
+				return false, fmt.Errorf("failed to write Caddyfile on host: %w", err)
 			}
 		}
 	}
 
 	caddyDockerCompose, err := dockercompose.CreateCaddyDockerComposeFile(caddyConfigForCompose)
 	if err != nil {
-		return fmt.Errorf("failed to create ingress docker-compose file: %w", err)
+		return false, fmt.Errorf("failed to create ingress docker-compose file: %w", err)
 	}
 
 	caddyDockerComposePath := caddyConfig + "/docker-compose.yml"
 	if err := os.WriteFile(caddyDockerComposePath, []byte(caddyDockerCompose), 0755); err != nil {
-		return fmt.Errorf("failed to write ingress docker-compose file: %w", err)
+		return false, fmt.Errorf("failed to write ingress docker-compose file: %w", err)
 	}
 
 	originalDir, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return false, fmt.Errorf("failed to get current directory: %w", err)
 	}
 	defer os.Chdir(originalDir)
 
 	if err := os.Chdir(caddyConfig); err != nil {
-		return fmt.Errorf("failed to change directory to ingress config: %w", err)
+		return false, fmt.Errorf("failed to change directory to ingress config: %w", err)
 	}
 
 	caddyDockerComposeCom := exec.Command("docker", "compose", "-p", caddyProjectName, "up", "-d")
@@ -198,21 +207,21 @@ func initIngress(verbose bool) error {
 	// Create certs directory if it doesn't exist
 	if _, err := os.Stat(caddyCertsDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(caddyCertsDir, 0740); err != nil {
-			return fmt.Errorf("failed to create ingress certs directory: %w", err)
+			return false, fmt.Errorf("failed to create ingress certs directory: %w", err)
 		}
 	}
 
 	if err := runCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
-		return fmt.Errorf("failed to start ingress: %w", err)
+		return false, fmt.Errorf("failed to start ingress: %w", err)
 	}
 
 	// wait 5s to make sure Caddy is up
 	time.Sleep(5 * time.Second)
 	if err := caddyapi.InitCaddy(); err != nil {
-		return fmt.Errorf("failed to init ingress: %w", err)
+		return false, fmt.Errorf("failed to init ingress: %w", err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // runCommandVerbose runs a command with optional verbose output
