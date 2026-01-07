@@ -8,6 +8,7 @@ manpages/
 dist/
 completions/
 .go
+*.swp
 
 # for Intellij PyCharm IDE
 /.idea/
