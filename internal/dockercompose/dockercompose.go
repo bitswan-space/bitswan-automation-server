@@ -51,7 +51,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		// Replace container home with host home for docker-compose volume paths
 		gitopsPathForVolumes = strings.Replace(config.GitopsPath, homeDir, hostHomeDir, 1)
 	}
-	
+
 	sshDir := gitopsPathForVolumes + "/ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -75,11 +75,12 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsSecretToken = uniuri.NewLen(64)
 	}
 
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", config.WorkspaceName)
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
-		"networks": []string{"bitswan_network"},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
@@ -147,7 +148,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		}
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
 	}
-	
+
 	// If this workspace has a local remote repository, mount it so GitOps can access it
 	if config.LocalRemotePath != "" && config.LocalRemoteName != "" {
 		// Mount local repository to /remote-repos/<name> for GitOps to access
@@ -170,6 +171,9 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		},
 		"networks": map[string]interface{}{
 			"bitswan_network": map[string]interface{}{
+				"external": true,
+			},
+			workspaceCommonNetwork: map[string]interface{}{
 				"external": true,
 			},
 		},
