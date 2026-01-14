@@ -76,14 +76,12 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	}
 
 	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", config.WorkspaceName)
-	workspaceDevNetwork := fmt.Sprintf("bitswan_%s_dev", config.WorkspaceName)
-	workspaceStagingNetwork := fmt.Sprintf("bitswan_%s_staging", config.WorkspaceName)
-	workspaceProdNetwork := fmt.Sprintf("bitswan_%s_prod", config.WorkspaceName)
+
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
-		"networks": []string{"bitswan_network", workspaceCommonNetwork, workspaceDevNetwork, workspaceStagingNetwork, workspaceProdNetwork},
+		"networks": []string{"bitswan_caddy", workspaceCommonNetwork},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
@@ -173,7 +171,10 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"bitswan-gitops": gitopsService,
 		},
 		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
+			"bitswan_common": map[string]interface{}{
+				"external": true,
+			},
+			workspaceCommonNetwork: map[string]interface{}{
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{
@@ -220,13 +221,13 @@ func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 				"restart":        "always",
 				"container_name": "caddy",
 				"ports":          []string{"80:80", "443:443", "2019:2019"},
-				"networks":       []string{"bitswan_network"},
+				"networks":       []string{"bitswan_common"},
 				"volumes":        caddyVolumes,
 				"entrypoint":     []string{"caddy", "run", "--resume", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 			},
 		},
 		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
+			"bitswan_common": map[string]interface{}{
 				"external": true,
 			},
 		},
