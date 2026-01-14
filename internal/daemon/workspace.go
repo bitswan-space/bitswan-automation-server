@@ -58,6 +58,8 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkspaceUpdate(w, r)
 	case path == "remove":
 		s.handleWorkspaceRemove(w, r)
+	case path == "sync":
+		s.handleWorkspaceSync(w, r)
 	default:
 		writeJSONError(w, "not found", http.StatusNotFound)
 	}
@@ -379,5 +381,26 @@ func (s *Server) handleWorkspaceRemove(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", err))
 	}
+}
+
+// handleWorkspaceSync handles POST /workspace/sync - manually triggers workspace list sync to AOC
+func (s *Server) handleWorkspaceSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Sync workspace list to AOC via REST API
+	if err := syncWorkspaceListToAOC(); err != nil {
+		writeJSONError(w, "failed to sync workspace list: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Workspace list synced successfully",
+	})
 }
 

@@ -193,6 +193,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"-d",
 		"--name", "bitswan-automation-server-daemon",
 		"--restart", "unless-stopped",
+		"--add-host", "host.docker.internal:host-gateway", // Allow container to reach host services
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
 		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", binaryPath),

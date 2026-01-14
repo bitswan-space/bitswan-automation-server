@@ -175,6 +175,11 @@ func (s *Server) Run() error {
 		fmt.Printf("Warning: Failed to install certificates in daemon: %v\n", err)
 	}
 
+	// Initialize MQTT publisher if AOC is configured (non-blocking, will retry on failure)
+	// This ensures MQTT publisher is set up even if AOC wasn't configured at first
+	// Pass server reference so MQTT handlers can call internal functions
+	initializeMQTTPublisherWithServer(s)
+
 	// Ensure the socket directory exists
 	if err := os.MkdirAll(SocketDir, 0755); err != nil {
 		return fmt.Errorf("failed to create socket directory: %w", err)

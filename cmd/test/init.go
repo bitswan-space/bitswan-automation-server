@@ -486,16 +486,37 @@ func waitForGitopsReady(gitopsURL, secret, workspaceName string) error {
 				statusOutput, statusErr := checkCmd.Output()
 				if statusErr == nil && len(statusOutput) > 0 && strings.Contains(string(statusOutput), "Up") {
 					// Container is running, try connecting directly via Docker network
-					// Use the internal Docker network hostname instead of .localhost
-					internalURL := fmt.Sprintf("http://%s-gitops:8079/automations", workspaceName)
-					internalReq, internalErr := httpReq.NewRequest("GET", internalURL, nil)
-					if internalErr == nil {
-						internalReq.Header.Set("Authorization", "Bearer "+secret)
-						// Try to execute from within Docker network context
-						// For now, if container has been running for 2+ minutes, assume it's ready
-						if attempt > 60 {
-							fmt.Printf("Container has been running for 2+ minutes, assuming service is ready\n")
-							return nil
+					// Use docker exec to curl from within the network
+					if attempt > 30 { // After 60 seconds, try direct connection
+						// Try to curl from within the container's network
+						curlCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", 
+							"-H", fmt.Sprintf("Authorization: Bearer %s", secret),
+							"http://localhost:8079/automations")
+						if curlOutput, curlErr := curlCmd.Output(); curlErr == nil {
+							statusCodeStr := strings.TrimSpace(string(curlOutput))
+							if statusCodeStr == "200" || statusCodeStr == "404" {
+								fmt.Printf("Service is responding directly on port 8079 (status: %s), but Caddy is returning 502\n", statusCodeStr)
+								fmt.Printf("This suggests a Caddy routing issue. Checking Caddy logs...\n")
+								// Check Caddy logs
+								caddyLogsCmd := exec.Command("docker", "logs", "caddy", "--tail", "20")
+								if caddyLogs, caddyErr := caddyLogsCmd.Output(); caddyErr == nil {
+									fmt.Printf("Recent Caddy logs:\n%s\n", string(caddyLogs))
+								}
+								// If service is responding directly, assume it's ready despite Caddy issue
+								if attempt > 60 {
+									fmt.Printf("Service is responding directly after 2+ minutes, assuming ready despite Caddy 502\n")
+									return nil
+								}
+							}
+						}
+					}
+				} else {
+					// Container not running - check logs
+					if attempt%20 == 0 {
+						fmt.Printf("Container may not be running. Checking container status and logs...\n")
+						logsCmd := exec.Command("docker", "logs", containerName, "--tail", "30")
+						if logsOutput, logsErr := logsCmd.Output(); logsErr == nil {
+							fmt.Printf("Container logs (last 30 lines):\n%s\n", string(logsOutput))
 						}
 					}
 				}
@@ -511,11 +532,40 @@ func waitForGitopsReady(gitopsURL, secret, workspaceName string) error {
 			return nil
 		}
 
-		// If we get a response but it's not 200/404, and container has been running for 2+ minutes, assume it's ready
-		// This handles cases where the service might return other status codes but is still functional
-		if attempt > 60 {
-			fmt.Printf("Service responded with status %d after 2+ minutes, assuming service is ready\n", resp.StatusCode)
-			return nil
+		// 502 Bad Gateway means the service is NOT ready - don't treat it as ready
+		// Only treat 200/404 as ready, or 401 (auth issue, but service is up)
+		if resp.StatusCode == http.StatusBadGateway {
+			if attempt%10 == 0 {
+				fmt.Printf("Service returned 502 Bad Gateway (attempt %d/%d) - service not ready yet\n", attempt+1, maxAttempts)
+				// After many attempts, check if service is actually running but Caddy can't reach it
+				if attempt > 60 {
+					// Try direct connection to container
+					curlCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", 
+						"-H", fmt.Sprintf("Authorization: Bearer %s", secret),
+						"http://localhost:8079/automations")
+					if curlOutput, curlErr := curlCmd.Output(); curlErr == nil {
+						statusCodeStr := strings.TrimSpace(string(curlOutput))
+						fmt.Printf("Direct container check returned status: %s\n", statusCodeStr)
+						if statusCodeStr == "200" || statusCodeStr == "404" {
+							fmt.Printf("Service is responding directly but Caddy returns 502 - likely Caddy routing issue\n")
+							// Check Caddy configuration
+							caddyConfigCmd := exec.Command("curl", "-s", "http://localhost:2019/config/apps/http/servers/srv0/routes")
+							if caddyConfig, caddyErr := caddyConfigCmd.Output(); caddyErr == nil {
+								fmt.Printf("Caddy routes config:\n%s\n", string(caddyConfig))
+							}
+						}
+					}
+				}
+			}
+			time.Sleep(2 * time.Second)
+			attempt++
+			continue
+		}
+
+		// For other status codes (like 401), log but continue waiting
+		// Don't assume service is ready just because we got a response
+		if attempt%10 == 0 {
+			fmt.Printf("Service returned status %d (attempt %d/%d) - waiting for 200/404\n", resp.StatusCode, attempt+1, maxAttempts)
 		}
 
 		time.Sleep(2 * time.Second)

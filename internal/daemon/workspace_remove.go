@@ -35,7 +35,8 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	bitswanPath := filepath.Join(homeDir, ".config", "bitswan")
 
 	// 1. Ask user for confirmation (handled by CLI, but we need to check automations first)
-	automationSet, err := automations.GetListAutomations(workspaceName)
+	// Use public URL during deletion since containers may be stopping/stopped
+	automationSet, err := automations.GetListAutomationsWithOptions(workspaceName, true)
 	var skipAutomationRemoval bool
 	if err != nil {
 		// Check if this is a WorkspaceMisbehavingError
@@ -73,7 +74,8 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	fmt.Fprintln(writer, "Removing docker containers and volumes...")
 	workspacesFolder := filepath.Join(bitswanPath, "workspaces")
 	dockerComposePath := filepath.Join(workspacesFolder, workspaceName, "deployment")
-	projectName := workspaceName + "-site"
+	// Docker compose project names must be lowercase
+	projectName := strings.ToLower(workspaceName) + "-site"
 	cmd := exec.Command("docker", "compose", "-p", projectName, "down", "--volumes")
 	cmd.Dir = dockerComposePath
 	cmd.Stdout = writer
@@ -104,23 +106,36 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 			if service.Image != "" {
 				exists, err := checkContainerExists(service.Image)
 				if err != nil {
-					return fmt.Errorf("error checking if image exists: %w", err)
+					fmt.Fprintf(writer, "Warning: Error checking if image exists: %v. Continuing with removal.\n", err)
+					continue
 				}
 
 				if !exists {
 					err = deleteDockerImage(service.Image, writer)
 					if err != nil {
-						return fmt.Errorf("error deleting docker image %s: %w", service.Image, err)
+						// Don't fail the entire removal if image deletion fails (image might not exist)
+						fmt.Fprintf(writer, "Warning: Failed to delete docker image %s: %v. Continuing with removal.\n", service.Image, err)
+					} else {
+						fmt.Fprintf(writer, "Deleted image: %s\n", service.Image)
 					}
-					fmt.Fprintln(writer, "Images removed successfully.")
 				} else {
 					fmt.Fprintf(writer, "Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
 				}
 			}
 		}
+		fmt.Fprintln(writer, "Image removal process completed.")
 	}
 
-	// 5. Remove the gitops folder
+	// 5. Remove caddy files (before removing workspace folder so metadata is available)
+	// Run in background - don't wait for it to complete since it's not critical
+	fmt.Fprintln(writer, "Removing caddy files (running in background)...")
+	go func() {
+		// Run Caddy deletion in background - don't block main deletion process
+		caddyapi.DeleteCaddyRecordsWithWriter(workspaceName, writer)
+	}()
+	// Continue immediately - don't wait for Caddy cleanup
+
+	// 6. Remove the gitops folder
 	fmt.Fprintln(writer, "Removing gitops folder...")
 	cmd = exec.Command("rm", "-rf", workspaceName)
 	cmd.Dir = workspacesFolder
@@ -131,14 +146,6 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "GitOps folder removed successfully.")
 
-	// 6. Remove caddy files
-	fmt.Fprintln(writer, "Removing caddy files...")
-	err = caddyapi.DeleteCaddyRecords(workspaceName)
-	if err != nil {
-		return fmt.Errorf("error removing caddy files: %w", err)
-	}
-	fmt.Fprintln(writer, "Caddy files removed successfully.")
-
 	// 7. Remove entries from /etc/hosts
 	fmt.Fprintln(writer, "Removing entries from /etc/hosts...")
 	err = deleteHostsEntry(workspaceName, writer)
@@ -147,6 +154,10 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "Entries removed from /etc/hosts successfully.")
 
+	// Note: Workspace list sync to AOC is done by the MQTT handler AFTER publishing the result
+	// This ensures the frontend receives the result before any potential connection issues from sync
+
+	fmt.Fprintln(writer, "Workspace removal completed.")
 	return nil
 }
 
@@ -167,14 +178,29 @@ func checkContainerExists(imageName string) (bool, error) {
 }
 
 func deleteDockerImage(image string, writer io.Writer) error {
-	cmd := exec.Command("docker", "rmi", image)
+	// First check if the image exists
+	cmd := exec.Command("docker", "images", "-q", image)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("error checking if image exists: %w", err)
+	}
+
+	// If image doesn't exist, return a specific error that we can handle
+	imageID := strings.TrimSpace(out.String())
+	if imageID == "" {
+		return fmt.Errorf("image %s does not exist", image)
+	}
+
+	// Image exists, try to delete it
+	cmd = exec.Command("docker", "rmi", image)
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		return fmt.Errorf("error deleting image %s: %w", image, err)
 	}
-	fmt.Fprintf(writer, "Deleted image: %s\n", image)
 	return nil
 }
 
@@ -234,4 +260,3 @@ func deleteHostsEntry(workspaceName string, writer io.Writer) error {
 	}
 	return nil
 }
-

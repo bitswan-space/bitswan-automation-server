@@ -230,9 +230,13 @@ func SendAutomationRequest(method, requestURL string, workspaceSecret string) (*
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Authorization", "Bearer "+workspaceSecret)
 
-	// When running in daemon, use simple HTTP client (URLs are already transformed)
-	// When running on host, use localhost resolution for .localhost domains
-	if isRunningInDaemon() {
+	// Check if URL is a public URL (contains .localhost or https://)
+	// Public URLs need localhost resolution even when running in daemon
+	isPublicURL := strings.Contains(requestURL, ".localhost") || strings.HasPrefix(requestURL, "https://")
+	
+	// When running in daemon with Docker network URL, use simple HTTP client
+	// For public URLs or when running on host, use localhost resolution for .localhost domains
+	if isRunningInDaemon() && !isPublicURL {
 		return http.DefaultClient.Do(req)
 	}
 	return httpReq.ExecuteRequestWithLocalhostResolution(req)
@@ -240,13 +244,22 @@ func SendAutomationRequest(method, requestURL string, workspaceSecret string) (*
 
 // GetAutomations fetches the list of automations for a given workspace
 func GetAutomations(workspaceName string) ([]Automation, error) {
+	return GetAutomationsWithOptions(workspaceName, false)
+}
+
+// GetAutomationsWithOptions fetches the list of automations for a given workspace
+// If usePublicURL is true, the public URL (via Caddy) will be used instead of the Docker network URL
+func GetAutomationsWithOptions(workspaceName string, usePublicURL bool) ([]Automation, error) {
 	metadata, err := config.GetWorkspaceMetadata(workspaceName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
 
 	reqURL := fmt.Sprintf("%s/automations", metadata.GitopsURL)
-	reqURL = TransformURLForDaemon(reqURL, workspaceName)
+	// Only transform to Docker network URL if not explicitly using public URL
+	if !usePublicURL {
+		reqURL = TransformURLForDaemon(reqURL, workspaceName)
+	}
 
 	// Send the request
 	resp, err := SendAutomationRequest("GET", reqURL, metadata.GitopsSecret)
@@ -309,7 +322,11 @@ func parseTimestamp(timestamp string) string {
 }
 
 func GetListAutomations(workspaceName string) ([]Automation, error) {
-	automations, err := GetAutomations(workspaceName)
+	return GetListAutomationsWithOptions(workspaceName, false)
+}
+
+func GetListAutomationsWithOptions(workspaceName string, usePublicURL bool) ([]Automation, error) {
+	automations, err := GetAutomationsWithOptions(workspaceName, usePublicURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get automations for workspace %s: %w", workspaceName, err)
 	}
