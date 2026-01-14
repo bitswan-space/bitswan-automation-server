@@ -60,6 +60,11 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
+// DoRequest is a public wrapper for doRequest
+func (c *Client) DoRequest(req *http.Request) (*http.Response, error) {
+	return c.doRequest(req)
+}
+
 func (c *Client) doStreamingRequest(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	streamingClient := &http.Client{

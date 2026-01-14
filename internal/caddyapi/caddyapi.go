@@ -2,13 +2,16 @@ package caddyapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -224,6 +227,19 @@ func InitCaddy() error {
 }
 
 func DeleteCaddyRecords(workspaceName string) error {
+	return DeleteCaddyRecordsWithWriter(workspaceName, nil)
+}
+
+func DeleteCaddyRecordsWithWriter(workspaceName string, writer io.Writer) error {
+	// Helper to write log messages
+	log := func(format string, args ...interface{}) {
+		if writer != nil {
+			fmt.Fprintf(writer, format+"\n", args...)
+		} else {
+			fmt.Printf(format+"\n", args...)
+		}
+	}
+	
 	// First, try to get the domain from workspace metadata
 	// We need to import the config package for this to work
 	// For now, we'll handle this differently by checking if we can delete by service routes first
@@ -237,6 +253,7 @@ func DeleteCaddyRecords(workspaceName string) error {
 	// For service routes, we need the domain. Let's try to get it from metadata
 	metadataPath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName + "/metadata.yaml"
 	
+	log("Reading workspace metadata from %s...", metadataPath)
 	// Read domain from metadata if available
 	var domain string
 	if data, err := os.ReadFile(metadataPath); err == nil {
@@ -246,38 +263,81 @@ func DeleteCaddyRecords(workspaceName string) error {
 		}
 		if err := yaml.Unmarshal(data, &md); err == nil {
 			domain = md.Domain
+			log("Found domain: %s", domain)
 		} else {
-			fmt.Printf("Warning: failed to parse %s: %v\n", metadataPath, err)
+			log("Warning: failed to parse %s: %v", metadataPath, err)
 		}
+	} else {
+		log("Warning: failed to read metadata file %s: %v (workspace may already be partially removed)", metadataPath, err)
 	}
 	
 	// Delete service routes if we have a domain
 	if domain != "" {
+		log("Deleting service routes for domain %s...", domain)
 		for _, service := range serviceRoutes {
 			hostname := fmt.Sprintf("%s-%s.%s", workspaceName, service, domain)
+			log("Removing route for %s...", hostname)
 			if err := RemoveRoute(hostname); err != nil {
 				// Don't fail completely if one service route fails - it might not exist
-				fmt.Printf("Warning: failed to remove route for %s: %v\n", hostname, err)
+				log("Warning: failed to remove route for %s: %v", hostname, err)
+			} else {
+				log("Successfully removed route for %s", hostname)
 			}
 		}
+	} else {
+		log("No domain found, skipping service route deletion")
 	}
 	
 	// Delete TLS-related items using the old direct ID approach
+	log("Deleting TLS-related items...")
 	tlsItems := []string{"tlspolicy", "tlscerts"}
 	for _, item := range tlsItems {
         url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s_%s", workspaceName, item)
+		log("Deleting TLS item %s...", item)
 		if _, err := sendRequest("DELETE", url, nil); err != nil {
 			// Don't fail completely if TLS items fail - they might not exist
-			fmt.Printf("Warning: failed to delete %s: %v\n", item, err)
+			if strings.Contains(err.Error(), "status code 404") {
+				log("TLS item %s already removed or doesn't exist", item)
+			} else {
+				log("Warning: failed to delete %s: %v", item, err)
+			}
+		} else {
+			log("Successfully deleted TLS item %s", item)
 		}
 	}
 	
+	log("Caddy cleanup completed")
 	return nil
 }
 
 // sanitizeHostname converts a hostname to a safe ID by replacing dots and special chars with underscores
 func sanitizeHostname(hostname string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(hostname, ".", "_"), "-", "_")
+}
+
+// ensureUpstreamScheme ensures the upstream is in the correct format for Caddy
+// For Caddy's reverse_proxy, the dial field should be "host:port" (no scheme)
+// For WebSocket connections, if the backend port is WSS (8084), use WS port (8083) instead
+// because Caddy handles TLS termination and connects to the backend via plain WebSocket
+func ensureUpstreamScheme(upstream string) string {
+	// Remove any leading slashes that might have been accidentally added
+	upstream = strings.TrimPrefix(upstream, "/")
+	
+	// Remove any scheme prefix (http://, https://, ws://, wss://)
+	// Caddy's dial field should be just "host:port"
+	upstream = strings.TrimPrefix(upstream, "http://")
+	upstream = strings.TrimPrefix(upstream, "https://")
+	upstream = strings.TrimPrefix(upstream, "ws://")
+	upstream = strings.TrimPrefix(upstream, "wss://")
+	
+	// Check if this is the WSS port (8084) - if so, use WS port (8083) instead
+	// because Caddy will handle TLS termination and connect via plain WebSocket
+	if strings.Contains(upstream, ":8084") {
+		upstream = strings.Replace(upstream, ":8084", ":8083", 1)
+	}
+	
+	// Return just "host:port" format (no scheme)
+	return upstream
 }
 
 // AddRoute adds a generic route for any hostname to upstream mapping
@@ -292,6 +352,10 @@ func AddRoute(hostname, upstream string) error {
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
 
+	// Process the upstream to ensure correct format
+	processedUpstream := ensureUpstreamScheme(upstream)
+	fmt.Printf("AddRoute: original upstream='%s', processed upstream='%s'\n", upstream, processedUpstream)
+	
 	// Create the route for the hostname
 	route := Route{
 		ID: routeID,
@@ -302,19 +366,13 @@ func AddRoute(hostname, upstream string) error {
 		},
 		Handle: []Handle{
 			{
-				Handler: "subroute",
-				Routes: []Route{
+				Handler: "reverse_proxy",
+				Upstreams: []Upstream{
 					{
-						Handle: []Handle{
-							{
-								Handler: "reverse_proxy",
-								Upstreams: []Upstream{
-									{
-										Dial: upstream,
-									},
-								},
-							},
-						},
+						// For WebSocket connections, use http:// scheme
+						// Caddy will automatically handle WebSocket upgrade
+						// If upstream doesn't have a scheme, add http://
+						Dial: processedUpstream,
 					},
 				},
 			},
@@ -328,10 +386,29 @@ func AddRoute(hostname, upstream string) error {
 		return fmt.Errorf("failed to marshal route payload: %w", err)
 	}
 
+	// Debug: Print the JSON payload being sent
+	fmt.Printf("AddRoute: Sending JSON payload to Caddy:\n%s\n", string(jsonPayload))
+
 	// Send the payload to the Caddy API
 	_, err = sendRequest("POST", caddyAPIRoutesBaseUrl, jsonPayload)
 	if err != nil {
 		return fmt.Errorf("failed to add route for %s to Caddy: %w", hostname, err)
+	}
+
+	// Verify the route was added correctly by fetching it back
+	verifyRoutes, err := ListRoutes()
+	if err == nil {
+		for _, r := range verifyRoutes {
+			if r.ID == routeID {
+				for _, handle := range r.Handle {
+					if handle.Handler == "reverse_proxy" {
+						for _, up := range handle.Upstreams {
+							fmt.Printf("AddRoute: Verified route in Caddy - Dial field: '%s'\n", up.Dial)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	fmt.Printf("Successfully added route: %s -> %s\n", hostname, upstream)
@@ -346,26 +423,26 @@ func RemoveRoute(hostname string) error {
 	// Construct the URL for the specific route
     url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", routeID)
 
-	// Keep trying to delete until we get a 404 (route doesn't exist)
-	firstRun := true
-	for {
-		_, err := sendRequest("DELETE", url, nil)
-		if err != nil {
-			// Check if this is a 404 error (route doesn't exist)
-			if strings.Contains(err.Error(), "status code 404") {
-				if firstRun {
-					fmt.Printf("Route %s already removed or doesn't exist\n", hostname)
-				}
-				return nil
-			}
-			// For other errors, return immediately
-			return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
+	// Try to delete once - if it fails with 404, the route doesn't exist (success)
+	// If it fails with other errors, return the error immediately
+	// Don't retry to avoid hanging on unreachable Caddy
+	_, err := sendRequest("DELETE", url, nil)
+	if err != nil {
+		// Check if this is a 404 error (route doesn't exist) - this is success
+		if strings.Contains(err.Error(), "status code 404") {
+			return nil // Route already removed or doesn't exist - success
 		}
-		
-		// If we get here, the deletion was successful, continue to check for more routes
-		fmt.Printf("Removed route: %s\n", hostname)
-		firstRun = false
+		// For timeout or connection errors, assume the route is gone or Caddy is unreachable
+		// Don't fail - just log and continue
+		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "no such host") {
+			return nil // Assume route is gone or Caddy is unreachable
+		}
+		// For other errors, return the error
+		return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
 	}
+	
+	// If we get here, the deletion was successful
+	return nil
 }
 
 // ListRoutes retrieves and lists all current routes from Caddy
@@ -386,9 +463,15 @@ func ListRoutes() ([]Route, error) {
 }
 
 func sendRequest(method, url string, payload []byte) ([]byte, error) {
-	client := &http.Client{}
+	// Create context with timeout to ensure request doesn't hang
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}

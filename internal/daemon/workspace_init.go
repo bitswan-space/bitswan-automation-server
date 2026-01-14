@@ -654,7 +654,8 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Printf("Warning: Failed to save metadata: %v\n", err)
 	}
 
-	projectName := workspaceName + "-site"
+	// Docker compose project names must be lowercase
+	projectName := strings.ToLower(workspaceName) + "-site"
 	// Use --pull missing to pull images if they don't exist locally (needed for CI)
 	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--pull", "missing")
 
@@ -664,6 +665,11 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	fmt.Println("BitSwan GitOps initialized successfully!")
+
+	// Sync updated workspace list to AOC
+	if err := syncWorkspaceListToAOC(); err != nil {
+		fmt.Printf("Warning: Failed to sync workspace list to AOC: %v\n", err)
+	}
 
 	// Setup editor service if not disabled
 	if !*noIde {

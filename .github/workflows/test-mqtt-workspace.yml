@@ -1,0 +1,323 @@
+name: MQTT Workspace Test
+
+on: [push, pull_request]
+
+jobs:
+  mqtt-workspace-test:
+    runs-on: ubuntu-latest
+    # This test requires Docker, root access, and AOC setup
+    # Only run on pull requests to avoid running on every push
+    if: github.event_name == 'pull_request'
+
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Configure Docker
+        run: |
+          sudo mkdir -p /etc/docker
+          echo '{"hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2376"]}' | sudo tee /etc/docker/daemon.json
+          sudo service docker start || true
+
+      - name: Install and configure dnsmasq for .localhost resolution
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dnsmasq
+          # Stop systemd-resolved which might conflict with dnsmasq
+          sudo systemctl stop systemd-resolved || true
+          sudo systemctl disable systemd-resolved || true
+          # Configure dnsmasq to resolve .localhost domains to 127.0.0.1
+          sudo mkdir -p /etc/dnsmasq.d
+          echo "address=/.localhost/127.0.0.1" | sudo tee /etc/dnsmasq.d/localhost.conf
+          echo "listen-address=127.0.0.1" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "port=53" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "no-resolv" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "server=8.8.8.8" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          echo "server=8.8.4.4" | sudo tee -a /etc/dnsmasq.d/localhost.conf
+          # Test configuration
+          sudo dnsmasq --test || true
+          # Start dnsmasq
+          sudo systemctl start dnsmasq || sudo dnsmasq --no-daemon --log-queries &
+          # Update resolv.conf to use dnsmasq first, then fallback to Google DNS
+          echo "nameserver 127.0.0.1" | sudo tee /etc/resolv.conf
+          echo "nameserver 8.8.8.8" | sudo tee -a /etc/resolv.conf
+          # Make resolv.conf immutable to prevent systemd-resolved from overwriting it
+          sudo chattr +i /etc/resolv.conf || true
+          # Verify dnsmasq is working
+          sleep 3
+          dig @127.0.0.1 test.localhost +short || nslookup test.localhost 127.0.0.1 || echo "DNS resolution check skipped"
+
+      - name: Install and configure mkcert for TLS certificates
+        run: |
+          # Install mkcert
+          sudo apt-get install -y libnss3-tools
+          curl -JLO "https://dl.filippo.io/mkcert/latest?for=linux/amd64"
+          chmod +x mkcert-v*-linux-amd64
+          sudo mv mkcert-v*-linux-amd64 /usr/local/bin/mkcert
+          # Generate local CA
+          mkcert -install
+          # Verify mkcert is working
+          mkcert -CAROOT || echo "mkcert CAROOT check completed"
+
+      - name: Set up EMQX MQTT broker
+        run: |
+          # Create Docker network for services (use same network name as ingress init)
+                  docker network create bitswan_network || true
+                  
+                  # Start EMQX container (without JWT config first, we'll configure it via API)
+                  docker run -d \
+                    --name aoc-emqx \
+                    --network bitswan_network \
+                    -p 1883:1883 \
+                    -p 8083:8083 \
+                    -p 8084:8084 \
+                    -p 8883:8883 \
+                    -p 18083:18083 \
+                    -e EMQX_NAME=emqx \
+                    -e EMQX_HOST=127.0.0.1 \
+                    -e EMQX_CLUSTER__DISCOVERY_STRATEGY=static \
+                    emqx/emqx:5.3.0 || true
+                  
+                  # Verify EMQX is on the network
+                  echo "Verifying EMQX container network..."
+                  docker inspect aoc-emqx --format '{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}' || echo "Could not inspect EMQX network"
+          
+          # Wait for EMQX to be ready
+          echo "Waiting for EMQX to start..."
+          for i in {1..60}; do
+            if docker exec aoc-emqx emqx_ctl status >/dev/null 2>&1; then
+              echo "EMQX is ready!"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "EMQX failed to start"
+              docker logs aoc-emqx
+              exit 1
+            fi
+            echo "Waiting for EMQX... ($i/60)"
+            sleep 2
+          done
+          
+          # Verify EMQX is running
+          docker exec aoc-emqx emqx_ctl status || exit 1
+          echo "EMQX is running"
+          
+          # Wait a bit more for HTTP API to be ready
+          echo "Waiting for EMQX HTTP API..."
+          for i in {1..30}; do
+            if curl -s http://localhost:18083/api/v5/status >/dev/null 2>&1; then
+              echo "EMQX HTTP API is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "EMQX HTTP API failed to start"
+              exit 1
+            fi
+            echo "Waiting for EMQX HTTP API... ($i/30)"
+            sleep 1
+          done
+          
+          # Configure JWT authentication via HTTP API
+          echo "Configuring JWT authentication..."
+          curl -X POST 'http://localhost:18083/api/v5/authentication' \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "mechanism": "jwt",
+              "backend": "jwt",
+              "jwt": {
+                "secret": "test-secret-key-for-ci-12345",
+                "algorithm": "hmac-based",
+                "use_jwks": false
+              }
+            }' || echo "JWT authentication configuration may have failed, continuing..."
+          
+          echo "EMQX is configured and ready"
+
+      - name: Build bitswan binary
+        run: go build -o bitswan ./main.go
+
+      - name: Initialize daemon
+        run: |
+          sudo ./bitswan automation-server-daemon init
+          # Fix permissions on config file and directory so runner user can read it
+          sudo chmod 644 /home/runner/.config/bitswan/automation_server_config.toml || true
+          sudo chmod 755 /home/runner/.config/bitswan || true
+          # Wait for daemon to be ready
+          sleep 5
+          # Verify daemon is running
+          ./bitswan automation-server-daemon status || exit 1
+          
+      - name: Initialize ingress
+        run: |
+          # Initialize ingress (this sets up Caddy)
+          sudo ./bitswan ingress init || true
+          # Wait for Caddy to be ready
+          echo "Waiting for Caddy to be ready..."
+          for i in {1..30}; do
+            if docker ps | grep -q caddy; then
+              echo "Caddy is running!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Caddy failed to start"
+              docker ps -a | grep caddy || echo "No Caddy container found"
+              exit 1
+            fi
+            echo "Waiting for Caddy... ($i/30)"
+            sleep 1
+          done
+          
+      - name: Set up MQTT ingress route
+        run: |
+          
+          # Add ingress route for MQTT WSS through Caddy
+          # This allows connecting via wss://mqtt.bitswan.localhost
+          ./bitswan ingress add-route mqtt.bitswan.localhost aoc-emqx:8084 --mkcert || true
+          
+          # Wait for Caddy to reload and pick up the route
+          echo "Waiting for Caddy to reload route configuration..."
+          sleep 5
+          
+          # Verify Caddy is still running
+          if ! docker ps | grep -q caddy; then
+            echo "Error: Caddy container stopped after adding route"
+            docker ps -a | grep caddy
+            exit 1
+          fi
+          
+          # Debug: Verify Caddy can reach EMQX
+          echo "Testing Caddy -> EMQX connectivity..."
+          docker exec caddy ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Caddy container)"
+          docker exec caddy nc -zv aoc-emqx 8084 || docker exec caddy sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
+          
+          # Debug: Check Caddy routes
+          echo "Checking Caddy routes..."
+          curl -s http://localhost:2019/config/apps/http/servers/srv0/routes | jq -r '.[] | select(.match[0].host[]? | contains("mqtt")) | "Route: \(.match[0].host[])"' || echo "Could not list Caddy routes"
+          
+          # Debug: Check Caddy logs for errors
+          echo "Recent Caddy logs (errors):"
+          docker logs caddy --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
+          
+          # Debug: Check if route is accessible
+          echo "Testing DNS resolution..."
+          nslookup mqtt.bitswan.localhost 127.0.0.1 || dig @127.0.0.1 mqtt.bitswan.localhost || echo "DNS check failed"
+          
+          # Debug: Test HTTPS connectivity
+          echo "Testing HTTPS connectivity..."
+          timeout 3 curl -k -v https://mqtt.bitswan.localhost:443 2>&1 | head -20 || echo "HTTPS test failed or timed out"
+          
+          # Verify the route is accessible
+          echo "MQTT ingress route configured: wss://mqtt.bitswan.localhost"
+
+      - name: Start mock AOC server
+        run: |
+          # Start mock AOC server in Docker container on bitswan_network
+          # This allows the daemon container to reach it via Docker network
+          # Mount the bitswan binary into the container
+          docker run -d \
+            --name mock-aoc-server \
+            --network bitswan_network \
+            --network-alias api.bitswan.localhost \
+            -p 8080:8080 \
+            -v $(pwd)/bitswan:/usr/local/bin/bitswan:ro \
+            bitswan/automation-server-runtime:latest \
+            /usr/local/bin/bitswan _test mock-aoc-server \
+              --port 8080 \
+              --emqx-secret "test-secret-key-for-ci-12345" \
+              --server-id "test-ci-server-id" \
+              --org-id "test-org-id" \
+              --emqx-url "aoc-emqx" \
+              --emqx-port 1883
+          
+          # Wait for server to be ready
+          echo "Waiting for mock AOC server to start..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8080/api/automation_server/info >/dev/null 2>&1; then
+              echo "Mock AOC server is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Mock AOC server failed to start"
+              docker logs mock-aoc-server
+              exit 1
+            fi
+            echo "Waiting for mock AOC server... ($i/30)"
+            sleep 1
+          done
+
+      - name: Set up AOC configuration for MQTT test
+        run: |
+          # Create AOC config directory
+          sudo mkdir -p /home/runner/.config/bitswan
+          
+          # Create automation server config pointing to mock AOC server
+          # Use the Docker network alias so daemon container can reach it
+          sudo tee /home/runner/.config/bitswan/automation_server_config.toml > /dev/null <<EOF
+          [aoc]
+          aoc_url = "http://api.bitswan.localhost:8080"
+          automation_server_id = "test-ci-server-id"
+          access_token = "test-token"
+          expires_at = ""
+          EOF
+          
+          # Fix permissions
+          sudo chmod 644 /home/runner/.config/bitswan/automation_server_config.toml
+          sudo chown -R runner:runner /home/runner/.config/bitswan || true
+          
+          # Restart daemon container to pick up AOC config and initialize MQTT
+          echo "Restarting daemon container to initialize MQTT connection..."
+          # Stop and remove existing container
+          docker stop bitswan-automation-server-daemon || true
+          docker rm bitswan-automation-server-daemon || true
+          # Start daemon container with updated config
+          sudo ./bitswan automation-server-daemon init || exit 1
+          sleep 5
+          ./bitswan automation-server-daemon status || exit 1
+          
+          # Give MQTT publisher time to initialize and connect
+          echo "Waiting for MQTT publisher to initialize..."
+          sleep 15
+          
+          # Check daemon logs for MQTT connection status
+          echo "Checking daemon logs for MQTT connection..."
+          docker logs bitswan-automation-server-daemon --tail 50 | grep -i "mqtt\|connected\|subscribed" || echo "No MQTT logs found"
+
+      - name: Run MQTT workspace test
+        timeout-minutes: 15
+        run: |
+          ./bitswan _test mqtt-workspace || {
+            echo "=== Test failed, printing daemon logs ==="
+            docker logs bitswan-automation-server-daemon --tail 100 || echo "Could not get daemon logs"
+            echo "=== EMQX logs ==="
+            docker logs aoc-emqx --tail 50 || echo "Could not get EMQX logs"
+            echo "=== Caddy logs ==="
+            docker logs caddy --tail 50 || echo "Could not get Caddy logs"
+            exit 1
+          }
+          # Cleanup after test
+          ./bitswan _test cleanup || true
+
+      - name: Final cleanup
+        if: always()
+        run: |
+          ./bitswan _test cleanup || true
+          # Stop mock AOC server container
+          docker stop mock-aoc-server || true
+          docker rm mock-aoc-server || true
+          # Clean up EMQX
+          docker stop aoc-emqx || true
+          docker rm aoc-emqx || true
+
