@@ -71,6 +71,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	// Init required networks
 	networksToCreate := []string{
 		"bitswan_network",
+		"bitswan_caddy",
 		fmt.Sprintf("bitswan_%s_common", workspaceName),
 		fmt.Sprintf("bitswan_%s_dev", workspaceName),
 		fmt.Sprintf("bitswan_%s_staging", workspaceName),
@@ -93,7 +94,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			if *verbose {
 				fmt.Printf("Creating Docker network '%s'...\n", networkName)
 			}
-			if err := runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
+			if err = runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
 				if err.Error() == "exit status 1" {
 					if *verbose {
 						fmt.Printf("Docker network '%s' already exists!\n", networkName)
