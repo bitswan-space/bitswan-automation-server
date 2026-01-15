@@ -55,14 +55,15 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	workspaceName := fs.Args()[0]
 	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
 
-	if _, err := os.Stat(bitswanConfig); os.IsNotExist(err) {
-		if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
+	var err error
+	if _, err = os.Stat(bitswanConfig); os.IsNotExist(err) {
+		if err = os.MkdirAll(bitswanConfig, 0755); err != nil {
 			return fmt.Errorf("failed to create BitSwan config directory: %w", err)
 		}
 	}
 
 	// Ensure oauth2-proxy binary is available
-	if err := oauth.EnsureOAuth2Proxy(bitswanConfig); err != nil {
+	if err = oauth.EnsureOAuth2Proxy(bitswanConfig); err != nil {
 		fmt.Printf("Warning: Failed to download oauth2-proxy: %v\n", err)
 		fmt.Println("OAuth authentication may not work properly without oauth2-proxy")
 	}
@@ -77,7 +78,8 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	for _, networkName := range networksToCreate {
-		exists, err := checkNetworkExists(networkName)
+		var exists bool
+		exists, err = checkNetworkExists(networkName)
 		if err != nil {
 			return fmt.Errorf("error checking network %s: %w", networkName, err)
 		}
@@ -91,7 +93,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			if *verbose {
 				fmt.Printf("Creating Docker network '%s'...\n", networkName)
 			}
-			if err := runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
+			if err = runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
 				if err.Error() == "exit status 1" {
 					if *verbose {
 						fmt.Printf("Docker network '%s' already exists!\n", networkName)

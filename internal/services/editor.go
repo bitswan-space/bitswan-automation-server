@@ -75,6 +75,10 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	
 	workspaceName := e.WorkspaceName
 	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	workspaceDevNetwork := fmt.Sprintf("bitswan_%s_dev", workspaceName)
+	workspaceStagingNetwork := fmt.Sprintf("bitswan_%s_staging", workspaceName)
+	workspaceProdNetwork := fmt.Sprintf("bitswan_%s_prod", workspaceName)
+	
 	// Also convert bitswan-src path for examples mount
 	bitswanSrcPath := filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src"
 
@@ -82,7 +86,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		"image":    bitswanEditorImage,
 		"restart":  "always",
 		"hostname": workspaceName + "-editor",
-		"networks": []string{"bitswan_network", workspaceCommonNetwork},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork, workspaceDevNetwork, workspaceStagingNetwork, workspaceProdNetwork},
 		"environment": []string{
 			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
 			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
@@ -138,6 +142,15 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{
+				"external": true,
+			},
+			workspaceDevNetwork: map[string]interface{}{
+				"external": true,
+			},
+			workspaceStagingNetwork: map[string]interface{}{
+				"external": true,
+			},
+			workspaceProdNetwork: map[string]interface{}{
 				"external": true,
 			},
 		},
