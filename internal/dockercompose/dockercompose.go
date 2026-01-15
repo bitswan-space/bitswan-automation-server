@@ -76,11 +76,14 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	}
 
 	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", config.WorkspaceName)
+	workspaceDevNetwork := fmt.Sprintf("bitswan_%s_dev", config.WorkspaceName)
+	workspaceStagingNetwork := fmt.Sprintf("bitswan_%s_staging", config.WorkspaceName)
+	workspaceProdNetwork := fmt.Sprintf("bitswan_%s_prod", config.WorkspaceName)
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
-		"networks": []string{"bitswan_network", workspaceCommonNetwork},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork, workspaceDevNetwork, workspaceStagingNetwork, workspaceProdNetwork},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
@@ -174,6 +177,15 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{
+				"external": true,
+			},
+			workspaceDevNetwork: map[string]interface{}{
+				"external": true,
+			},
+			workspaceStagingNetwork: map[string]interface{}{
+				"external": true,
+			},
+			workspaceProdNetwork: map[string]interface{}{
 				"external": true,
 			},
 		},
