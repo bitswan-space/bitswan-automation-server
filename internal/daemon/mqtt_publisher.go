@@ -277,6 +277,13 @@ func (p *MQTTPublisher) onConnectionLost(_ mqtt.Client, err error) {
 }
 
 
+// IsConnected returns true if the MQTT publisher is connected
+func (p *MQTTPublisher) IsConnected() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.connected && p.client != nil && p.client.IsConnected()
+}
+
 // Disconnect disconnects from the MQTT broker
 func (p *MQTTPublisher) Disconnect() {
 	p.mu.Lock()

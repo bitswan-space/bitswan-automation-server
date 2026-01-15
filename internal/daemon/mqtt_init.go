@@ -22,34 +22,38 @@ func initializeMQTTPublisherWithServer(server *Server) error {
 		// Give the server a moment to fully start
 		time.Sleep(2 * time.Second)
 		fmt.Println("Starting MQTT publisher initialization...")
-		
+
 		maxRetries := 5
 		retryDelay := 5 * time.Second
-		
+
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			initialized, err := tryInitializeMQTTPublisher(server)
 			if initialized {
 				// Successfully initialized!
+				fmt.Println("Starting background health monitor for MQTT connection...")
+				go monitorMQTTConnection(server)
 				return
 			}
-			
+
 			if err == nil {
 				// AOC not configured, no need to retry
 				fmt.Println("AOC not configured, MQTT publisher initialization skipped")
 				return
 			}
-			
+
 			if attempt < maxRetries {
-				fmt.Printf("MQTT publisher initialization failed (attempt %d/%d): %v. Retrying in %v...\n", 
+				fmt.Printf("MQTT publisher initialization failed (attempt %d/%d): %v. Retrying in %v...\n",
 					attempt, maxRetries, err, retryDelay)
 				time.Sleep(retryDelay)
 			} else {
-				fmt.Printf("MQTT publisher initialization failed after %d attempts: %v. Will retry on next workspace operation.\n", 
+				fmt.Printf("MQTT publisher initialization failed after %d attempts: %v. Starting background reconnection monitor...\n",
 					maxRetries, err)
+				// Start background reconnection monitor even if initial attempts failed
+				go monitorMQTTConnection(server)
 			}
 		}
 	}()
-	
+
 	return nil
 }
 
@@ -109,5 +113,36 @@ func tryInitializeMQTTPublisher(server *Server) (bool, error) {
 
 	fmt.Println("MQTT publisher initialized successfully")
 	return true, nil
+}
+
+// monitorMQTTConnection continuously monitors the MQTT connection and attempts to reconnect if it fails
+// This provides automatic self-healing for the MQTT connection
+func monitorMQTTConnection(server *Server) {
+	checkInterval := 30 * time.Second
+	reconnectDelay := 10 * time.Second
+
+	fmt.Println("MQTT connection monitor started (checking every 30 seconds)")
+
+	for {
+		time.Sleep(checkInterval)
+
+		publisher := GetMQTTPublisher()
+		if !publisher.IsConnected() {
+			fmt.Println("MQTT connection lost, attempting to reconnect...")
+
+			// Try to reinitialize the connection
+			initialized, err := tryInitializeMQTTPublisher(server)
+			if initialized {
+				fmt.Println("MQTT connection successfully restored!")
+			} else if err != nil {
+				fmt.Printf("MQTT reconnection failed: %v. Will retry in %v...\n", err, checkInterval)
+			}
+
+			// If we failed, wait before the next automatic check
+			if !initialized && err != nil {
+				time.Sleep(reconnectDelay)
+			}
+		}
+	}
 }
 
