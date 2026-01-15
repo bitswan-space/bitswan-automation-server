@@ -62,11 +62,12 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return startDaemonContainer("Starting automation server daemon container...", "Automation server daemon started successfully")
+	daemonImage := "bitswan/automation-server-runtime:latest"
+	return startDaemonContainer("Starting automation server daemon container...", "Automation server daemon started successfully", daemonImage)
 }
 
 // startDaemonContainer sets up and starts the daemon container with the current binary
-func startDaemonContainer(startMessage, successMessage string) error {
+func startDaemonContainer(startMessage, successMessage string, daemonImage string) error {
 	// Get the current binary path by inspecting the running process
 	var binaryPath string
 	var err error
@@ -127,7 +128,6 @@ func startDaemonContainer(startMessage, successMessage string) error {
 	// Use pre-built image with all tools (git, ssh-keygen, docker-cli, mkcert) pre-installed
 	// Set BITSWAN_CADDY_HOST to use 'caddy' hostname instead of 'localhost' when on bitswan_network
 	// Mount the bitswan automation server socket directory for IPC
-	daemonImage := "bitswan/automation-server-runtime:latest"
 
 	// Create the socket directory on the host if it doesn't exist
 	socketDir := "/var/run/bitswan"
@@ -249,4 +249,3 @@ func checkNetworkExists(networkName string) (bool, error) {
 
 	return false, nil
 }
-

@@ -67,3 +67,8 @@ func GetLatestEditorStagingVersion() (string, error) {
 func GetLatestGitopsStagingVersion() (string, error) {
 	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops-staging/tags/")
 }
+
+// GetLatestAutomationServerDaemonRuntimeVersion gets the latest version of the automation-server-daemon-runtime image
+func GetLatestAutomationServerDaemonRuntimeVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/automation-server-runtime/tags/")
+}
