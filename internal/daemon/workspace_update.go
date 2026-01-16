@@ -33,11 +33,9 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	}
 
 	workspaceName := fs.Args()[0]
-	// Use HOST_HOME if available (when running in daemon container), otherwise use HOME
-	homeDir := os.Getenv("HOST_HOME")
-	if homeDir == "" {
-		homeDir = os.Getenv("HOME")
-	}
+	// Use HOME directly - inside container this is /root, on host it's the user's home
+	// The workspace files are mounted at /root/.config/bitswan in the container
+	homeDir := os.Getenv("HOME")
 	bitswanPath := filepath.Join(homeDir, ".config", "bitswan") + "/"
 
 	// 1. Create or update examples directory

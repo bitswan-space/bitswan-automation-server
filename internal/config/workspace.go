@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"gopkg.in/yaml.v2"
 )
 
@@ -40,6 +41,12 @@ func GetWorkspaceMetadata(workspaceName string) (WorkspaceMetadata, error) {
 
 // SaveToFile saves the WorkspaceMetadata to a YAML file at the specified path
 func (wm *WorkspaceMetadata) SaveToFile(filePath string) error {
+	// Ensure the parent directory exists
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory for metadata file: %w", err)
+	}
+
 	// Marshal to YAML
 	yamlData, err := yaml.Marshal(wm)
 	if err != nil {
