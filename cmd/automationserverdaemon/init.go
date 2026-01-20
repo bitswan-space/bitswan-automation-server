@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/docker"
 	"github.com/dchest/uniuri"
 	"github.com/spf13/cobra"
 )
@@ -24,6 +25,41 @@ func newInitCmd() *cobra.Command {
 }
 
 func runInitCmd(cmd *cobra.Command, args []string) error {
+	// Check if Docker is available
+	if !docker.IsDockerAvailable() {
+		// Check if we're on Ubuntu LTS
+		isUbuntuLTS, codename, err := docker.IsUbuntuLTS()
+		if err != nil {
+			return fmt.Errorf("failed to check if running on Ubuntu LTS: %w", err)
+		}
+
+		if isUbuntuLTS {
+			fmt.Printf("Docker is not installed. Detected Ubuntu %s LTS.\n", codename)
+			install, err := docker.PromptUser("Would you like to automatically install Docker Engine?")
+			if err != nil {
+				return fmt.Errorf("failed to get user input: %w", err)
+			}
+
+			if install {
+				// Check if we need sudo
+				if os.Geteuid() != 0 {
+					fmt.Println("\nThis operation requires root privileges.")
+					fmt.Println("Please run this command with sudo:")
+					fmt.Printf("  sudo %s automation-server-daemon init\n", os.Args[0])
+					return fmt.Errorf("docker installation requires root privileges")
+				}
+
+				if err := docker.InstallDocker(); err != nil {
+					return fmt.Errorf("failed to install Docker: %w", err)
+				}
+			} else {
+				return fmt.Errorf("Docker is required but not installed. Please install Docker manually: https://docs.docker.com/engine/install/ubuntu/")
+			}
+		} else {
+			return fmt.Errorf("Docker is required but not found in PATH. Please install Docker: https://docs.docker.com/engine/install/")
+		}
+	}
+
 	// Generate and save the authentication token to the config file
 	cfg := config.NewAutomationServerConfig()
 	existingToken, err := cfg.GetLocalServerToken()
