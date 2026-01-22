@@ -23,6 +23,10 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	couchdbImage := fs.String("couchdb-image", "", "")
 	staging := fs.Bool("staging", false, "")
 	trustCA := fs.Bool("trust-ca", false, "")
+	devMode := fs.Bool("dev-mode", false, "")
+	disableDevMode := fs.Bool("disable-dev-mode", false, "")
+	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
+	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -37,6 +41,43 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	// The workspace files are mounted at /root/.config/bitswan in the container
 	homeDir := os.Getenv("HOME")
 	bitswanPath := filepath.Join(homeDir, ".config", "bitswan") + "/"
+	workspacePath := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName)
+	metadataPath := filepath.Join(workspacePath, "metadata.yaml")
+
+	// Handle dev mode settings - update metadata if dev mode flags are provided
+	if *devMode || *disableDevMode || *gitopsDevSourceDir != "" || *editorDevSourceDir != "" {
+		fmt.Println("Updating dev mode settings...")
+		metadata, err := config.GetWorkspaceMetadata(workspaceName)
+		if err != nil {
+			return fmt.Errorf("failed to read workspace metadata: %w", err)
+		}
+
+		if *devMode {
+			metadata.DevMode = true
+			fmt.Println("Dev mode enabled")
+		}
+		if *disableDevMode {
+			metadata.DevMode = false
+			// Clear dev source directories when disabling dev mode
+			metadata.GitopsDevSourceDir = nil
+			metadata.EditorDevSourceDir = nil
+			fmt.Println("Dev mode disabled")
+		}
+		if *gitopsDevSourceDir != "" {
+			metadata.GitopsDevSourceDir = gitopsDevSourceDir
+			metadata.DevMode = true
+			fmt.Printf("GitOps dev source directory set to: %s\n", *gitopsDevSourceDir)
+		}
+		if *editorDevSourceDir != "" {
+			metadata.EditorDevSourceDir = editorDevSourceDir
+			metadata.DevMode = true
+			fmt.Printf("Editor dev source directory set to: %s\n", *editorDevSourceDir)
+		}
+
+		if err := metadata.SaveToFile(metadataPath); err != nil {
+			return fmt.Errorf("failed to save workspace metadata: %w", err)
+		}
+	}
 
 	// 1. Create or update examples directory
 	fmt.Println("Ensuring examples are up to date...")
@@ -116,11 +157,11 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 		return fmt.Errorf("failed to fix permissions: %w", err)
 	}
 
-	// Regenerate the entire docker-compose file to propagate all configuration changes
-	// (volumes, environment variables, images, etc.) to existing workspaces
-	fmt.Println("Regenerating editor docker-compose file...")
+	// Regenerate the entire docker-compose file to ensure all config changes are applied
+	// This handles image updates, dev mode settings, certificates, etc.
+	fmt.Println("Regenerating editor docker-compose configuration...")
 	if err := editorService.RegenerateDockerCompose(editorImage, staging, trustCA); err != nil {
-		return fmt.Errorf("failed to regenerate editor docker-compose: %w", err)
+		return fmt.Errorf("failed to regenerate docker-compose file: %w", err)
 	}
 
 	fmt.Println("Starting editor container...")

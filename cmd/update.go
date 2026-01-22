@@ -9,13 +9,17 @@ import (
 )
 
 type updateOptions struct {
-	gitopsImage    string
-	editorImage    string
-	kafkaImage     string
-	zookeeperImage string
-	couchdbImage   string
-	staging        bool
-	trustCA        bool
+	gitopsImage        string
+	editorImage        string
+	kafkaImage         string
+	zookeeperImage     string
+	couchdbImage       string
+	staging            bool
+	trustCA            bool
+	devMode            bool
+	disableDevMode     bool
+	gitopsDevSourceDir string
+	editorDevSourceDir string
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -49,6 +53,10 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.couchdbImage, "couchdb-image", "", "Custom image for CouchDB")
 	cmd.Flags().BoolVar(&o.staging, "staging", false, "Use staging images for editor and gitops")
 	cmd.Flags().BoolVar(&o.trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
+	cmd.Flags().BoolVar(&o.devMode, "dev-mode", false, "Enable development mode with live-reloading for gitops and editor extension")
+	cmd.Flags().BoolVar(&o.disableDevMode, "disable-dev-mode", false, "Disable development mode")
+	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
+	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
 
 	return cmd
 }
