@@ -39,7 +39,7 @@ type Config struct {
 func GetOauthConfig(workspaceName string) (*Config, error) {
 	var config Config
 	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName
-	configPath := workspacePath + "/secrets/oauth-config.yaml"
+	configPath := workspacePath + "/oauth-config.yaml"
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return nil, err
@@ -64,16 +64,10 @@ func GetOauthConfig(workspaceName string) (*Config, error) {
 	return &config, nil
 }
 
-// SaveOauthConfig saves the OAuth config to the workspace secrets directory
+// SaveOauthConfig saves the OAuth config to the workspace directory
 func SaveOauthConfig(workspaceName string, config *Config) error {
 	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName
-	secretsPath := workspacePath + "/secrets"
-	configPath := secretsPath + "/oauth-config.yaml"
-
-	// Ensure secrets directory exists
-	if err := os.MkdirAll(secretsPath, 0755); err != nil {
-		return fmt.Errorf("failed to create secrets directory: %w", err)
-	}
+	configPath := workspacePath + "/oauth-config.yaml"
 
 	// Marshal config to YAML
 	data, err := yaml.Marshal(config)
