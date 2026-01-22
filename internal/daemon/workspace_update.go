@@ -116,23 +116,11 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 		return fmt.Errorf("failed to fix permissions: %w", err)
 	}
 
-	if trustCA {
-		fmt.Println("Updating certificate configuration...")
-		if err := editorService.UpdateCertificates(trustCA); err != nil {
-			return fmt.Errorf("failed to update certificates: %w", err)
-		}
-	}
-
-	if editorImage != "" {
-		fmt.Printf("Updating Editor service with custom image: %s\n", editorImage)
-		if err := editorService.UpdateImage(editorImage); err != nil {
-			return fmt.Errorf("failed to update docker-compose file: %w", err)
-		}
-	} else {
-		fmt.Println("Updating Editor service to latest version...")
-		if err := editorService.UpdateToLatestWithStaging(staging); err != nil {
-			return fmt.Errorf("failed to update to latest version: %w", err)
-		}
+	// Regenerate the entire docker-compose file to propagate all configuration changes
+	// (volumes, environment variables, images, etc.) to existing workspaces
+	fmt.Println("Regenerating editor docker-compose file...")
+	if err := editorService.RegenerateDockerCompose(editorImage, staging, trustCA); err != nil {
+		return fmt.Errorf("failed to regenerate editor docker-compose: %w", err)
 	}
 
 	fmt.Println("Starting editor container...")
@@ -171,9 +159,8 @@ func fixEditorPermissions(workspaceName string) error {
 
 	workspacePath := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName)
 	secretsDir := filepath.Join(workspacePath, "secrets")
-	codeserverConfigDir := filepath.Join(workspacePath, "codeserver-config")
+	coderHomeDir := filepath.Join(workspacePath, "coder-home")
 	gitopsWorkspace := filepath.Join(workspacePath, "workspace")
-	sshDir := filepath.Join(workspacePath, "ssh")
 
 	// We're running as root in the daemon, so no need for sudo
 	// Fix permissions on all directories that are mounted into the container
@@ -182,9 +169,8 @@ func fixEditorPermissions(workspaceName string) error {
 		path string
 	}{
 		{"secrets", secretsDir},
-		{"codeserver-config", codeserverConfigDir},
+		{"coder-home", coderHomeDir},
 		{"workspace", gitopsWorkspace},
-		{"ssh", sshDir},
 	}
 
 	for _, dir := range dirs {

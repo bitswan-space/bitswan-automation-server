@@ -591,6 +591,11 @@ func (s *Server) runWorkspaceInit(args []string) error {
 					return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
 				}
 				fmt.Println("OAuth configuration fetched successfully!")
+
+				// Save OAuth config to disk
+				if err := oauth.SaveOauthConfig(workspaceName, oauthConfig); err != nil {
+					return fmt.Errorf("failed to save OAuth config: %w", err)
+				}
 			} else {
 				fmt.Println("OAuth disabled, using password authentication")
 			}
