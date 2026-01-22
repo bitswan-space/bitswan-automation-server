@@ -162,11 +162,11 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 		return fmt.Errorf("failed to fix permissions: %w", err)
 	}
 
-	// Regenerate the entire docker-compose file to ensure all config changes are applied
-	// This handles image updates, dev mode settings, certificates, etc.
-	fmt.Println("Regenerating editor docker-compose configuration...")
+	// Regenerate the entire docker-compose file to propagate all configuration changes
+	// (volumes, environment variables, images, dev mode settings, certificates, etc.) to existing workspaces
+	fmt.Println("Regenerating editor docker-compose file...")
 	if err := editorService.RegenerateDockerCompose(editorImage, staging, trustCA); err != nil {
-		return fmt.Errorf("failed to regenerate docker-compose file: %w", err)
+		return fmt.Errorf("failed to regenerate editor docker-compose: %w", err)
 	}
 
 	fmt.Println("Starting editor container...")
