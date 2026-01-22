@@ -45,8 +45,19 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 	}, nil
 }
 
+// EditorDevConfig holds dev mode configuration for the editor
+type EditorDevConfig struct {
+	DevMode            bool
+	EditorDevSourceDir string
+}
+
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
 func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool) (string, error) {
+	return e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA, nil)
+}
+
+// CreateDockerComposeWithDevMode generates a docker-compose-editor.yml file for Editor with optional dev mode support
+func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool, devConfig *EditorDevConfig) (string, error) {
 	// For docker-compose files, use HOST_HOME if available (docker-compose runs on host)
 	// Convert container path to host path for volume mounts
 	homeDir := os.Getenv("HOME")
@@ -100,6 +111,19 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 	if len(caVolumes) > 0 {
 		bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string), caVolumes...)
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), caEnvVars...)
+	}
+
+	// Add dev mode configuration if provided
+	if devConfig != nil && devConfig.DevMode {
+		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), "BITSWAN_DEV_MODE=true")
+
+		// Mount editor extension source directory for live development
+		if devConfig.EditorDevSourceDir != "" {
+			bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string),
+				devConfig.EditorDevSourceDir+":/opt/bitswan-extension-dev:z")
+			bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string),
+				"BITSWAN_EXTENSION_DEV_DIR=/opt/bitswan-extension-dev")
+		}
 	}
 
 	// Construct the docker-compose data structure
@@ -602,7 +626,7 @@ func (e *EditorService) UpdateCertificates(trustCA bool) error {
 }
 
 // RegenerateDockerCompose fully regenerates the docker-compose-editor.yml file from metadata
-// This ensures all configuration changes (volumes, environment, etc.) are propagated to existing workspaces
+// This ensures all configuration changes (volumes, environment, dev mode, etc.) are propagated to existing workspaces
 func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool, trustCA bool) error {
 	// Check if enabled
 	if !e.IsEnabled() {
@@ -688,8 +712,28 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PASSWORD="+*metadata.MqttPassword)
 	}
 
+	// Prepare dev mode configuration
+	var devConfig *EditorDevConfig
+	if metadata.DevMode {
+		devConfig = &EditorDevConfig{
+			DevMode: true,
+		}
+		if metadata.EditorDevSourceDir != nil {
+			devConfig.EditorDevSourceDir = *metadata.EditorDevSourceDir
+		}
+		fmt.Printf("Dev mode enabled for editor (extension source: %s)\n", devConfig.EditorDevSourceDir)
+	}
+
 	// Generate docker-compose content
-	dockerComposeContent, err := e.CreateDockerCompose(metadata.GitopsSecret, bitswanEditorImage, metadata.Domain, oauthConfig, mqttEnvVars, trustCA)
+	dockerComposeContent, err := e.CreateDockerComposeWithDevMode(
+		metadata.GitopsSecret,
+		bitswanEditorImage,
+		metadata.Domain,
+		oauthConfig,
+		mqttEnvVars,
+		trustCA,
+		devConfig,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}

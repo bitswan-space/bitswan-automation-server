@@ -20,6 +20,8 @@ type WorkspaceMetadata struct {
 	MqttPort           *int    `yaml:"mqtt_port,omitempty"`
 	MqttTopic          *string `yaml:"mqtt_topic,omitempty"`
 	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
+	EditorDevSourceDir *string `yaml:"editor-dev-source-dir,omitempty"`
+	DevMode            bool    `yaml:"dev-mode,omitempty"`
 }
 
 func GetWorkspaceMetadata(workspaceName string) (WorkspaceMetadata, error) {
