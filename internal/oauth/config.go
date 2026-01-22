@@ -38,16 +38,12 @@ type Config struct {
 
 func GetOauthConfig(workspaceName string) (*Config, error) {
 	var config Config
-	fmt.Println("Getting OAuth config for workspace:", workspaceName)
 	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName
 	configPath := workspacePath + "/secrets/oauth-config.yaml"
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		fmt.Println("No OAuth config found, skipping...")
-		return nil, fmt.Errorf("no OAuth config found")
+		return nil, err
 	}
-
-	fmt.Println("Config path:", configPath)
 
 	fileContent, err := os.ReadFile(configPath)
 	if err != nil {
@@ -66,6 +62,32 @@ func GetOauthConfig(workspaceName string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// SaveOauthConfig saves the OAuth config to the workspace secrets directory
+func SaveOauthConfig(workspaceName string, config *Config) error {
+	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName
+	secretsPath := workspacePath + "/secrets"
+	configPath := secretsPath + "/oauth-config.yaml"
+
+	// Ensure secrets directory exists
+	if err := os.MkdirAll(secretsPath, 0755); err != nil {
+		return fmt.Errorf("failed to create secrets directory: %w", err)
+	}
+
+	// Marshal config to YAML
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal OAuth config: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write OAuth config file: %w", err)
+	}
+
+	fmt.Printf("OAuth config saved to: %s\n", configPath)
+	return nil
 }
 
 func GetInitOauthConfig(oauthConfigFile string) (*Config, error) {

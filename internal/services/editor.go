@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/certauthority"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -62,8 +63,7 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 	}
 	
 	workspaceName := e.WorkspaceName
-	sshDir := gitopsPath + "/ssh"
-	
+
 	// Also convert bitswan-src path for examples mount
 	bitswanSrcPath := filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src"
 
@@ -75,14 +75,13 @@ func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImag
 		"environment": []string{
 			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
 			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
-			"BITSWAN_GITOPS_DIR=/home/coder/workspace",
+			"BITSWAN_GITOPS_DIR=/workspace",
 		},
 		"volumes": []string{
-			gitopsPath + "/workspace:/home/coder/workspace/workspace:z",
-			gitopsPath + "/secrets:/home/coder/workspace/secrets:z",
-			gitopsPath + "/codeserver-config:/home/coder/.config/code-server/:z",
-			bitswanSrcPath + "/examples:/home/coder/workspace/examples:ro",
-			sshDir + ":/home/coder/.ssh:z",
+			gitopsPath + "/workspace:/workspace/workspace:z",
+			gitopsPath + "/secrets:/workspace/secrets:z",
+			gitopsPath + "/coder-home:/home/coder:z",
+			bitswanSrcPath + "/examples:/workspace/examples:ro",
 		},
 	}
 
@@ -146,10 +145,10 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", e.WorkspaceName)
 	}
 
-	// Create codeserver config directory
-	codeserverConfigDir := filepath.Join(e.WorkspacePath, "codeserver-config")
-	if err := os.MkdirAll(codeserverConfigDir, 0700); err != nil {
-		return fmt.Errorf("failed to create codeserver config directory: %w", err)
+	// Create coder-home directory to persist /home/coder between restarts
+	coderHomeDir := filepath.Join(e.WorkspacePath, "coder-home")
+	if err := os.MkdirAll(coderHomeDir, 0755); err != nil {
+		return fmt.Errorf("failed to create coder-home directory: %w", err)
 	}
 
 	hostOsTmp := runtime.GOOS
@@ -171,12 +170,12 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 			return fmt.Errorf("failed to change ownership of secrets folder: %w", err)
 		}
 		if os.Geteuid() == 0 {
-			chownCom = exec.Command("chown", "-R", "1000:1000", codeserverConfigDir)
+			chownCom = exec.Command("chown", "-R", "1000:1000", coderHomeDir)
 		} else {
-			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", codeserverConfigDir)
+			chownCom = exec.Command("sudo", "chown", "-R", "1000:1000", coderHomeDir)
 		}
 		if err := e.runCommand(chownCom); err != nil {
-			return fmt.Errorf("failed to change ownership of codeserver config folder: %w", err)
+			return fmt.Errorf("failed to change ownership of coder-home folder: %w", err)
 		}
 		if os.Geteuid() == 0 {
 			chownCom = exec.Command("chown", "-R", "1000:1000", gitopsWorkspace)
@@ -247,10 +246,10 @@ func (e *EditorService) Disable() error {
 		return fmt.Errorf("failed to remove docker-compose-editor.yml: %w", err)
 	}
 
-	// Remove codeserver config directory
-	codeserverConfigDir := filepath.Join(e.WorkspacePath, "codeserver-config")
-	if err := os.RemoveAll(codeserverConfigDir); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove codeserver-config directory: %w", err)
+	// Remove coder-home directory
+	coderHomeDir := filepath.Join(e.WorkspacePath, "coder-home")
+	if err := os.RemoveAll(coderHomeDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove coder-home directory: %w", err)
 	}
 
 	// Get domain from metadata for Caddy cleanup
@@ -599,5 +598,107 @@ func (e *EditorService) UpdateCertificates(trustCA bool) error {
 		return fmt.Errorf("failed to write updated docker-compose-editor.yml: %w", err)
 	}
 
+	return nil
+}
+
+// RegenerateDockerCompose fully regenerates the docker-compose-editor.yml file from metadata
+// This ensures all configuration changes (volumes, environment, etc.) are propagated to existing workspaces
+func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool, trustCA bool) error {
+	// Check if enabled
+	if !e.IsEnabled() {
+		return fmt.Errorf("Editor service is not enabled for workspace '%s'", e.WorkspaceName)
+	}
+
+	// Read metadata to get configuration
+	metadata, err := e.GetMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to read metadata: %w", err)
+	}
+
+	// Get the editor image - use custom if provided, otherwise get latest
+	var bitswanEditorImage string
+	if editorImage != "" {
+		bitswanEditorImage = editorImage
+	} else {
+		var latestVersion string
+		if staging {
+			latestVersion, err = dockerhub.GetLatestEditorStagingVersion()
+			if err != nil {
+				return fmt.Errorf("failed to get latest staging version: %w", err)
+			}
+			bitswanEditorImage = "bitswan/bitswan-editor-staging:" + latestVersion
+		} else {
+			latestVersion, err = e.getLatestVersion()
+			if err != nil {
+				return fmt.Errorf("failed to get latest version: %w", err)
+			}
+			bitswanEditorImage = "bitswan/bitswan-editor:" + latestVersion
+		}
+	}
+
+	// Prepare MQTT environment variables from metadata
+	var mqttEnvVars []string
+	if metadata.MqttUsername != nil {
+		mqttEnvVars = append(mqttEnvVars, "MQTT_USERNAME="+*metadata.MqttUsername)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_PASSWORD="+*metadata.MqttPassword)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_BROKER="+*metadata.MqttBroker)
+		mqttEnvVars = append(mqttEnvVars, "MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
+		mqttEnvVars = append(mqttEnvVars, "MQTT_TOPIC="+*metadata.MqttTopic)
+	}
+
+	// Get OAuth config if it exists
+	var oauthConfig *oauth.Config
+	oauthConfig, err = oauth.GetOauthConfig(e.WorkspaceName)
+	if err != nil {
+		// OAuth config not found or failed to load locally
+		// If workspace is connected to AOC, try to fetch OAuth config from AOC
+		if metadata.WorkspaceId != nil && *metadata.WorkspaceId != "" {
+			fmt.Printf("OAuth config not found locally, attempting to fetch from AOC for workspace '%s'...\n", e.WorkspaceName)
+			aocClient, aocErr := aoc.NewAOCClient()
+			if aocErr == nil {
+				fetchedConfig, fetchErr := aocClient.GetOAuthConfig(*metadata.WorkspaceId)
+				if fetchErr == nil {
+					oauthConfig = fetchedConfig
+					// Save the fetched config to disk for future use
+					if saveErr := oauth.SaveOauthConfig(e.WorkspaceName, oauthConfig); saveErr != nil {
+						fmt.Printf("Warning: failed to save OAuth config to disk: %v\n", saveErr)
+					} else {
+						fmt.Printf("OAuth config fetched from AOC and saved successfully\n")
+					}
+				} else {
+					fmt.Printf("Warning: failed to fetch OAuth config from AOC: %v\n", fetchErr)
+					oauthConfig = nil
+				}
+			} else {
+				fmt.Printf("Warning: failed to create AOC client to fetch OAuth config: %v\n", aocErr)
+				oauthConfig = nil
+			}
+		} else {
+			// Not connected to AOC, OAuth config not available
+			oauthConfig = nil
+		}
+	}
+
+	// Add OAuth-related MQTT env vars if both OAuth and MQTT are configured
+	if oauthConfig != nil && metadata.MqttUsername != nil {
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_BROKER="+*metadata.MqttBroker)
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PORT="+fmt.Sprint(*metadata.MqttPort))
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_ALLOWED_GROUPS_TOPIC=/groups")
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_USERNAME="+*metadata.MqttUsername)
+		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PASSWORD="+*metadata.MqttPassword)
+	}
+
+	// Generate docker-compose content
+	dockerComposeContent, err := e.CreateDockerCompose(metadata.GitopsSecret, bitswanEditorImage, metadata.Domain, oauthConfig, mqttEnvVars, trustCA)
+	if err != nil {
+		return fmt.Errorf("failed to create docker-compose content: %w", err)
+	}
+
+	// Save docker-compose file
+	if err := e.SaveDockerCompose(dockerComposeContent); err != nil {
+		return fmt.Errorf("failed to save docker-compose file: %w", err)
+	}
+
+	fmt.Printf("Editor docker-compose regenerated for workspace '%s'\n", e.WorkspaceName)
 	return nil
 }
