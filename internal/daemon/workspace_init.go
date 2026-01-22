@@ -485,7 +485,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	if oauthConfig != nil {
-		oauthConfigFile := secretsDir + "/oauth-config.yaml"
+		oauthConfigFile := gitopsConfig + "/oauth-config.yaml"
 		oauthConfigYaml, err := yaml.Marshal(oauthConfig)
 		if err != nil {
 			return fmt.Errorf("failed to marshal OAuth config: %w", err)
