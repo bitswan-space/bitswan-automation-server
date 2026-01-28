@@ -58,9 +58,11 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 
 	// Create OAuth environment variables for GitOps if OAuth is configured (optional)
 	var oauthEnvVars []string
+	var keycloakURL string
 	oauthConfig, _ := oauth.GetOauthConfig(workspaceName)
 	if oauthConfig != nil {
 		oauthEnvVars = oauth.CreateOAuthEnvVars(oauthConfig, "gitops", workspaceName, metadata.Domain)
+		keycloakURL = oauthConfig.IssuerUrl
 	}
 
 	// Get gitops image - use custom image if provided, otherwise get latest
@@ -108,6 +110,7 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 		OAuthEnvVars:       oauthEnvVars,
 		GitopsDevSourceDir: gitopsDevSourceDir,
 		TrustCA:            trustCA,
+		KeycloakURL:        keycloakURL,
 	}
 
 	// Use existing gitops secret
