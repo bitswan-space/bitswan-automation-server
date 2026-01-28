@@ -70,7 +70,6 @@ func (s *Server) runWorkspaceInit(args []string) error {
 
 	// Init required networks
 	networksToCreate := []string{
-		"bitswan_network",
 		"bitswan_caddy",
 		fmt.Sprintf("bitswan_%s_common", workspaceName),
 		fmt.Sprintf("bitswan_%s_dev", workspaceName),

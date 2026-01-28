@@ -178,7 +178,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 	_ = os.Remove(socketPath)
 
 	// Ensure bitswan_network exists before starting the container
-	networkName := "bitswan_network"
+	networkName := "bitswan_caddy"
 	networkExists, err := checkNetworkExists(networkName)
 	if err != nil {
 		return fmt.Errorf("failed to check if network exists: %w", err)
