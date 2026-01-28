@@ -30,8 +30,9 @@ type DockerComposeConfig struct {
 	OAuthEnvVars       []string
 	GitopsDevSourceDir string
 	TrustCA            bool
-	LocalRemotePath string // Host path to local repository (if using local remote)
-	LocalRemoteName string // Mount name for local repository (used for mount point path)
+	LocalRemotePath    string // Host path to local repository (if using local remote)
+	LocalRemoteName    string // Mount name for local repository (used for mount point path)
+	KeycloakURL        string // Keycloak base URL for authentication
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -91,7 +92,13 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
+			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
 		},
+	}
+
+	// Add Keycloak URL if configured
+	if config.KeycloakURL != "" {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), "KEYCLOAK_URL="+config.KeycloakURL)
 	}
 
 	// Append AOC env variables when workspace is registered as an automation server
