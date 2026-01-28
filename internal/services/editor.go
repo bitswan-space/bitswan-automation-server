@@ -135,9 +135,6 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 			"bitswan-editor": bitswanEditor,
 		},
 		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
-				"external": true,
-			},
 			"bitswan_caddy": map[string]interface{}{
 				"external": true,
 			},
