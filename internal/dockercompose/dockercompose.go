@@ -170,19 +170,10 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"bitswan-gitops": gitopsService,
 		},
 		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
+			"bitswan_caddy": map[string]interface{}{
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{
-				"external": true,
-			},
-			workspaceDevNetwork: map[string]interface{}{
-				"external": true,
-			},
-			workspaceStagingNetwork: map[string]interface{}{
-				"external": true,
-			},
-			workspaceProdNetwork: map[string]interface{}{
 				"external": true,
 			},
 		},

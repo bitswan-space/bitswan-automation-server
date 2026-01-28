@@ -75,9 +75,6 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	
 	workspaceName := e.WorkspaceName
 	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
-	workspaceDevNetwork := fmt.Sprintf("bitswan_%s_dev", workspaceName)
-	workspaceStagingNetwork := fmt.Sprintf("bitswan_%s_staging", workspaceName)
-	workspaceProdNetwork := fmt.Sprintf("bitswan_%s_prod", workspaceName)
 	
 	// Also convert bitswan-src path for examples mount
 	bitswanSrcPath := filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src"
