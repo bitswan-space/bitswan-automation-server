@@ -118,6 +118,13 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("OAuth config read successfully!")
 	}
 
+	// Check if workspace already exists BEFORE doing any workspace-specific initialization
+	// This must happen before initWorkspaceCaddy which creates the workspace directory
+	gitopsConfig := bitswanConfig + "workspaces/" + workspaceName
+	if _, err := os.Stat(gitopsConfig); !os.IsNotExist(err) {
+		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
+	}
+
 	// Init shared Caddy if not exists - call initIngress directly to avoid recursion
 	client := &http.Client{
 		Timeout: 2 * time.Second,
@@ -186,12 +193,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		}
 	}
 
-	gitopsConfig := bitswanConfig + "workspaces/" + workspaceName
-
-	if _, err := os.Stat(gitopsConfig); !os.IsNotExist(err) {
-		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
-	}
-
+	// Create the workspace directory (we already checked it doesn't exist above)
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create GitOps directory: %w", err)
 	}
