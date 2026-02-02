@@ -80,7 +80,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
-		"networks": []string{"bitswan_caddy", workspaceCommonNetwork},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
@@ -94,6 +94,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
+			"BITSWAN_WORKSPACE_CADDY=" + fmt.Sprintf("%s__caddy:2019", config.WorkspaceName),
 		},
 	}
 
@@ -167,7 +168,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"bitswan-gitops": gitopsService,
 		},
 		"networks": map[string]interface{}{
-			"bitswan_caddy": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{
@@ -188,12 +189,31 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	return buf.String(), gitopsSecretToken, nil
 }
 
-func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
+// CreateCaddyDockerComposeFile creates a docker-compose file for Caddy
+// networks parameter is optional - if provided, adds those networks along with bitswan_network
+func CreateCaddyDockerComposeFile(caddyPath string, networks ...string) (string, error) {
 	caddyVolumes := []string{
 		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
 		caddyPath + "/data:/data:z",
 		caddyPath + "/config:/config:z",
 		caddyPath + "/certs:/tls:z",
+	}
+
+	// Always include bitswan_network network
+	caddyNetworks := []string{"bitswan_network"}
+	caddyNetworks = append(caddyNetworks, networks...)
+
+	// Construct networks map
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	// Add additional networks as external
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
 	}
 
 	// Construct the docker-compose data structure
@@ -205,16 +225,76 @@ func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 				"restart":        "always",
 				"container_name": "caddy",
 				"ports":          []string{"80:80", "443:443", "2019:2019"},
-				"networks":       []string{"bitswan_caddy"},
+				"networks":       caddyNetworks,
 				"volumes":        caddyVolumes,
 				"entrypoint":     []string{"caddy", "run", "--resume", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 			},
 		},
-		"networks": map[string]interface{}{
-			"bitswan_caddy": map[string]interface{}{
-				"external": true,
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+
+	// Serialize the docker-compose data structure to YAML and write it to the file
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2) // Optional: Set indentation
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateWorkspaceCaddyDockerComposeFile creates a docker-compose file for workspace sub-caddy
+// workspaceName: name of the workspace (used for container name)
+// caddyPath: path to caddy config directory
+// networks: list of additional networks (bitswan_network and bitswan_{workspace}_common are always included)
+func CreateWorkspaceCaddyDockerComposeFile(workspaceName, caddyPath string, networks []string) (string, error) {
+	caddyVolumes := []string{
+		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
+		caddyPath + "/data:/data:z",
+		caddyPath + "/config:/config:z",
+	}
+
+	// Always include bitswan_network and workspace common network
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	caddyNetworks := []string{"bitswan_network", workspaceCommonNetwork}
+	caddyNetworks = append(caddyNetworks, networks...)
+
+	// Construct networks map
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+		workspaceCommonNetwork: map[string]interface{}{
+			"external": true,
+		},
+	}
+	// Add additional networks as external
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	containerName := fmt.Sprintf("%s__caddy", workspaceName)
+
+	// Construct the docker-compose data structure
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"caddy": map[string]interface{}{
+				"image":          "caddy:2.9",
+				"restart":        "always",
+				"container_name": containerName,
+				// No host port binding - ports are only exposed within Docker networks
+				// Caddy will listen on 80, 443, and 2019 inside the container
+				"networks":   caddyNetworks,
+				"volumes":    caddyVolumes,
+				"entrypoint": []string{"caddy", "run", "--resume", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 			},
 		},
+		"networks": networksMap,
 	}
 
 	var buf bytes.Buffer

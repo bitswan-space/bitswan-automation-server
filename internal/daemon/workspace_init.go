@@ -72,7 +72,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	// Init required networks
 	networksToCreate := []string{
-		"bitswan_caddy",
+		"bitswan_network",
 		fmt.Sprintf("bitswan_%s_common", workspaceName),
 		fmt.Sprintf("bitswan_%s_dev", workspaceName),
 		fmt.Sprintf("bitswan_%s_staging", workspaceName),
@@ -120,6 +120,13 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		fmt.Println("OAuth config read successfully!")
 	}
 
+	// Check if workspace already exists BEFORE doing any workspace-specific initialization
+	// This must happen before initWorkspaceCaddy which creates the workspace directory
+	gitopsConfig := bitswanConfig + "workspaces/" + workspaceName
+	if _, err := os.Stat(gitopsConfig); !os.IsNotExist(err) {
+		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
+	}
+
 	// Init shared Caddy if not exists - call initIngress directly to avoid recursion
 	client := &http.Client{
 		Timeout: 2 * time.Second,
@@ -140,6 +147,27 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		fmt.Println("Ingress proxy is ready!")
 	} else {
 		fmt.Println("A running instance of Caddy with admin found")
+	}
+
+	// Initialize workspace sub-caddy
+	fmt.Println("Initializing workspace sub-caddy...")
+	workspaceCaddyInitialized, err := initWorkspaceCaddy(workspaceName, *verbose)
+	if err != nil {
+		return fmt.Errorf("failed to initialize workspace sub-caddy: %w", err)
+	}
+	if workspaceCaddyInitialized {
+		fmt.Println("Workspace sub-caddy initialized!")
+	} else {
+		fmt.Println("Workspace sub-caddy already running")
+	}
+
+	// Register workspace routing in global caddy
+	if *domain != "" {
+		fmt.Println("Registering workspace routing in global caddy...")
+		if err := caddyapi.RegisterWorkspaceRouting(workspaceName, *domain); err != nil {
+			return fmt.Errorf("failed to register workspace routing: %w", err)
+		}
+		fmt.Println("Workspace routing registered!")
 	}
 
 	// Handle --local flag
@@ -167,12 +195,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
-	gitopsConfig := bitswanConfig + "workspaces/" + workspaceName
-
-	if _, err := os.Stat(gitopsConfig); !os.IsNotExist(err) {
-		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
-	}
-
+	// Create the workspace directory (we already checked it doesn't exist above)
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create GitOps directory: %w", err)
 	}
@@ -571,7 +594,19 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
-	// Register GitOps service
+	// Set workspace caddy environment variable for service registration
+	workspaceCaddyURL := fmt.Sprintf("%s__caddy:2019", workspaceName)
+	originalWorkspaceCaddy := os.Getenv("BITSWAN_WORKSPACE_CADDY")
+	os.Setenv("BITSWAN_WORKSPACE_CADDY", workspaceCaddyURL)
+	defer func() {
+		if originalWorkspaceCaddy != "" {
+			os.Setenv("BITSWAN_WORKSPACE_CADDY", originalWorkspaceCaddy)
+		} else {
+			os.Unsetenv("BITSWAN_WORKSPACE_CADDY")
+		}
+	}()
+
+	// Register GitOps service with workspace sub-caddy
 	if err := caddyapi.RegisterServiceWithCaddy("gitops", workspaceName, *domain, fmt.Sprintf("%s-gitops:8079", workspaceName)); err != nil {
 		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}
