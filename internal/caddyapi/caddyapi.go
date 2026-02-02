@@ -65,41 +65,26 @@ func getWorkspaceCaddyBaseURL(workspaceName string) string {
 }
 
 // getCaddyBaseURL returns the base URL for the Caddy API, preferring
-// BITSWAN_WORKSPACE_CADDY (for workspace sub-caddy) or BITSWAN_CADDY_HOST
-// environment variable if set, otherwise defaulting to http://localhost:2019.
-// It also normalizes the value by ensuring a scheme and stripping any trailing slash.
+// the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
+// to http://localhost:2019. It also normalizes the value by ensuring a scheme
+// and stripping any trailing slash.
 func getCaddyBaseURL() string {
-	// First check for workspace caddy (takes precedence)
-	workspaceCaddy := strings.TrimSpace(os.Getenv("BITSWAN_WORKSPACE_CADDY"))
-	if workspaceCaddy != "" {
-		// Prepend default scheme if missing
-		if !strings.HasPrefix(workspaceCaddy, "http://") && !strings.HasPrefix(workspaceCaddy, "https://") {
-			workspaceCaddy = "http://" + workspaceCaddy
-		}
-		// Strip trailing slash if present
-		if strings.HasSuffix(workspaceCaddy, "/") {
-			workspaceCaddy = strings.TrimRight(workspaceCaddy, "/")
-		}
-		return workspaceCaddy
-	}
+    host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
+    if host == "" {
+        return "http://localhost:2019"
+    }
 
-	// Fall back to BITSWAN_CADDY_HOST or localhost
-	host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
-	if host == "" {
-		return "http://localhost:2019"
-	}
+    // Prepend default scheme if missing
+    if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+        host = "http://" + host
+    }
 
-	// Prepend default scheme if missing
-	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
-		host = "http://" + host
-	}
+    // Strip trailing slash if present
+    if strings.HasSuffix(host, "/") {
+        host = strings.TrimRight(host, "/")
+    }
 
-	// Strip trailing slash if present
-	if strings.HasSuffix(host, "/") {
-		host = strings.TrimRight(host, "/")
-	}
-
-	return host
+    return host
 }
 
 func RegisterServiceWithCaddy(serviceName, workspaceName, domain, upstream string) error {
