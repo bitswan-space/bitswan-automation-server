@@ -140,6 +140,27 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("A running instance of Caddy with admin found")
 	}
 
+	// Initialize workspace sub-caddy
+	fmt.Println("Initializing workspace sub-caddy...")
+	workspaceCaddyInitialized, err := initWorkspaceCaddy(workspaceName, *verbose)
+	if err != nil {
+		return fmt.Errorf("failed to initialize workspace sub-caddy: %w", err)
+	}
+	if workspaceCaddyInitialized {
+		fmt.Println("Workspace sub-caddy initialized!")
+	} else {
+		fmt.Println("Workspace sub-caddy already running")
+	}
+
+	// Register workspace routing in global caddy
+	if *domain != "" {
+		fmt.Println("Registering workspace routing in global caddy...")
+		if err := caddyapi.RegisterWorkspaceRouting(workspaceName, *domain); err != nil {
+			return fmt.Errorf("failed to register workspace routing: %w", err)
+		}
+		fmt.Println("Workspace routing registered!")
+	}
+
 	// Handle --local flag
 	if *local && (*setHosts || *mkCerts) {
 		return fmt.Errorf("cannot use --local flag with --set-hosts or --mkcerts")
@@ -563,7 +584,19 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		}
 	}
 
-	// Register GitOps service
+	// Set workspace caddy environment variable for service registration
+	workspaceCaddyURL := fmt.Sprintf("%s__caddy:2019", workspaceName)
+	originalWorkspaceCaddy := os.Getenv("BITSWAN_WORKSPACE_CADDY")
+	os.Setenv("BITSWAN_WORKSPACE_CADDY", workspaceCaddyURL)
+	defer func() {
+		if originalWorkspaceCaddy != "" {
+			os.Setenv("BITSWAN_WORKSPACE_CADDY", originalWorkspaceCaddy)
+		} else {
+			os.Unsetenv("BITSWAN_WORKSPACE_CADDY")
+		}
+	}()
+
+	// Register GitOps service with workspace sub-caddy
 	if err := caddyapi.RegisterServiceWithCaddy("gitops", workspaceName, *domain, fmt.Sprintf("%s-gitops:8079", workspaceName)); err != nil {
 		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}

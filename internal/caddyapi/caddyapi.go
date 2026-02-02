@@ -58,33 +58,54 @@ type TLSFileLoad struct {
 	Tags        []string `json:"tags"`
 }
 
+// getWorkspaceCaddyBaseURL returns the base URL for a workspace sub-caddy API
+func getWorkspaceCaddyBaseURL(workspaceName string) string {
+	containerName := fmt.Sprintf("%s__caddy", workspaceName)
+	return fmt.Sprintf("http://%s:2019", containerName)
+}
+
 // getCaddyBaseURL returns the base URL for the Caddy API, preferring
-// the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
-// to http://localhost:2019. It also normalizes the value by ensuring a scheme
-// and stripping any trailing slash.
+// BITSWAN_WORKSPACE_CADDY (for workspace sub-caddy) or BITSWAN_CADDY_HOST
+// environment variable if set, otherwise defaulting to http://localhost:2019.
+// It also normalizes the value by ensuring a scheme and stripping any trailing slash.
 func getCaddyBaseURL() string {
-    host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
-    if host == "" {
-        return "http://localhost:2019"
-    }
+	// First check for workspace caddy (takes precedence)
+	workspaceCaddy := strings.TrimSpace(os.Getenv("BITSWAN_WORKSPACE_CADDY"))
+	if workspaceCaddy != "" {
+		// Prepend default scheme if missing
+		if !strings.HasPrefix(workspaceCaddy, "http://") && !strings.HasPrefix(workspaceCaddy, "https://") {
+			workspaceCaddy = "http://" + workspaceCaddy
+		}
+		// Strip trailing slash if present
+		if strings.HasSuffix(workspaceCaddy, "/") {
+			workspaceCaddy = strings.TrimRight(workspaceCaddy, "/")
+		}
+		return workspaceCaddy
+	}
 
-    // Prepend default scheme if missing
-    if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
-        host = "http://" + host
-    }
+	// Fall back to BITSWAN_CADDY_HOST or localhost
+	host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
+	if host == "" {
+		return "http://localhost:2019"
+	}
 
-    // Strip trailing slash if present
-    if strings.HasSuffix(host, "/") {
-        host = strings.TrimRight(host, "/")
-    }
+	// Prepend default scheme if missing
+	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+		host = "http://" + host
+	}
 
-    return host
+	// Strip trailing slash if present
+	if strings.HasSuffix(host, "/") {
+		host = strings.TrimRight(host, "/")
+	}
+
+	return host
 }
 
 func RegisterServiceWithCaddy(serviceName, workspaceName, domain, upstream string) error {
 	// Construct the hostname using the existing pattern
 	hostname := fmt.Sprintf("%s-%s.%s", workspaceName, serviceName, domain)
-	
+
 	// Use the new AddRoute function
 	return AddRoute(hostname, upstream)
 }
@@ -100,15 +121,15 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 		// If new approach fails, print warning and try old approach
 		fmt.Printf("Warning: failed to remove route using hostname %s, trying legacy format: %v\n", hostname, err)
 	}
-	
+
 	// Fall back to old approach using the legacy ID format
 	legacyID := fmt.Sprintf("%s_%s", workspaceName, serviceName)
-    url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", legacyID)
-	
+	url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", legacyID)
+
 	if _, err := sendRequest("DELETE", url, nil); err != nil {
 		return fmt.Errorf("failed to unregister service '%s' using both new and legacy formats: %w", serviceName, err)
 	}
-	
+
 	fmt.Printf("Successfully unregistered service using legacy format: %s\n", serviceName)
 	return nil
 }
@@ -119,20 +140,20 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS app: %w", err)
 	}
-	
+
 	// Initialize certificates structure
 	certsSet := getCaddyBaseURL() + "/config/apps/tls/certificates"
 	if err := InitSet(certsSet, []byte(`{}`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS certificates: %w", err)
 	}
-	
+
 	// Initialize load_files array
 	loadFilesSet := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
 	caddyAPITLSBaseUrl := loadFilesSet + "/..."
 	if err := InitSet(loadFilesSet, []byte(`[]`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS load_files: %w", err)
 	}
-	
+
 	// Initialize TLS connection policies
 	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
 	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
@@ -239,20 +260,20 @@ func DeleteCaddyRecordsWithWriter(workspaceName string, writer io.Writer) error 
 			fmt.Printf(format+"\n", args...)
 		}
 	}
-	
+
 	// First, try to get the domain from workspace metadata
 	// We need to import the config package for this to work
 	// For now, we'll handle this differently by checking if we can delete by service routes first
-	
+
 	// Try to delete service routes (gitops, editor) by constructing likely hostnames
 	// We'll use a more robust approach by deleting directly by the old ID format for TLS items
-	
+
 	// Delete service routes that follow hostname pattern
 	serviceRoutes := []string{"gitops", "editor"}
-	
+
 	// For service routes, we need the domain. Let's try to get it from metadata
 	metadataPath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName + "/metadata.yaml"
-	
+
 	log("Reading workspace metadata from %s...", metadataPath)
 	// Read domain from metadata if available
 	var domain string
@@ -270,7 +291,7 @@ func DeleteCaddyRecordsWithWriter(workspaceName string, writer io.Writer) error 
 	} else {
 		log("Warning: failed to read metadata file %s: %v (workspace may already be partially removed)", metadataPath, err)
 	}
-	
+
 	// Delete service routes if we have a domain
 	if domain != "" {
 		log("Deleting service routes for domain %s...", domain)
@@ -287,12 +308,12 @@ func DeleteCaddyRecordsWithWriter(workspaceName string, writer io.Writer) error 
 	} else {
 		log("No domain found, skipping service route deletion")
 	}
-	
+
 	// Delete TLS-related items using the old direct ID approach
 	log("Deleting TLS-related items...")
 	tlsItems := []string{"tlspolicy", "tlscerts"}
 	for _, item := range tlsItems {
-        url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s_%s", workspaceName, item)
+		url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s_%s", workspaceName, item)
 		log("Deleting TLS item %s...", item)
 		if _, err := sendRequest("DELETE", url, nil); err != nil {
 			// Don't fail completely if TLS items fail - they might not exist
@@ -305,7 +326,7 @@ func DeleteCaddyRecordsWithWriter(workspaceName string, writer io.Writer) error 
 			log("Successfully deleted TLS item %s", item)
 		}
 	}
-	
+
 	log("Caddy cleanup completed")
 	return nil
 }
@@ -322,27 +343,92 @@ func sanitizeHostname(hostname string) string {
 func ensureUpstreamScheme(upstream string) string {
 	// Remove any leading slashes that might have been accidentally added
 	upstream = strings.TrimPrefix(upstream, "/")
-	
+
 	// Remove any scheme prefix (http://, https://, ws://, wss://)
 	// Caddy's dial field should be just "host:port"
 	upstream = strings.TrimPrefix(upstream, "http://")
 	upstream = strings.TrimPrefix(upstream, "https://")
 	upstream = strings.TrimPrefix(upstream, "ws://")
 	upstream = strings.TrimPrefix(upstream, "wss://")
-	
+
 	// Check if this is the WSS port (8084) - if so, use WS port (8083) instead
 	// because Caddy will handle TLS termination and connect via plain WebSocket
 	if strings.Contains(upstream, ":8084") {
 		upstream = strings.Replace(upstream, ":8084", ":8083", 1)
 	}
-	
+
 	// Return just "host:port" format (no scheme)
 	return upstream
 }
 
+// RegisterWorkspaceRouting registers routing patterns in global caddy to proxy to workspace sub-caddy
+// This should be called with global caddy context (BITSWAN_WORKSPACE_CADDY should not be set)
+func RegisterWorkspaceRouting(workspaceName, domain string) error {
+	workspaceCaddyUpstream := fmt.Sprintf("%s__caddy:80", workspaceName)
+
+	// Create route patterns that match workspace hostnames
+	// Pattern 1: {workspaceName}-*.{domain} (e.g., myworkspace-automation-staging.example.com)
+	pattern1 := fmt.Sprintf("%s-*.%s", workspaceName, domain)
+	// Pattern 2: *.{workspaceName}-*.{domain} (e.g., *.myworkspace-automation-staging.example.com)
+	pattern2 := fmt.Sprintf("*.%s-*.%s", workspaceName, domain)
+
+	routeID := fmt.Sprintf("workspace_%s_routing", sanitizeHostname(workspaceName))
+
+	// Create the route with hostname pattern matching
+	route := Route{
+		ID: routeID,
+		Match: []Match{
+			{
+				Host: []string{pattern1, pattern2},
+			},
+		},
+		Handle: []Handle{
+			{
+				Handler: "reverse_proxy",
+				Upstreams: []Upstream{
+					{
+						Dial: workspaceCaddyUpstream,
+					},
+				},
+				// Add headers to preserve original hostname for sub-caddy route matching
+				// This is done via the reverse_proxy handler's headers option
+			},
+		},
+		Terminal: true,
+	}
+
+	// First, remove any existing workspace routing route
+	removeURL := getCaddyBaseURL() + "/id/" + routeID
+	sendRequest("DELETE", removeURL, nil) // Ignore errors
+
+	// Marshal the route into JSON
+	jsonPayload, err := json.Marshal([]Route{route})
+	if err != nil {
+		return fmt.Errorf("failed to marshal workspace routing payload: %w", err)
+	}
+
+	// Send to global caddy (ensure we're using global caddy, not workspace caddy)
+	originalWorkspaceCaddy := os.Getenv("BITSWAN_WORKSPACE_CADDY")
+	os.Unsetenv("BITSWAN_WORKSPACE_CADDY")
+	defer func() {
+		if originalWorkspaceCaddy != "" {
+			os.Setenv("BITSWAN_WORKSPACE_CADDY", originalWorkspaceCaddy)
+		}
+	}()
+
+	caddyAPIRoutesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes/..."
+	_, err = sendRequest("POST", caddyAPIRoutesBaseUrl, jsonPayload)
+	if err != nil {
+		return fmt.Errorf("failed to register workspace routing for %s: %w", workspaceName, err)
+	}
+
+	fmt.Printf("Registered workspace routing: %s, %s -> %s\n", pattern1, pattern2, workspaceCaddyUpstream)
+	return nil
+}
+
 // AddRoute adds a generic route for any hostname to upstream mapping
 func AddRoute(hostname, upstream string) error {
-    caddyAPIRoutesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes/..."
+	caddyAPIRoutesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes/..."
 
 	// First, remove any existing routes with the same ID to avoid duplicates
 	if err := RemoveRoute(hostname); err != nil {
@@ -355,7 +441,7 @@ func AddRoute(hostname, upstream string) error {
 	// Process the upstream to ensure correct format
 	processedUpstream := ensureUpstreamScheme(upstream)
 	fmt.Printf("AddRoute: original upstream='%s', processed upstream='%s'\n", upstream, processedUpstream)
-	
+
 	// Create the route for the hostname
 	route := Route{
 		ID: routeID,
@@ -419,9 +505,9 @@ func AddRoute(hostname, upstream string) error {
 func RemoveRoute(hostname string) error {
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
-	
+
 	// Construct the URL for the specific route
-    url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", routeID)
+	url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", routeID)
 
 	// Try to delete once - if it fails with 404, the route doesn't exist (success)
 	// If it fails with other errors, return the error immediately
@@ -440,25 +526,25 @@ func RemoveRoute(hostname string) error {
 		// For other errors, return the error
 		return fmt.Errorf("failed to remove route for hostname '%s': %w", hostname, err)
 	}
-	
+
 	// If we get here, the deletion was successful
 	return nil
 }
 
 // ListRoutes retrieves and lists all current routes from Caddy
 func ListRoutes() ([]Route, error) {
-    url := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
-	
+	url := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
+
 	responseBody, err := sendRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get routes from Caddy API: %w", err)
 	}
-	
+
 	var routes []Route
 	if err := json.Unmarshal(responseBody, &routes); err != nil {
 		return nil, fmt.Errorf("failed to parse routes response: %w", err)
 	}
-	
+
 	return routes, nil
 }
 
@@ -712,20 +798,20 @@ func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
 	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS app: %w", err)
 	}
-	
+
 	// Initialize certificates structure
 	certsSet := getCaddyBaseURL() + "/config/apps/tls/certificates"
 	if err := InitSet(certsSet, []byte(`{}`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS certificates: %w", err)
 	}
-	
+
 	// Initialize load_files array
 	loadFilesSet := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
 	caddyAPITLSBaseUrl := loadFilesSet + "/..."
 	if err := InitSet(loadFilesSet, []byte(`[]`)); err != nil {
 		return fmt.Errorf("failed to initialize TLS load_files: %w", err)
 	}
-	
+
 	// Initialize TLS connection policies
 	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
 	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
