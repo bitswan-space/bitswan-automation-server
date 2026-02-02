@@ -159,9 +159,9 @@ func startDaemonContainer(startMessage, successMessage string) error {
 
 	// Launch the daemon container
 	// Mount the binary, config directory, docker socket, and mkcert directory
-	// Use bitswan_network to allow resolving Docker service names like aoc-emqx
+	// Use bitswan_caddy network to allow resolving Docker service names like caddy
 	// Use pre-built image with all tools (git, ssh-keygen, docker-cli, mkcert) pre-installed
-	// Set BITSWAN_CADDY_HOST to use 'caddy' hostname instead of 'localhost' when on bitswan_network
+	// Set BITSWAN_CADDY_HOST to use 'caddy' hostname instead of 'localhost' when on bitswan_caddy
 	// Mount the bitswan automation server socket directory for IPC
 	daemonImage := "bitswan/automation-server-runtime:latest"
 
@@ -177,7 +177,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 	// Remove existing socket file if it exists (stale socket from previous run)
 	_ = os.Remove(socketPath)
 
-	// Ensure bitswan_network exists before starting the container
+	// Ensure bitswan_caddy network exists before starting the container
 	networkName := "bitswan_caddy"
 	networkExists, err := checkNetworkExists(networkName)
 	if err != nil {
@@ -237,8 +237,8 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"-v", fmt.Sprintf("%s:%s", socketDir, socketDir),
-		"-v", "/:/host:rw",
-		"--network", "bitswan_network",
+		"-v", "/:/host:ro",
+		"--network", "bitswan_caddy",
 		daemonImage,
 		"/usr/local/bin/bitswan", "automation-server-daemon", "__run",
 	)
