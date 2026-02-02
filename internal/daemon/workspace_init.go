@@ -55,38 +55,57 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	workspaceName := fs.Args()[0]
 	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
 
-	if _, err := os.Stat(bitswanConfig); os.IsNotExist(err) {
-		if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
+	var err error
+	if _, err = os.Stat(bitswanConfig); os.IsNotExist(err) {
+		if err = os.MkdirAll(bitswanConfig, 0755); err != nil {
 			return fmt.Errorf("failed to create BitSwan config directory: %w", err)
 		}
 	}
 
 	// Ensure oauth2-proxy binary is available
-	if err := oauth.EnsureOAuth2Proxy(bitswanConfig); err != nil {
+	if err = oauth.EnsureOAuth2Proxy(bitswanConfig); err != nil {
 		fmt.Printf("Warning: Failed to download oauth2-proxy: %v\n", err)
 		fmt.Println("OAuth authentication may not work properly without oauth2-proxy")
 	}
 
-	// Init bitswan network
-	networkName := "bitswan_network"
-	exists, err := checkNetworkExists(networkName)
-	if err != nil {
-		return fmt.Errorf("error checking network: %w", err)
+	// Init required networks
+	networksToCreate := []string{
+		"bitswan_caddy",
+		fmt.Sprintf("bitswan_%s_common", workspaceName),
+		fmt.Sprintf("bitswan_%s_dev", workspaceName),
+		fmt.Sprintf("bitswan_%s_staging", workspaceName),
+		fmt.Sprintf("bitswan_%s_prod", workspaceName),
 	}
 
-	if exists {
-		fmt.Printf("Network '%s' exists\n", networkName)
-	} else {
-		createDockerNetworkCom := exec.Command("docker", "network", "create", "bitswan_network")
-		fmt.Println("Creating BitSwan Docker network...")
-		if err := runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
-			if err.Error() == "exit status 1" {
-				fmt.Println("BitSwan Docker network already exists!")
-			} else {
-				fmt.Printf("Failed to create BitSwan Docker network: %s\n", err.Error())
+	for _, networkName := range networksToCreate {
+		var exists bool
+		exists, err = checkNetworkExists(networkName)
+		if err != nil {
+			return fmt.Errorf("error checking network %s: %w", networkName, err)
+		}
+
+		if exists {
+			if *verbose {
+				fmt.Printf("Network '%s' exists\n", networkName)
 			}
 		} else {
-			fmt.Println("BitSwan Docker network created!")
+			createDockerNetworkCom := exec.Command("docker", "network", "create", networkName)
+			if *verbose {
+				fmt.Printf("Creating Docker network '%s'...\n", networkName)
+			}
+			if err = runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
+				if err.Error() == "exit status 1" {
+					if *verbose {
+						fmt.Printf("Docker network '%s' already exists!\n", networkName)
+					}
+				} else {
+					fmt.Printf("Failed to create Docker network '%s': %s\n", networkName, err.Error())
+				}
+			} else {
+				if *verbose {
+					fmt.Printf("Docker network '%s' created!\n", networkName)
+				}
+			}
 		}
 	}
 
@@ -119,6 +138,27 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("Ingress proxy is ready!")
 	} else {
 		fmt.Println("A running instance of Caddy with admin found")
+	}
+
+	// Initialize workspace sub-caddy
+	fmt.Println("Initializing workspace sub-caddy...")
+	workspaceCaddyInitialized, err := initWorkspaceCaddy(workspaceName, *verbose)
+	if err != nil {
+		return fmt.Errorf("failed to initialize workspace sub-caddy: %w", err)
+	}
+	if workspaceCaddyInitialized {
+		fmt.Println("Workspace sub-caddy initialized!")
+	} else {
+		fmt.Println("Workspace sub-caddy already running")
+	}
+
+	// Register workspace routing in global caddy
+	if *domain != "" {
+		fmt.Println("Registering workspace routing in global caddy...")
+		if err := caddyapi.RegisterWorkspaceRouting(workspaceName, *domain); err != nil {
+			return fmt.Errorf("failed to register workspace routing: %w", err)
+		}
+		fmt.Println("Workspace routing registered!")
 	}
 
 	// Handle --local flag
@@ -544,7 +584,19 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		}
 	}
 
-	// Register GitOps service
+	// Set workspace caddy environment variable for service registration
+	workspaceCaddyURL := fmt.Sprintf("%s__caddy:2019", workspaceName)
+	originalWorkspaceCaddy := os.Getenv("BITSWAN_WORKSPACE_CADDY")
+	os.Setenv("BITSWAN_WORKSPACE_CADDY", workspaceCaddyURL)
+	defer func() {
+		if originalWorkspaceCaddy != "" {
+			os.Setenv("BITSWAN_WORKSPACE_CADDY", originalWorkspaceCaddy)
+		} else {
+			os.Unsetenv("BITSWAN_WORKSPACE_CADDY")
+		}
+	}()
+
+	// Register GitOps service with workspace sub-caddy
 	if err := caddyapi.RegisterServiceWithCaddy("gitops", workspaceName, *domain, fmt.Sprintf("%s-gitops:8079", workspaceName)); err != nil {
 		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}

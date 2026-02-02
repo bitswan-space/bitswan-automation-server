@@ -164,75 +164,92 @@ Client {
 // CreateDockerCompose generates a docker-compose.yml file for Kafka
 func (k *KafkaService) CreateDockerCompose() (string, error) {
 	secretsPath := filepath.Join(k.WorkspacePath, "secrets", "kafka")
-	containerName := fmt.Sprintf("%s__kafka", k.WorkspaceName)
-	uiContainerName := fmt.Sprintf("%s__kafka-ui", k.WorkspaceName)
-	volumeName := fmt.Sprintf("%s-kafka-data", k.WorkspaceName)
+	stages := []string{"dev", "staging", "prod"}
 	
-	// Generate a random cluster ID
-	clusterID, err := k.generateClusterID()
-	if err != nil {
-		return "", err
+	services := make(map[string]interface{})
+	volumes := make(map[string]interface{})
+	networks := make(map[string]interface{})
+	
+	// Generate cluster IDs for each stage
+	clusterIDs := make(map[string]string)
+	for _, stage := range stages {
+		clusterID, err := k.generateClusterID()
+		if err != nil {
+			return "", err
+		}
+		clusterIDs[stage] = clusterID
+		
+		// Create network name for this stage
+		networkName := fmt.Sprintf("bitswan_%s_%s", k.WorkspaceName, stage)
+		networks[networkName] = map[string]interface{}{
+			"external": true,
+		}
+		
+		// Create container names for this stage
+		containerName := fmt.Sprintf("%s__kafka-%s", k.WorkspaceName, stage)
+		uiContainerName := fmt.Sprintf("%s__kafka-ui-%s", k.WorkspaceName, stage)
+		volumeName := fmt.Sprintf("%s-kafka-data-%s", k.WorkspaceName, stage)
+		
+		// Create kafka service for this stage
+		services[fmt.Sprintf("kafka-%s", stage)] = map[string]interface{}{
+			"image":          "confluentinc/cp-kafka:7.5.0",
+			"container_name": containerName,
+			"environment": map[string]interface{}{
+				"KAFKA_NODE_ID":                                     1,
+				"KAFKA_PROCESS_ROLES":                               "broker,controller",
+				"KAFKA_CONTROLLER_QUORUM_VOTERS":                    "1@" + containerName + ":9094",
+				"KAFKA_CONTROLLER_LISTENER_NAMES":                   "CONTROLLER",
+				"KAFKA_LISTENERS":                                   "SASL_PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094",
+				"KAFKA_ADVERTISED_LISTENERS":                        "SASL_PLAINTEXT://" + containerName + ":9092",
+				"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":              "CONTROLLER:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT",
+				"KAFKA_INTER_BROKER_LISTENER_NAME":                  "SASL_PLAINTEXT",
+				"KAFKA_SASL_ENABLED_MECHANISMS":                     "PLAIN",
+				"KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL":        "PLAIN",
+				"KAFKA_OPTS":                                        "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf",
+				"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR":            1,
+				"KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR":    1,
+				"KAFKA_TRANSACTION_STATE_LOG_MIN_ISR":               1,
+				"KAFKA_AUTO_CREATE_TOPICS_ENABLE":                   "true",
+				"CLUSTER_ID":                                        clusterIDs[stage],
+			},
+			"volumes": []string{
+				volumeName + ":/var/lib/kafka/data",
+				"./kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf",
+			},
+			"env_file": []string{secretsPath},
+			"restart":  "unless-stopped",
+			"networks": []string{networkName},
+		}
+		
+		// Create kafka-ui service for this stage
+		services[fmt.Sprintf("kafka-ui-%s", stage)] = map[string]interface{}{
+			"container_name": uiContainerName,
+			"restart":        "always",
+			"image":          "provectuslabs/kafka-ui:latest",
+			"environment": map[string]interface{}{
+				"DYNAMIC_CONFIG_ENABLED":                            "true",
+				"AUTH_TYPE":                                         "LOGIN_FORM",
+				"SPRING_SECURITY_USER_NAME":                         "admin",
+				"SERVER_SERVLET_CONTEXTPATH":                        "/kafka",
+				"KAFKA_CLUSTERS_0_NAME":                             "local-cluster",
+				"KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS":                 containerName + ":9092",
+				"KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL":     "SASL_PLAINTEXT",
+				"KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM":        "PLAIN",
+			},
+			"env_file": []string{secretsPath},
+			"networks": []string{networkName},
+		}
+		
+		// Add volume for this stage
+		volumes[volumeName] = nil
 	}
 	
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
-		"version": "3",
-		"services": map[string]interface{}{
-			"kafka-ui": map[string]interface{}{
-				"container_name": uiContainerName,
-				"restart":        "always",
-				"image":          "provectuslabs/kafka-ui:latest",
-				"environment": map[string]interface{}{
-					"DYNAMIC_CONFIG_ENABLED":                            "true",
-					"AUTH_TYPE":                                         "LOGIN_FORM",
-					"SPRING_SECURITY_USER_NAME":                         "admin",
-					"SERVER_SERVLET_CONTEXTPATH":                        "/kafka",
-					"KAFKA_CLUSTERS_0_NAME":                             "local-cluster",
-					"KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS":                 containerName + ":9092",
-					"KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL":     "SASL_PLAINTEXT",
-					"KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM":        "PLAIN",
-				},
-				"env_file": []string{secretsPath},
-				"networks": []string{"bitswan_network"},
-			},
-			"kafka": map[string]interface{}{
-				"image":          "confluentinc/cp-kafka:7.5.0",
-				"container_name": containerName,
-				"environment": map[string]interface{}{
-					"KAFKA_NODE_ID":                                     1,
-					"KAFKA_PROCESS_ROLES":                               "broker,controller",
-					"KAFKA_CONTROLLER_QUORUM_VOTERS":                    "1@" + containerName + ":9094",
-					"KAFKA_CONTROLLER_LISTENER_NAMES":                   "CONTROLLER",
-					"KAFKA_LISTENERS":                                   "SASL_PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094",
-					"KAFKA_ADVERTISED_LISTENERS":                        "SASL_PLAINTEXT://" + containerName + ":9092",
-					"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":              "CONTROLLER:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT",
-					"KAFKA_INTER_BROKER_LISTENER_NAME":                  "SASL_PLAINTEXT",
-					"KAFKA_SASL_ENABLED_MECHANISMS":                     "PLAIN",
-					"KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL":        "PLAIN",
-					"KAFKA_OPTS":                                        "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf",
-					"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR":            1,
-					"KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR":    1,
-					"KAFKA_TRANSACTION_STATE_LOG_MIN_ISR":               1,
-					"KAFKA_AUTO_CREATE_TOPICS_ENABLE":                   "true",
-					"CLUSTER_ID":                                        clusterID,
-				},
-				"volumes": []string{
-					volumeName + ":/var/lib/kafka/data",
-					"./kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf",
-				},
-				"env_file": []string{secretsPath},
-				"restart":  "unless-stopped",
-				"networks": []string{"bitswan_network"},
-			},
-		},
-		"volumes": map[string]interface{}{
-			volumeName: nil,
-		},
-		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
-				"external": true,
-			},
-		},
+		"version":  "3",
+		"services": services,
+		"volumes":  volumes,
+		"networks": networks,
 	}
 	
 	var buf bytes.Buffer
