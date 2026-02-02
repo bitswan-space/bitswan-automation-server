@@ -48,10 +48,10 @@ type IngressListRoutesResponse struct {
 
 // RouteInfo represents simplified route information
 type RouteInfo struct {
-	ID       string   `json:"id"`
-	Hostname string   `json:"hostname"`
-	Upstream string   `json:"upstream"`
-	Terminal bool     `json:"terminal"`
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	Upstream string `json:"upstream"`
+	Terminal bool   `json:"terminal"`
 }
 
 // IngressRemoveRouteResponse represents the response from removing a route
@@ -157,7 +157,7 @@ func initIngress(verbose bool) (bool, error) {
 	if hostHomeDir != "" && homeDir != hostHomeDir && strings.HasPrefix(caddyConfig, homeDir) {
 		// Replace container home with host home for docker-compose volume paths
 		caddyConfigForCompose = strings.Replace(caddyConfig, homeDir, hostHomeDir, 1)
-		
+
 		// Ensure directories exist on host before docker-compose tries to mount them
 		// Create the directories on the host if they don't exist
 		if err := os.MkdirAll(caddyConfigForCompose, 0755); err != nil {
@@ -172,7 +172,7 @@ func initIngress(verbose bool) (bool, error) {
 		if err := os.MkdirAll(caddyConfigForCompose+"/certs", 0755); err != nil {
 			return false, fmt.Errorf("failed to create ingress certs directory on host: %w", err)
 		}
-		
+
 		// Also create/ensure Caddyfile exists on host
 		caddyfilePathHost := caddyConfigForCompose + "/Caddyfile"
 		if _, err := os.Stat(caddyfilePathHost); os.IsNotExist(err) {
@@ -224,11 +224,166 @@ func initIngress(verbose bool) (bool, error) {
 	return true, nil
 }
 
+// initWorkspaceCaddy initializes the workspace sub-caddy
+// Returns (newlyInitialized, error) where newlyInitialized is true if initialization happened,
+// false if it was already initialized.
+func initWorkspaceCaddy(workspaceName string, verbose bool) (bool, error) {
+	homeDir := os.Getenv("HOME")
+	workspaceConfig := fmt.Sprintf("%s/.config/bitswan/workspaces/%s", homeDir, workspaceName)
+	caddyConfig := workspaceConfig + "/caddy"
+
+	caddyProjectName := fmt.Sprintf("bitswan-%s-caddy", workspaceName)
+	containerName := fmt.Sprintf("%s__caddy", workspaceName)
+
+	// Check if workspace caddy container already exists
+	caddyContainerId, err := exec.Command("docker", "ps", "-q", "-f", fmt.Sprintf("name=%s", containerName)).Output()
+	if err != nil {
+		return false, fmt.Errorf("failed to check if workspace caddy container exists: %w", err)
+	}
+	if string(caddyContainerId) != "" {
+		return false, nil
+	}
+
+	// Create workspace caddy config directory
+	if err := os.MkdirAll(caddyConfig, 0755); err != nil {
+		return false, fmt.Errorf("failed to create workspace caddy config directory: %w", err)
+	}
+
+	// Create minimal Caddyfile with admin API only
+	caddyfile := `{
+	admin 0.0.0.0:2019
+}`
+
+	caddyfilePath := caddyConfig + "/Caddyfile"
+	if err := os.WriteFile(caddyfilePath, []byte(caddyfile), 0755); err != nil {
+		return false, fmt.Errorf("failed to write workspace Caddyfile: %w", err)
+	}
+
+	// For docker-compose, use HOST_HOME if available
+	hostHomeDir := os.Getenv("HOST_HOME")
+	caddyConfigForCompose := caddyConfig
+	if hostHomeDir != "" && homeDir != hostHomeDir && strings.HasPrefix(caddyConfig, homeDir) {
+		caddyConfigForCompose = strings.Replace(caddyConfig, homeDir, hostHomeDir, 1)
+
+		// Ensure directories exist on host
+		if err := os.MkdirAll(caddyConfigForCompose, 0755); err != nil {
+			return false, fmt.Errorf("failed to create workspace caddy config directory on host: %w", err)
+		}
+		if err := os.MkdirAll(caddyConfigForCompose+"/data", 0755); err != nil {
+			return false, fmt.Errorf("failed to create workspace caddy data directory on host: %w", err)
+		}
+		if err := os.MkdirAll(caddyConfigForCompose+"/config", 0755); err != nil {
+			return false, fmt.Errorf("failed to create workspace caddy config subdirectory on host: %w", err)
+		}
+
+		// Ensure Caddyfile exists on host
+		caddyfilePathHost := caddyConfigForCompose + "/Caddyfile"
+		if _, err := os.Stat(caddyfilePathHost); os.IsNotExist(err) {
+			if err := os.WriteFile(caddyfilePathHost, []byte(caddyfile), 0755); err != nil {
+				return false, fmt.Errorf("failed to write workspace Caddyfile on host: %w", err)
+			}
+		}
+	}
+
+	// Stage networks: dev, staging, prod
+	stageNetworks := []string{
+		fmt.Sprintf("bitswan_%s_dev", workspaceName),
+		fmt.Sprintf("bitswan_%s_staging", workspaceName),
+		fmt.Sprintf("bitswan_%s_prod", workspaceName),
+	}
+
+	// Generate docker-compose for workspace sub-caddy
+	caddyDockerCompose, err := dockercompose.CreateWorkspaceCaddyDockerComposeFile(workspaceName, caddyConfigForCompose, stageNetworks)
+	if err != nil {
+		return false, fmt.Errorf("failed to create workspace caddy docker-compose file: %w", err)
+	}
+
+	caddyDockerComposePath := caddyConfig + "/docker-compose.yml"
+	if err := os.WriteFile(caddyDockerComposePath, []byte(caddyDockerCompose), 0755); err != nil {
+		return false, fmt.Errorf("failed to write workspace caddy docker-compose file: %w", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return false, fmt.Errorf("failed to get current directory: %w", err)
+	}
+	defer os.Chdir(originalDir)
+
+	if err := os.Chdir(caddyConfig); err != nil {
+		return false, fmt.Errorf("failed to change directory to workspace caddy config: %w", err)
+	}
+
+	caddyDockerComposeCom := exec.Command("docker", "compose", "-p", caddyProjectName, "up", "-d")
+
+	// Create data and config directories if they don't exist
+	if _, err := os.Stat(caddyConfig + "/data"); os.IsNotExist(err) {
+		if err := os.MkdirAll(caddyConfig+"/data", 0755); err != nil {
+			return false, fmt.Errorf("failed to create workspace caddy data directory: %w", err)
+		}
+	}
+	if _, err := os.Stat(caddyConfig + "/config"); os.IsNotExist(err) {
+		if err := os.MkdirAll(caddyConfig+"/config", 0755); err != nil {
+			return false, fmt.Errorf("failed to create workspace caddy config directory: %w", err)
+		}
+	}
+
+	if err := runCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
+		return false, fmt.Errorf("failed to start workspace caddy: %w", err)
+	}
+
+	// Wait for workspace caddy to be up and verify it's running
+	time.Sleep(5 * time.Second)
+
+	// Check if container is running
+	checkCmd := exec.Command("docker", "ps", "-q", "-f", fmt.Sprintf("name=%s", containerName))
+	output, err := checkCmd.Output()
+	if err != nil || len(output) == 0 {
+		return false, fmt.Errorf("workspace caddy container failed to start")
+	}
+
+	// Initialize workspace caddy via API
+	// Try to connect via container name (if we're on the same network) or use docker exec
+	workspaceCaddyURL := fmt.Sprintf("http://%s:2019", containerName)
+
+	// First try direct connection (if daemon is on bitswan_caddy network)
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Get(workspaceCaddyURL)
+	if err == nil {
+		defer resp.Body.Close()
+		// We can connect directly, use the API
+		originalCaddyHost := os.Getenv("BITSWAN_CADDY_HOST")
+		os.Setenv("BITSWAN_CADDY_HOST", workspaceCaddyURL)
+		defer func() {
+			if originalCaddyHost != "" {
+				os.Setenv("BITSWAN_CADDY_HOST", originalCaddyHost)
+			} else {
+				os.Unsetenv("BITSWAN_CADDY_HOST")
+			}
+		}()
+
+		if err := caddyapi.InitCaddy(); err != nil {
+			// Non-fatal - caddy might already be initialized
+			if verbose {
+				fmt.Printf("Warning: failed to init workspace caddy API (might already be initialized): %v\n", err)
+			}
+		}
+	} else {
+		// Can't connect directly, try via docker exec
+		if verbose {
+			fmt.Printf("Cannot connect directly to workspace caddy, skipping API initialization (will auto-initialize)\n")
+		}
+	}
+
+	return true, nil
+}
+
 // runCommandVerbose runs a command with optional verbose output
 func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
 	var stdoutBuf, stderrBuf bytes.Buffer
 
-		if verbose {
+	if verbose {
 		// Set up pipes for real-time streaming
 		stdoutPipe, err := cmd.StdoutPipe()
 		if err != nil {
@@ -437,4 +592,3 @@ func (s *Server) handleIngressRemoveRoute(w http.ResponseWriter, r *http.Request
 		Message: fmt.Sprintf("Removed route: %s", hostname),
 	})
 }
-

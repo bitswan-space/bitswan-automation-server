@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -126,7 +128,47 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 		fmt.Fprintln(writer, "Image removal process completed.")
 	}
 
-	// 5. Remove caddy files (before removing workspace folder so metadata is available)
+	// 5. Remove workspace sub-caddy container and config
+	fmt.Fprintln(writer, "Removing workspace sub-caddy...")
+	caddyProjectName := fmt.Sprintf("bitswan-%s-caddy", workspaceName)
+
+	// Stop and remove workspace sub-caddy container
+	workspaceCaddyConfig := filepath.Join(workspacesFolder, workspaceName, "caddy")
+	if _, err := os.Stat(workspaceCaddyConfig); err == nil {
+		// Change to caddy config directory and run docker compose down
+		cmd := exec.Command("docker", "compose", "-p", caddyProjectName, "down", "--volumes")
+		cmd.Dir = workspaceCaddyConfig
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to stop workspace sub-caddy: %v. Continuing with removal.\n", err)
+		} else {
+			fmt.Fprintln(writer, "Workspace sub-caddy stopped and removed.")
+		}
+
+		// Remove workspace caddy config directory
+		if err := os.RemoveAll(workspaceCaddyConfig); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to remove workspace caddy config directory: %v. Continuing with removal.\n", err)
+		}
+	}
+
+	// Remove workspace routing from global caddy
+	fmt.Fprintln(writer, "Removing workspace routing from global caddy...")
+	routeID := fmt.Sprintf("workspace_%s_routing", strings.ReplaceAll(strings.ReplaceAll(workspaceName, ".", "_"), "-", "_"))
+	removeURL := "http://localhost:2019/id/" + routeID
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+	req, _ := http.NewRequest("DELETE", removeURL, nil)
+	resp, err := client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		fmt.Fprintln(writer, "Workspace routing removed from global caddy.")
+	} else {
+		fmt.Fprintf(writer, "Warning: Failed to remove workspace routing from global caddy: %v. Continuing with removal.\n", err)
+	}
+
+	// 6. Remove caddy files (before removing workspace folder so metadata is available)
 	// Run in background - don't wait for it to complete since it's not critical
 	fmt.Fprintln(writer, "Removing caddy files (running in background)...")
 	go func() {
@@ -135,7 +177,7 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}()
 	// Continue immediately - don't wait for Caddy cleanup
 
-	// 6. Remove the gitops folder
+	// 7. Remove the gitops folder
 	fmt.Fprintln(writer, "Removing gitops folder...")
 	cmd = exec.Command("rm", "-rf", workspaceName)
 	cmd.Dir = workspacesFolder
@@ -146,7 +188,7 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "GitOps folder removed successfully.")
 
-	// 7. Remove entries from /etc/hosts
+	// 8. Remove entries from /etc/hosts
 	fmt.Fprintln(writer, "Removing entries from /etc/hosts...")
 	err = deleteHostsEntry(workspaceName, writer)
 	if err != nil {
