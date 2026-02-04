@@ -99,9 +99,6 @@ func newWorkspaceCmd() *cobra.Command {
 func addExternalCommands(rootCmd *cobra.Command) {
 	// Get PATH environment variable
 	pathEnv := os.Getenv("PATH")
-	if pathEnv == "" {
-		return
-	}
 
 	// Split PATH into directories
 	pathDirs := filepath.SplitList(pathEnv)
@@ -109,70 +106,84 @@ func addExternalCommands(rootCmd *cobra.Command) {
 	// Track added commands to avoid duplicates
 	addedCommands := make(map[string]bool)
 
-	// Check each directory in PATH
-	for _, dir := range pathDirs {
-		files, err := os.ReadDir(dir)
-		if err != nil {
+	// Check each directory in PATH for bitswan-* executables
+	if pathEnv != "" {
+		for _, dir := range pathDirs {
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+
+			// Look for bitswan-* executables
+			for _, file := range files {
+				if strings.HasPrefix(file.Name(), "bitswan-") {
+					subcommandName := strings.TrimPrefix(file.Name(), "bitswan-")
+
+					// Skip if already added or is a workspace command
+					if addedCommands[subcommandName] ||
+						subcommandName == "workspace" ||
+						subcommandName == "version" {
+						continue
+					}
+
+					// Create a command that executes the external binary
+					externalCmd := &cobra.Command{
+						Use:   subcommandName,
+						Short: fmt.Sprintf("External command: %s", subcommandName),
+						RunE: func(execPath string) func(cmd *cobra.Command, args []string) error {
+							return func(cmd *cobra.Command, args []string) error {
+								// Create the external command
+								execCmd := exec.Command(execPath, args...)
+								execCmd.Stdin = os.Stdin
+								execCmd.Stdout = os.Stdout
+								execCmd.Stderr = os.Stderr
+
+								// Run the command
+								return execCmd.Run()
+							}
+						}(filepath.Join(dir, file.Name())),
+						DisableFlagParsing: true,
+					}
+
+					// Add the command to the root command
+					rootCmd.AddCommand(externalCmd)
+					addedCommands[subcommandName] = true
+				}
+			}
+		}
+	}
+
+	// Add placeholder commands for known external commands that aren't installed
+	// These provide helpful installation instructions instead of "unknown command" errors
+	for cmdName, cmdInfo := range knownExternalCommands {
+		if addedCommands[cmdName] {
+			// Command is already installed, skip
 			continue
 		}
 
-		// Look for bitswan-* executables
-		for _, file := range files {
-			if strings.HasPrefix(file.Name(), "bitswan-") {
-				subcommandName := strings.TrimPrefix(file.Name(), "bitswan-")
-
-				// Skip if already added or is a workspace command
-				if addedCommands[subcommandName] ||
-					subcommandName == "workspace" ||
-					subcommandName == "version" {
-					continue
+		// Create a placeholder command that shows installation instructions
+		placeholderCmd := &cobra.Command{
+			Use:   cmdName,
+			Short: cmdInfo.description + " (not installed)",
+			Long:  cmdInfo.description + "\n\nThis command is not currently installed.",
+			RunE: func(name string, info knownExternalCommand) func(cmd *cobra.Command, args []string) error {
+				return func(cmd *cobra.Command, args []string) error {
+					fmt.Fprintf(os.Stderr, "Error: The '%s' command is not installed.\n\n", name)
+					fmt.Fprintln(os.Stderr, info.installMessage)
+					return fmt.Errorf("command '%s' not installed", name)
 				}
-
-				// Create a command that executes the external binary
-				externalCmd := &cobra.Command{
-					Use:   subcommandName,
-					Short: fmt.Sprintf("External command: %s", subcommandName),
-					RunE: func(execPath string) func(cmd *cobra.Command, args []string) error {
-						return func(cmd *cobra.Command, args []string) error {
-							// Create the external command
-							execCmd := exec.Command(execPath, args...)
-							execCmd.Stdin = os.Stdin
-							execCmd.Stdout = os.Stdout
-							execCmd.Stderr = os.Stderr
-
-							// Run the command
-							return execCmd.Run()
-						}
-					}(filepath.Join(dir, file.Name())),
-					DisableFlagParsing: true,
-				}
-
-				// Add the command to the root command
-				rootCmd.AddCommand(externalCmd)
-				addedCommands[subcommandName] = true
-			}
+			}(cmdName, cmdInfo),
+			DisableFlagParsing: true,
 		}
+
+		rootCmd.AddCommand(placeholderCmd)
+		addedCommands[cmdName] = true
 	}
 }
 
 // Execute invokes the command.
 func Execute(version string) error {
-	rootCmd := newRootCmd(version)
-
-	if err := rootCmd.Execute(); err != nil {
-		// Check if this is an unknown command error for a known external command
-		errStr := err.Error()
-		if strings.Contains(errStr, "unknown command") {
-			// Extract the command name from the error message
-			// Error format: unknown command "foo" for "bitswan"
-			for cmdName, cmdInfo := range knownExternalCommands {
-				if strings.Contains(errStr, fmt.Sprintf(`"%s"`, cmdName)) {
-					fmt.Fprintf(os.Stderr, "Error: The '%s' command is not installed.\n\n", cmdName)
-					fmt.Fprintln(os.Stderr, cmdInfo.installMessage)
-					return fmt.Errorf("command '%s' not installed", cmdName)
-				}
-			}
-		}
+	if err := newRootCmd(version).Execute(); err != nil {
 		return fmt.Errorf("error executing root command: %w", err)
 	}
 
