@@ -930,12 +930,10 @@ func (c *Client) WorkspaceRemove(workspaceName string) error {
 }
 
 // PullAndDeploy runs `bitswan pull-and-deploy ...` via the daemon with NDJSON streaming.
-func (c *Client) PullAndDeploy(workspaceName, branchName string, force, noBuild bool) error {
+func (c *Client) PullAndDeploy(workspaceName, branchName string) error {
 	bodyBytes, err := json.Marshal(PullAndDeployRequest{
 		Workspace: workspaceName,
 		Branch:    branchName,
-		Force:     force,
-		NoBuild:   noBuild,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)

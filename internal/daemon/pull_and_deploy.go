@@ -29,7 +29,7 @@ type ImageResponse struct {
 }
 
 // RunPullAndDeploy runs the pull-and-deploy logic
-func RunPullAndDeploy(workspaceName, branchName string, force, noBuild bool, writer io.Writer) error {
+func RunPullAndDeploy(workspaceName, branchName string, writer io.Writer) error {
 	metadata, err := config.GetWorkspaceMetadata(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
@@ -37,17 +37,6 @@ func RunPullAndDeploy(workspaceName, branchName string, force, noBuild bool, wri
 
 	// Construct the URL for the pull-and-deploy endpoint
 	url := fmt.Sprintf("%s/automations/pull-and-deploy/%s", metadata.GitopsURL, branchName)
-	// Add query parameters if needed
-	if force {
-		url += "?force=true"
-	}
-	if noBuild {
-		if force {
-			url += "&no-build=true"
-		} else {
-			url += "?no-build=true"
-		}
-	}
 
 	// Transform URL for daemon if needed
 	url = automations.TransformURLForDaemon(url, workspaceName)

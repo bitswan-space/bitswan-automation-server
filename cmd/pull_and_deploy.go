@@ -10,8 +10,6 @@ import (
 
 func newPullAndDeployCmd() *cobra.Command {
 	var branch string
-	var force bool
-	var noBuild bool
 
 	cmd := &cobra.Command{
 		Use:   "pull-and-deploy [workspace_name]",
@@ -32,7 +30,7 @@ func newPullAndDeployCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			if err := client.PullAndDeploy(workspaceName, branch, force, noBuild); err != nil {
+			if err := client.PullAndDeploy(workspaceName, branch); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
@@ -41,8 +39,6 @@ func newPullAndDeployCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Branch name to pull and deploy (required)")
-	cmd.Flags().BoolVar(&force, "force", false, "Force rebuild of all automation images even if they exist")
-	cmd.Flags().BoolVar(&noBuild, "no-build", false, "Skip building automation images, only pull and deploy existing images")
 
 	// Mark branch flag as required
 	cmd.MarkFlagRequired("branch")
