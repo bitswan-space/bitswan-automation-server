@@ -614,8 +614,10 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	var oauthEnvVars []string
+	var keycloakURL string
 	if oauthConfig != nil {
 		oauthEnvVars = oauth.CreateOAuthEnvVars(oauthConfig, "gitops", workspaceName, *domain)
+		keycloakURL = oauthConfig.IssuerUrl
 	}
 
 	// Log local remote info for debugging
@@ -635,6 +637,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		TrustCA:            true,
 		LocalRemotePath:    localRemotePath,
 		LocalRemoteName:    localRemoteName,
+		KeycloakURL:        keycloakURL,
 	}
 	compose, token, err := config.CreateDockerComposeFile()
 
