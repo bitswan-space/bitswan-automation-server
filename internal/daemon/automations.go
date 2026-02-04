@@ -292,8 +292,6 @@ func (s *Server) handleAutomations(w http.ResponseWriter, r *http.Request) {
 type PullAndDeployRequest struct {
 	Workspace string `json:"workspace"`
 	Branch    string `json:"branch"`
-	Force     bool   `json:"force"`
-	NoBuild   bool   `json:"no_build"`
 }
 
 func (s *Server) handlePullAndDeploy(w http.ResponseWriter, r *http.Request) {
@@ -368,7 +366,7 @@ func (s *Server) handlePullAndDeploy(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Run pull-and-deploy logic
-	err = RunPullAndDeploy(req.Workspace, req.Branch, req.Force, req.NoBuild, wPipe)
+	err = RunPullAndDeploy(req.Workspace, req.Branch, wPipe)
 	wPipe.Close()
 	wg.Wait()
 
