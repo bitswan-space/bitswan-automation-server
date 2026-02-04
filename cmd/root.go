@@ -16,6 +16,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// knownExternalCommand contains installation info for commands that may not be installed
+type knownExternalCommand struct {
+	description    string
+	installMessage string
+}
+
+// knownExternalCommands maps command names to their installation instructions
+var knownExternalCommands = map[string]knownExternalCommand{
+	"notebook": {
+		description: "Run and manage Jupyter notebook pipelines",
+		installMessage: `The 'notebook' command is part of the BitSwan library.
+
+Install BitSwan:
+  pip install bitswan
+
+For more information:
+  https://github.com/bitswan-space/BitSwan#installation`,
+	},
+	"on-prem-aoc": {
+		description: "Manage on-premises Automation Operation Center",
+		installMessage: `The 'on-prem-aoc' command is part of the Automation Operation Center.
+
+This component requires a proprietary license.
+Contact BitSwan for licensing information:
+  https://bitswan.ai`,
+	},
+}
+
 func newRootCmd(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bitswan",
@@ -129,7 +157,22 @@ func addExternalCommands(rootCmd *cobra.Command) {
 
 // Execute invokes the command.
 func Execute(version string) error {
-	if err := newRootCmd(version).Execute(); err != nil {
+	rootCmd := newRootCmd(version)
+
+	if err := rootCmd.Execute(); err != nil {
+		// Check if this is an unknown command error for a known external command
+		errStr := err.Error()
+		if strings.Contains(errStr, "unknown command") {
+			// Extract the command name from the error message
+			// Error format: unknown command "foo" for "bitswan"
+			for cmdName, cmdInfo := range knownExternalCommands {
+				if strings.Contains(errStr, fmt.Sprintf(`"%s"`, cmdName)) {
+					fmt.Fprintf(os.Stderr, "Error: The '%s' command is not installed.\n\n", cmdName)
+					fmt.Fprintln(os.Stderr, cmdInfo.installMessage)
+					return fmt.Errorf("command '%s' not installed", cmdName)
+				}
+			}
+		}
 		return fmt.Errorf("error executing root command: %w", err)
 	}
 
