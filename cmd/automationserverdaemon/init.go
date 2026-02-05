@@ -237,7 +237,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"-v", fmt.Sprintf("%s:%s", socketDir, socketDir),
-		"-v", "/:/host:ro",
+		"-v", "/:/host:rw",
 		"--network", "bitswan_network",
 		daemonImage,
 		"/usr/local/bin/bitswan", "automation-server-daemon", "__run",
