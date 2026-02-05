@@ -390,7 +390,7 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 
 	// Step 6: Use pull-and-deploy on workspace 2
 	fmt.Println("\n[6/9] Running pull-and-deploy on workspace 2...")
-	if err := client.PullAndDeploy(workspace2Name, branchName, false, false); err != nil {
+	if err := client.PullAndDeploy(workspace2Name, branchName); err != nil {
 		cleanupWorkspace(workspace1Name)
 		cleanupWorkspace(workspace2Name)
 		return fmt.Errorf("failed to pull-and-deploy: %w", err)
