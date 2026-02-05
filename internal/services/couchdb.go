@@ -741,7 +741,8 @@ func (c *CouchDBService) createTarball(sourceDir, tarballPath string) error {
 }
 
 // Restore restores CouchDB databases from a backup (tarball or directory)
-func (c *CouchDBService) Restore(backupPath string) error {
+// If force is true, skip confirmation prompts for existing databases
+func (c *CouchDBService) Restore(backupPath string, force bool) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
 
 	// Check if container is running
@@ -896,8 +897,8 @@ func (c *CouchDBService) Restore(backupPath string) error {
 			if err != nil {
 				fmt.Printf("Warning: failed to check documents in '%s': %v\n", dbName, err)
 				// Continue anyway
-			} else if hasDocuments {
-				// Prompt for confirmation
+			} else if hasDocuments && !force {
+				// Prompt for confirmation (only if not forced)
 				fmt.Printf("\n⚠️  Database '%s' already contains %d document(s).\n", dbName, docCount)
 				fmt.Printf("Restoring will DELETE all existing documents and replace them with the backup.\n")
 				if !c.promptConfirmation(fmt.Sprintf("Do you want to continue with restoring '%s'? (yes/no): ", dbName)) {
