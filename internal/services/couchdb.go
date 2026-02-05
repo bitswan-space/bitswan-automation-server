@@ -613,12 +613,15 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		fmt.Printf("   📊 Database has %d documents\n", totalDocs)
 
 		// Fetch documents in batches to avoid timeout
-		// Use smaller batch size for databases with attachments
+		// Start with batch size of 50, reduce on timeout
 		batchSize := 50
+		minBatchSize := 1
 		var allRows []interface{}
 		skip := 0
+		consecutiveFailures := 0
+		maxConsecutiveFailures := 3
 
-		for {
+		for skip < totalDocs || totalDocs == 0 {
 			// Fetch a batch of documents with attachments
 			batchCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 				fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
@@ -629,25 +632,142 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			batchCmd.Stderr = os.Stderr
 
 			if err := batchCmd.Run(); err != nil {
-				fmt.Printf("Warning: failed to backup batch at skip=%d for '%s': %v\n", skip, dbName, err)
-				break
+				fmt.Printf("\n   ⚠️  Failed to backup batch at skip=%d for '%s': %v\n", skip, dbName, err)
+				consecutiveFailures++
+				if consecutiveFailures >= maxConsecutiveFailures {
+					fmt.Printf("   ❌ Too many consecutive failures, skipping database\n")
+					break
+				}
+				continue
 			}
 
 			var batchResult map[string]interface{}
 			if err := json.Unmarshal(batchOutput.Bytes(), &batchResult); err != nil {
-				fmt.Printf("Warning: failed to parse batch at skip=%d for '%s': %v\n", skip, dbName, err)
-				break
+				fmt.Printf("\n   ⚠️  Failed to parse batch at skip=%d for '%s': %v\n", skip, dbName, err)
+				consecutiveFailures++
+				if consecutiveFailures >= maxConsecutiveFailures {
+					break
+				}
+				continue
 			}
 
 			// Check for error response (e.g., timeout)
 			if errMsg, hasError := batchResult["error"]; hasError {
-				fmt.Printf("Warning: CouchDB error at skip=%d for '%s': %v - %v\n", skip, dbName, errMsg, batchResult["reason"])
-				break
+				if batchSize > minBatchSize {
+					// Reduce batch size and retry
+					newBatchSize := batchSize / 2
+					if newBatchSize < minBatchSize {
+						newBatchSize = minBatchSize
+					}
+					fmt.Printf("\n   ⚠️  Timeout with batch size %d, reducing to %d and retrying...\n", batchSize, newBatchSize)
+					batchSize = newBatchSize
+					consecutiveFailures = 0 // Reset on batch size change
+					continue
+				} else {
+					// Even batch size of 1 failed - try fetching document individually by ID
+					fmt.Printf("\n   ⚠️  Timeout even with batch size 1, trying individual document fetch...\n")
+
+					// Get document IDs first (without attachments)
+					idsCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+						fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+						fmt.Sprintf("http://localhost:5984/%s/_all_docs?limit=1&skip=%d", dbName, skip))
+
+					var idsOutput bytes.Buffer
+					idsCmd.Stdout = &idsOutput
+					idsCmd.Stderr = os.Stderr
+
+					if err := idsCmd.Run(); err != nil {
+						fmt.Printf("   ❌ Failed to get document ID: %v\n", err)
+						skip++ // Skip this document
+						consecutiveFailures++
+						if consecutiveFailures >= maxConsecutiveFailures {
+							break
+						}
+						continue
+					}
+
+					var idsResult map[string]interface{}
+					if err := json.Unmarshal(idsOutput.Bytes(), &idsResult); err != nil {
+						skip++
+						consecutiveFailures++
+						if consecutiveFailures >= maxConsecutiveFailures {
+							break
+						}
+						continue
+					}
+
+					idsRows, ok := idsResult["rows"].([]interface{})
+					if !ok || len(idsRows) == 0 {
+						break // No more documents
+					}
+
+					// Get the document ID
+					rowMap, ok := idsRows[0].(map[string]interface{})
+					if !ok {
+						skip++
+						continue
+					}
+					docID, ok := rowMap["id"].(string)
+					if !ok {
+						skip++
+						continue
+					}
+
+					// Fetch individual document with attachments
+					docCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+						fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+						fmt.Sprintf("http://localhost:5984/%s/%s?attachments=true", dbName, docID))
+
+					var docOutput bytes.Buffer
+					docCmd.Stdout = &docOutput
+					docCmd.Stderr = os.Stderr
+
+					if err := docCmd.Run(); err != nil {
+						fmt.Printf("   ⚠️  Failed to fetch document '%s': %v\n", docID, err)
+						skip++
+						consecutiveFailures++
+						if consecutiveFailures >= maxConsecutiveFailures {
+							break
+						}
+						continue
+					}
+
+					var doc map[string]interface{}
+					if err := json.Unmarshal(docOutput.Bytes(), &doc); err != nil {
+						skip++
+						consecutiveFailures++
+						continue
+					}
+
+					// Check for error
+					if _, hasError := doc["error"]; hasError {
+						fmt.Printf("   ⚠️  Error fetching document '%s': %v\n", docID, doc["reason"])
+						skip++
+						consecutiveFailures++
+						if consecutiveFailures >= maxConsecutiveFailures {
+							break
+						}
+						continue
+					}
+
+					// Add to results in the same format as _all_docs row
+					allRows = append(allRows, map[string]interface{}{
+						"id":    docID,
+						"key":   docID,
+						"value": map[string]interface{}{"rev": doc["_rev"]},
+						"doc":   doc,
+					})
+
+					consecutiveFailures = 0
+					skip++
+					fmt.Printf("   📥 Fetched %d/%d documents (individual mode)...\r", len(allRows), totalDocs)
+					continue
+				}
 			}
 
 			rows, ok := batchResult["rows"].([]interface{})
 			if !ok {
-				fmt.Printf("Warning: no rows in batch at skip=%d for '%s'\n", skip, dbName)
+				fmt.Printf("\n   ⚠️  No rows in batch at skip=%d for '%s'\n", skip, dbName)
 				break
 			}
 
@@ -657,6 +777,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			}
 
 			allRows = append(allRows, rows...)
+			consecutiveFailures = 0
 
 			// Progress indicator
 			fmt.Printf("   📥 Fetched %d/%d documents...\r", len(allRows), totalDocs)
@@ -669,7 +790,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			}
 		}
 
-		fmt.Printf("   📥 Fetched %d documents total\n", len(allRows))
+		fmt.Printf("\n   📥 Fetched %d documents total\n", len(allRows))
 
 		if len(allRows) == 0 {
 			fmt.Printf("Warning: no documents backed up for '%s'\n", dbName)
