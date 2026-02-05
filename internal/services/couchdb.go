@@ -519,7 +519,7 @@ func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 }
 
 // Backup creates a backup of all CouchDB databases as a tarball
-// Documents with attachments are fetched individually to ensure full attachment data is captured
+// Documents are fetched normally, then attachments are fetched separately using the standard attachment API
 func (c *CouchDBService) Backup(backupPath string) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
 
@@ -611,88 +611,105 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 		fmt.Printf("   📊 Database has %d documents\n", totalDocs)
 
-		// Get all document IDs first (without full docs/attachments for speed)
-		idsCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+		// Get all documents with include_docs=true (but without inline attachments)
+		// This gives us the document content with attachment stubs
+		docsCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-			fmt.Sprintf("http://localhost:5984/%s/_all_docs", dbName))
+			fmt.Sprintf("http://localhost:5984/%s/_all_docs?include_docs=true", dbName))
 
-		var idsOutput bytes.Buffer
-		idsCmd.Stdout = &idsOutput
-		idsCmd.Stderr = os.Stderr
+		var docsOutput bytes.Buffer
+		docsCmd.Stdout = &docsOutput
+		docsCmd.Stderr = os.Stderr
 
-		if err := idsCmd.Run(); err != nil {
-			return fmt.Errorf("failed to get document IDs for '%s': %w", dbName, err)
+		if err := docsCmd.Run(); err != nil {
+			return fmt.Errorf("failed to get documents for '%s': %w", dbName, err)
 		}
 
-		var idsResult map[string]interface{}
-		if err := json.Unmarshal(idsOutput.Bytes(), &idsResult); err != nil {
-			return fmt.Errorf("failed to parse document IDs for '%s': %w", dbName, err)
+		var docsResult map[string]interface{}
+		if err := json.Unmarshal(docsOutput.Bytes(), &docsResult); err != nil {
+			return fmt.Errorf("failed to parse documents for '%s': %w", dbName, err)
 		}
 
 		// Check for error response
-		if errMsg, hasError := idsResult["error"]; hasError {
-			return fmt.Errorf("CouchDB error getting document IDs for '%s': %v", dbName, errMsg)
+		if errMsg, hasError := docsResult["error"]; hasError {
+			return fmt.Errorf("CouchDB error getting documents for '%s': %v", dbName, errMsg)
 		}
 
-		idsRows, ok := idsResult["rows"].([]interface{})
+		rows, ok := docsResult["rows"].([]interface{})
 		if !ok {
 			return fmt.Errorf("invalid response format for '%s': no rows", dbName)
 		}
 
-		// Fetch each document individually with attachments=true
-		// This ensures we get full attachment data (not just stubs) for documents with large attachments
+		// Process each document and fetch attachments separately
 		var allRows []interface{}
-		for j, row := range idsRows {
+		totalAttachments := 0
+		for j, row := range rows {
 			rowMap, ok := row.(map[string]interface{})
 			if !ok {
 				return fmt.Errorf("invalid row format for '%s' at index %d", dbName, j)
 			}
-			docID, ok := rowMap["id"].(string)
+
+			doc, ok := rowMap["doc"].(map[string]interface{})
 			if !ok {
-				return fmt.Errorf("missing document ID for '%s' at index %d", dbName, j)
+				return fmt.Errorf("missing doc in row for '%s' at index %d", dbName, j)
 			}
 
-			// URL-encode the document ID to handle special characters
-			encodedDocID := url.PathEscape(docID)
+			docID, _ := doc["_id"].(string)
 
-			// Fetch the document with full attachments
-			docCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
-				fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-				fmt.Sprintf("http://localhost:5984/%s/%s?attachments=true", dbName, encodedDocID))
+			// Check if document has attachments (stubs)
+			if attachments, hasAttachments := doc["_attachments"].(map[string]interface{}); hasAttachments {
+				// Fetch each attachment separately using the standard attachment API
+				for attName, attInfo := range attachments {
+					attInfoMap, ok := attInfo.(map[string]interface{})
+					if !ok {
+						continue
+					}
 
-			var docOutput bytes.Buffer
-			docCmd.Stdout = &docOutput
-			docCmd.Stderr = os.Stderr
+					// Skip if already has data (not a stub)
+					if _, hasData := attInfoMap["data"]; hasData {
+						continue
+					}
 
-			if err := docCmd.Run(); err != nil {
-				return fmt.Errorf("failed to fetch document '%s' from '%s': %w", docID, dbName, err)
+					// URL-encode the document ID and attachment name
+					encodedDocID := url.PathEscape(docID)
+					encodedAttName := url.PathEscape(attName)
+
+					// Fetch the attachment as binary data
+					attCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+						fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+						fmt.Sprintf("http://localhost:5984/%s/%s/%s", dbName, encodedDocID, encodedAttName))
+
+					var attOutput bytes.Buffer
+					attCmd.Stdout = &attOutput
+					attCmd.Stderr = os.Stderr
+
+					if err := attCmd.Run(); err != nil {
+						return fmt.Errorf("failed to fetch attachment '%s' from document '%s': %w", attName, docID, err)
+					}
+
+					// Convert to base64 and store in the attachment info
+					attData := attOutput.Bytes()
+					attInfoMap["data"] = base64.StdEncoding.EncodeToString(attData)
+					delete(attInfoMap, "stub") // Remove the stub marker
+					totalAttachments++
+				}
 			}
 
-			var doc map[string]interface{}
-			if err := json.Unmarshal(docOutput.Bytes(), &doc); err != nil {
-				return fmt.Errorf("failed to parse document '%s' from '%s': %w\nResponse: %s", docID, dbName, err, docOutput.String())
-			}
-
-			// Check for error
-			if errReason, hasError := doc["error"]; hasError {
-				return fmt.Errorf("CouchDB error fetching document '%s' from '%s': %v", docID, dbName, errReason)
-			}
-
-			// Add to results in the same format as _all_docs row
+			// Add to results
 			allRows = append(allRows, map[string]interface{}{
 				"id":    docID,
-				"key":   docID,
-				"value": map[string]interface{}{"rev": doc["_rev"]},
+				"key":   rowMap["key"],
+				"value": rowMap["value"],
 				"doc":   doc,
 			})
 
 			// Progress indicator
-			if (j+1)%10 == 0 || j+1 == len(idsRows) {
-				fmt.Printf("   📥 Fetched %d/%d documents...\r", j+1, len(idsRows))
+			if (j+1)%10 == 0 || j+1 == len(rows) {
+				fmt.Printf("   📥 Processed %d/%d documents...\r", j+1, len(rows))
 			}
 		}
 
-		fmt.Printf("\n   📥 Fetched %d documents total\n", len(allRows))
+		fmt.Printf("\n   📥 Processed %d documents, fetched %d attachments\n", len(allRows), totalAttachments)
 
 		// Hard fail if we couldn't backup all documents
 		if len(allRows) == 0 && totalDocs > 0 {
