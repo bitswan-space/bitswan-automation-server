@@ -643,7 +643,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 					if newBatchSize < minBatchSize {
 						newBatchSize = minBatchSize
 					}
-					fmt.Printf("\n   ⚠️  Timeout with batch size %d, reducing to %d and retrying...\n", batchSize, newBatchSize)
+					fmt.Printf("\n   ⚠️  CouchDB error '%v' with batch size %d, reducing to %d and retrying...\n", errMsg, batchSize, newBatchSize)
 					batchSize = newBatchSize
 					continue
 				} else {
