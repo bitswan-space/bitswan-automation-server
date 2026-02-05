@@ -575,28 +575,123 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 	fmt.Printf("📋 Found %d database(s) to backup\n", len(userDatabases))
 
-	// Backup each database
+	// Backup each database using pagination to handle large databases
 	for i, dbName := range userDatabases {
 		fmt.Printf("💾 Backing up database %d/%d: '%s'...\n", i+1, len(userDatabases), dbName)
 
-		// Get all documents using _all_docs with include_docs=true and attachments=true
-		// attachments=true includes binary attachments as base64-encoded data
-		backupCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+		// First, get the total document count
+		countCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-			fmt.Sprintf("http://localhost:5984/%s/_all_docs?include_docs=true&attachments=true", dbName))
+			fmt.Sprintf("http://localhost:5984/%s", dbName))
 
-		var backupOutput bytes.Buffer
-		backupCmd.Stdout = &backupOutput
-		backupCmd.Stderr = os.Stderr
+		var countOutput bytes.Buffer
+		countCmd.Stdout = &countOutput
+		countCmd.Stderr = os.Stderr
 
-		if err := backupCmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to backup database '%s': %v\n", dbName, err)
+		if err := countCmd.Run(); err != nil {
+			fmt.Printf("Warning: failed to get info for database '%s': %v\n", dbName, err)
+			continue
+		}
+
+		var dbInfo map[string]interface{}
+		if err := json.Unmarshal(countOutput.Bytes(), &dbInfo); err != nil {
+			fmt.Printf("Warning: failed to parse database info for '%s': %v\n", dbName, err)
+			continue
+		}
+
+		// Check for error response
+		if _, hasError := dbInfo["error"]; hasError {
+			fmt.Printf("Warning: error getting database info for '%s': %v\n", dbName, dbInfo["reason"])
+			continue
+		}
+
+		totalDocs := 0
+		if docCount, ok := dbInfo["doc_count"].(float64); ok {
+			totalDocs = int(docCount)
+		}
+
+		fmt.Printf("   📊 Database has %d documents\n", totalDocs)
+
+		// Fetch documents in batches to avoid timeout
+		// Use smaller batch size for databases with attachments
+		batchSize := 50
+		var allRows []interface{}
+		skip := 0
+
+		for {
+			// Fetch a batch of documents with attachments
+			batchCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+				fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+				fmt.Sprintf("http://localhost:5984/%s/_all_docs?include_docs=true&attachments=true&limit=%d&skip=%d", dbName, batchSize, skip))
+
+			var batchOutput bytes.Buffer
+			batchCmd.Stdout = &batchOutput
+			batchCmd.Stderr = os.Stderr
+
+			if err := batchCmd.Run(); err != nil {
+				fmt.Printf("Warning: failed to backup batch at skip=%d for '%s': %v\n", skip, dbName, err)
+				break
+			}
+
+			var batchResult map[string]interface{}
+			if err := json.Unmarshal(batchOutput.Bytes(), &batchResult); err != nil {
+				fmt.Printf("Warning: failed to parse batch at skip=%d for '%s': %v\n", skip, dbName, err)
+				break
+			}
+
+			// Check for error response (e.g., timeout)
+			if errMsg, hasError := batchResult["error"]; hasError {
+				fmt.Printf("Warning: CouchDB error at skip=%d for '%s': %v - %v\n", skip, dbName, errMsg, batchResult["reason"])
+				break
+			}
+
+			rows, ok := batchResult["rows"].([]interface{})
+			if !ok {
+				fmt.Printf("Warning: no rows in batch at skip=%d for '%s'\n", skip, dbName)
+				break
+			}
+
+			if len(rows) == 0 {
+				// No more documents
+				break
+			}
+
+			allRows = append(allRows, rows...)
+
+			// Progress indicator
+			fmt.Printf("   📥 Fetched %d/%d documents...\r", len(allRows), totalDocs)
+
+			skip += len(rows)
+
+			// If we got fewer documents than requested, we're done
+			if len(rows) < batchSize {
+				break
+			}
+		}
+
+		fmt.Printf("   📥 Fetched %d documents total\n", len(allRows))
+
+		if len(allRows) == 0 {
+			fmt.Printf("Warning: no documents backed up for '%s'\n", dbName)
+			continue
+		}
+
+		// Create the backup document in the same format as _all_docs response
+		backupDoc := map[string]interface{}{
+			"total_rows": len(allRows),
+			"offset":     0,
+			"rows":       allRows,
+		}
+
+		backupData, err := json.Marshal(backupDoc)
+		if err != nil {
+			fmt.Printf("Warning: failed to marshal backup for '%s': %v\n", dbName, err)
 			continue
 		}
 
 		// Save backup to file in temp directory
 		backupFile := filepath.Join(tempDir, fmt.Sprintf("%s.json", dbName))
-		if err := os.WriteFile(backupFile, backupOutput.Bytes(), 0644); err != nil {
+		if err := os.WriteFile(backupFile, backupData, 0644); err != nil {
 			return fmt.Errorf("failed to write backup file for '%s': %w", dbName, err)
 		}
 
