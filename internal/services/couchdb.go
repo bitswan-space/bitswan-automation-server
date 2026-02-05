@@ -596,7 +596,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		// We use docker run with node image since couchdb image doesn't have node
 		// Mount the host temp directory (not the /host-prefixed path)
 		// --attachments flag includes binary attachments (PDFs, images, etc.) instead of just stubs
-		// Capture stderr separately to show errors, stdout goes to file
+		// Pass through stderr for real-time progress output
 		backupCmd := exec.Command("docker", "run", "--rm",
 			"--network", "container:"+containerName,
 			"-v", fmt.Sprintf("%s:/backup", hostTempDir),
@@ -604,15 +604,10 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			"sh", "-c",
 			fmt.Sprintf("npx --yes @cloudant/couchbackup --url '%s' --db '%s' --attachments > /backup/%s.txt", couchURL, dbName, dbName))
 
-		var stderrBuf bytes.Buffer
-		backupCmd.Stdout = os.Stdout // Progress info goes to stdout
-		backupCmd.Stderr = &stderrBuf
+		backupCmd.Stdout = os.Stdout
+		backupCmd.Stderr = os.Stderr
 
 		if err := backupCmd.Run(); err != nil {
-			// Show stderr to help debug
-			if stderrBuf.Len() > 0 {
-				fmt.Printf("   couchbackup error:\n%s\n", stderrBuf.String())
-			}
 			return fmt.Errorf("failed to backup database '%s': %w", dbName, err)
 		}
 
