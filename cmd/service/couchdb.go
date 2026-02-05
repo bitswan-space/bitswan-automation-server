@@ -354,7 +354,6 @@ func newCouchDBBackupCmd() *cobra.Command {
 func newCouchDBRestoreCmd() *cobra.Command {
 	var backupPath string
 	var workspace string
-	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "restore",
@@ -389,36 +388,19 @@ func newCouchDBRestoreCmd() *cobra.Command {
 				}
 			}
 
-			// Prompt for confirmation unless --force is used
-			if !force {
-				fmt.Printf("⚠️  This will restore CouchDB databases for workspace '%s'.\n", workspace)
-				fmt.Println("Existing data in restored databases will be DELETED and replaced with backup data.")
-				fmt.Print("Do you want to continue? (yes/no): ")
-
-				var response string
-				fmt.Scanln(&response)
-				if response != "yes" && response != "y" {
-					fmt.Println("Restore cancelled.")
-					return nil
-				}
-			}
-
-			result, err := client.RestoreCouchDB(workspace, absBackupPath, force)
+			// Use interactive job API for restore to handle prompts
+			err = client.RestoreCouchDBInteractive(workspace, absBackupPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 
-			if result != nil && result.Message != "" {
-				fmt.Println(result.Message)
-			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&backupPath, "path", "", "Path to the backup tarball (.tar.gz) or directory (required)")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
-	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompts")
 	cmd.MarkFlagRequired("path")
 
 	return cmd

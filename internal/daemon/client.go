@@ -1411,3 +1411,153 @@ func (c *Client) RestoreCouchDB(workspace, backupPath string, force bool) (*Serv
 	return &result, nil
 }
 
+// CreateJob creates a new interactive job
+func (c *Client) CreateJob(jobType, workspace string, params map[string]interface{}) (string, error) {
+	reqBody := map[string]interface{}{
+		"type":      jobType,
+		"workspace": workspace,
+		"params":    params,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/jobs", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to create job: %s", string(body))
+	}
+
+	var result struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.JobID, nil
+}
+
+// ClientJobLogEntry represents a log entry from a job stream
+type ClientJobLogEntry struct {
+	Time    string `json:"time"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	Prompt  string `json:"prompt,omitempty"`
+	Type    string `json:"type,omitempty"`
+	State   string `json:"state,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// StreamJobOutput streams job output and handles prompts interactively
+func (c *Client) StreamJobOutput(jobID string, output io.Writer, input io.Reader) error {
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://unix/jobs/%s/stream", jobID), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to stream job: %s", string(body))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	inputReader := bufio.NewReader(input)
+
+	for scanner.Scan() {
+		var entry ClientJobLogEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+
+		// Handle completion
+		if entry.Type == "complete" {
+			if entry.Error != "" {
+				return fmt.Errorf("%s", entry.Error)
+			}
+			return nil
+		}
+
+		// Handle prompt - need to get user input
+		if entry.Prompt != "" {
+			fmt.Fprint(output, entry.Prompt)
+
+			// Read user input
+			userInput, err := inputReader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read input: %w", err)
+			}
+
+			// Send input to job
+			if err := c.SendJobInput(jobID, strings.TrimSpace(userInput)); err != nil {
+				return fmt.Errorf("failed to send input: %w", err)
+			}
+			continue
+		}
+
+		// Regular log message
+		if entry.Message != "" {
+			fmt.Fprintln(output, entry.Message)
+		}
+	}
+
+	return scanner.Err()
+}
+
+// SendJobInput sends input to a waiting job
+func (c *Client) SendJobInput(jobID, input string) error {
+	reqBody := map[string]string{"input": input}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://unix/jobs/%s/input", jobID), strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to send input: %s", string(body))
+	}
+
+	return nil
+}
+
+// RestoreCouchDBInteractive restores CouchDB using the interactive job API
+func (c *Client) RestoreCouchDBInteractive(workspace, backupPath string) error {
+	// Create the job
+	jobID, err := c.CreateJob("couchdb_restore", workspace, map[string]interface{}{
+		"backup_path": backupPath,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Stream output and handle prompts
+	return c.StreamJobOutput(jobID, os.Stdout, os.Stdin)
+}

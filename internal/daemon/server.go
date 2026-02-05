@@ -136,6 +136,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/service", s.authMiddleware(s.handleService))
 	mux.HandleFunc("/service/", s.authMiddleware(s.handleService))
 
+	// Job endpoints for interactive operations (authenticated)
+	mux.HandleFunc("/jobs", s.authMiddleware(s.handleJobs))
+	mux.HandleFunc("/jobs/", s.authMiddleware(s.handleJobs))
+
 	// Docs endpoint (unauthenticated - public access)
 	mux.HandleFunc("/api-docs", s.handleDocs)
 
