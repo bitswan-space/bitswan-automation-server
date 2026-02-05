@@ -14,6 +14,20 @@ import (
 	"time"
 )
 
+// expectedVersion is the version the CLI expects the daemon to have
+var expectedVersion string
+
+// updateCallback is called when the daemon version doesn't match the expected version
+var updateCallback func() error
+
+// SetVersionCheck configures the daemon client to check version on connection
+// and auto-update if versions don't match. The callback should stop the old daemon,
+// remove it, and start a new one with the current binary.
+func SetVersionCheck(version string, callback func() error) {
+	expectedVersion = version
+	updateCallback = callback
+}
+
 // Client is an HTTP client that communicates with the daemon over Unix socket
 type Client struct {
 	httpClient *http.Client
@@ -49,6 +63,33 @@ func NewClientWithSocket(socketPath string) (*Client, error) {
 	// Verify the daemon is running by pinging it
 	if err := client.Ping(); err != nil {
 		return nil, fmt.Errorf("automation server daemon is not running: %w", err)
+	}
+
+	// Check if version matches and auto-update if needed
+	if expectedVersion != "" && updateCallback != nil {
+		daemonVersion, err := client.GetVersion()
+		if err != nil {
+			// Could not get version, daemon might be old - try to update
+			fmt.Println("Could not determine daemon version, updating daemon...")
+			if updateErr := updateCallback(); updateErr != nil {
+				return nil, fmt.Errorf("failed to update daemon: %w", updateErr)
+			}
+			// Reconnect after update
+			return NewClientWithSocket(socketPath)
+		}
+
+		if daemonVersion != expectedVersion {
+			fmt.Printf("Daemon version (%s) differs from CLI version (%s), updating daemon...\n", daemonVersion, expectedVersion)
+			if updateErr := updateCallback(); updateErr != nil {
+				return nil, fmt.Errorf("failed to update daemon: %w", updateErr)
+			}
+			// Reconnect after update (clear version check to avoid infinite loop)
+			oldExpected := expectedVersion
+			expectedVersion = ""
+			client, err = NewClientWithSocket(socketPath)
+			expectedVersion = oldExpected
+			return client, err
+		}
 	}
 
 	return client, nil
