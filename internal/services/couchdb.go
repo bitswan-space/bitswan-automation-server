@@ -520,7 +520,6 @@ func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 // Backup creates a backup of all CouchDB databases as a tarball
 func (c *CouchDBService) Backup(backupPath string) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
-	daemonContainerName := "bitswan-automation-server-daemon"
 
 	// Check if container is running
 	if !c.IsContainerRunning() {
@@ -636,19 +635,21 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		return fmt.Errorf("failed to create tarball: %w", err)
 	}
 
-	// Use docker cp to copy the tarball from the daemon container to the host path
-	// The backupPath is a host path, so we need to copy the file out of the container
+	// Copy the tarball to the host path via the /host mount
+	// The daemon container has the host filesystem mounted at /host
 	hostTarballPath := filepath.Join(backupPath, tarballName)
+	hostMountTarballPath := filepath.Join("/host", hostTarballPath)
 	fmt.Printf("📤 Copying backup to host: %s\n", hostTarballPath)
 
-	// docker cp daemon_container:/tmp/backup.tar.gz /host/path/
-	cpCmd := exec.Command("docker", "cp",
-		fmt.Sprintf("%s:%s", daemonContainerName, tempTarballPath),
-		hostTarballPath)
-
-	cpOutput, err := cpCmd.CombinedOutput()
+	// Read the tarball from temp directory
+	tarballData, err := os.ReadFile(tempTarballPath)
 	if err != nil {
-		return fmt.Errorf("failed to copy backup to host: %w\nOutput: %s", err, string(cpOutput))
+		return fmt.Errorf("failed to read tarball: %w", err)
+	}
+
+	// Write to host path via /host mount
+	if err := os.WriteFile(hostMountTarballPath, tarballData, 0644); err != nil {
+		return fmt.Errorf("failed to write backup to host: %w", err)
 	}
 
 	fmt.Printf("✅ Backup completed successfully!\n")
@@ -742,14 +743,13 @@ func (c *CouchDBService) createTarball(sourceDir, tarballPath string) error {
 // Restore restores CouchDB databases from a backup (tarball or directory)
 func (c *CouchDBService) Restore(backupPath string) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
-	daemonContainerName := "bitswan-automation-server-daemon"
 
 	// Check if container is running
 	if !c.IsContainerRunning() {
 		return fmt.Errorf("CouchDB container is not running. Please start it first")
 	}
 
-	// The backupPath is a host path - check if it exists via the /host mount
+	// The backupPath is a host path - access it via the /host mount
 	hostMountPath := filepath.Join("/host", backupPath)
 	if _, err := os.Stat(hostMountPath); os.IsNotExist(err) {
 		return fmt.Errorf("backup path does not exist: %s", backupPath)
@@ -771,8 +771,8 @@ func (c *CouchDBService) Restore(backupPath string) error {
 	}
 
 	if !info.IsDir() && strings.HasSuffix(backupPath, ".tar.gz") {
-		// Copy the tarball from the host into the daemon container using docker cp
-		fmt.Printf("📥 Copying backup from host: %s\n", backupPath)
+		// Extract tarball from host path via /host mount
+		fmt.Printf("📥 Reading backup from host: %s\n", backupPath)
 
 		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
 		if err != nil {
@@ -780,50 +780,19 @@ func (c *CouchDBService) Restore(backupPath string) error {
 		}
 		defer os.RemoveAll(tempDir) // Clean up temp directory
 
-		// Use docker cp to copy the tarball from the host into this container
-		// docker cp <host_path> <container>:<container_path>
-		tempTarballPath := filepath.Join(tempDir, filepath.Base(backupPath))
-		cpCmd := exec.Command("docker", "cp",
-			backupPath,
-			fmt.Sprintf("%s:%s", daemonContainerName, tempTarballPath))
-
-		cpOutput, err := cpCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to copy backup from host: %w\nOutput: %s", err, string(cpOutput))
-		}
-
-		// Extract tarball to temporary directory
+		// Extract tarball directly from /host mount to temp directory
 		fmt.Printf("📦 Extracting tarball...\n")
-		if err := c.extractTarball(tempTarballPath, tempDir); err != nil {
+		if err := c.extractTarball(hostMountPath, tempDir); err != nil {
 			return fmt.Errorf("failed to extract tarball: %w", err)
 		}
 
 		extractDir = tempDir
 		shouldCleanup = true
 	} else {
-		// For directories, we need to copy the entire directory from host
-		// Use docker cp to copy the directory
-		fmt.Printf("📥 Copying backup directory from host: %s\n", backupPath)
-
-		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
-		if err != nil {
-			return fmt.Errorf("failed to create temporary directory: %w", err)
-		}
-		defer os.RemoveAll(tempDir) // Clean up temp directory
-
-		// docker cp <host_path>/. <container>:<container_path>/
-		// The trailing /. copies contents of the directory
-		cpCmd := exec.Command("docker", "cp",
-			backupPath+"/.",
-			fmt.Sprintf("%s:%s", daemonContainerName, tempDir))
-
-		cpOutput, err := cpCmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to copy backup directory from host: %w\nOutput: %s", err, string(cpOutput))
-		}
-
-		extractDir = tempDir
-		shouldCleanup = true
+		// For directories, read directly from /host mount
+		fmt.Printf("📥 Reading backup directory from host: %s\n", backupPath)
+		extractDir = hostMountPath
+		shouldCleanup = false
 	}
 	
 	// Read manifest if it exists
