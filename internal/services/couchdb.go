@@ -595,12 +595,13 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		// Run couchbackup via npx inside the container
 		// We use docker run with node image since couchdb image doesn't have node
 		// Mount the host temp directory (not the /host-prefixed path)
+		// --attachments flag includes binary attachments (PDFs, images, etc.) instead of just stubs
 		backupCmd := exec.Command("docker", "run", "--rm",
 			"--network", "container:"+containerName,
 			"-v", fmt.Sprintf("%s:/backup", hostTempDir),
 			"node:20-alpine",
 			"sh", "-c",
-			fmt.Sprintf("npx --yes @cloudant/couchbackup --url '%s' --db '%s' > /backup/%s.txt", couchURL, dbName, dbName))
+			fmt.Sprintf("npx --yes @cloudant/couchbackup --url '%s' --db '%s' --attachments > /backup/%s.txt", couchURL, dbName, dbName))
 
 		backupCmd.Stdout = os.Stdout
 		backupCmd.Stderr = os.Stderr
