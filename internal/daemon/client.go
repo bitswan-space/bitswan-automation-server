@@ -1358,10 +1358,11 @@ func (c *Client) BackupCouchDB(workspace, backupPath string) (*ServiceResponse, 
 }
 
 // RestoreCouchDB restores CouchDB from a backup
-func (c *Client) RestoreCouchDB(workspace, backupPath string) (*ServiceResponse, error) {
+func (c *Client) RestoreCouchDB(workspace, backupPath string, force bool) (*ServiceResponse, error) {
 	reqBody := ServiceRestoreRequest{
 		Workspace:  workspace,
 		BackupPath: backupPath,
+		Force:      force,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

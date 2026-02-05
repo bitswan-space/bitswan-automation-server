@@ -72,8 +72,9 @@ type ServiceBackupRequest struct {
 
 // ServiceRestoreRequest represents the request to restore CouchDB
 type ServiceRestoreRequest struct {
-	Workspace   string `json:"workspace"`
-	BackupPath  string `json:"backup_path"`
+	Workspace  string `json:"workspace"`
+	BackupPath string `json:"backup_path"`
+	Force      bool   `json:"force"`
 }
 
 // ServiceResponse represents a generic service response
@@ -609,7 +610,7 @@ func (s *Server) handleServiceRestore(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Run the restore operation
-	operationErr := s.restoreCouchDB(req.Workspace, req.BackupPath)
+	operationErr := s.restoreCouchDB(req.Workspace, req.BackupPath, req.Force)
 
 	// Close the write end of the pipe to signal EOF
 	wPipe.Close()
@@ -1010,7 +1011,7 @@ func (s *Server) backupCouchDB(workspace, backupPath string) error {
 	return couchdbService.Backup(backupPath)
 }
 
-func (s *Server) restoreCouchDB(workspace, backupPath string) error {
+func (s *Server) restoreCouchDB(workspace, backupPath string, force bool) error {
 	couchdbService, err := services.NewCouchDBService(workspace)
 	if err != nil {
 		return fmt.Errorf("failed to create CouchDB service: %w", err)
@@ -1020,5 +1021,5 @@ func (s *Server) restoreCouchDB(workspace, backupPath string) error {
 		return fmt.Errorf("CouchDB service is not enabled for workspace '%s'", workspace)
 	}
 
-	return couchdbService.Restore(backupPath)
+	return couchdbService.Restore(backupPath, force)
 }
