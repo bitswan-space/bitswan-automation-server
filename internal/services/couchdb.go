@@ -665,55 +665,76 @@ func (c *CouchDBService) createTarball(sourceDir, tarballPath string) error {
 		return fmt.Errorf("failed to create tarball file: %w", err)
 	}
 	defer tarballFile.Close()
-	
+
 	// Create gzip writer
 	gzipWriter := gzip.NewWriter(tarballFile)
 	defer gzipWriter.Close()
-	
+
 	// Create tar writer
 	tarWriter := tar.NewWriter(gzipWriter)
 	defer tarWriter.Close()
-	
+
+	// Get absolute path of tarball to skip it during walk
+	absTarballPath, err := filepath.Abs(tarballPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute tarball path: %w", err)
+	}
+
 	// Walk through the source directory and add files to tarball
 	return filepath.Walk(sourceDir, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		
+
 		// Skip directories
 		if info.IsDir() {
 			return nil
 		}
-		
+
+		// Skip the tarball file itself to avoid infinite loop
+		absFilePath, err := filepath.Abs(filePath)
+		if err != nil {
+			return err
+		}
+		if absFilePath == absTarballPath {
+			return nil
+		}
+
 		// Get relative path from source directory
 		relPath, err := filepath.Rel(sourceDir, filePath)
 		if err != nil {
 			return err
 		}
-		
-		// Create tar header
-		header, err := tar.FileInfoHeader(info, "")
+
+		// Re-stat the file to get accurate size (in case it changed)
+		currentInfo, err := os.Stat(filePath)
+		if err != nil {
+			return err
+		}
+
+		// Create tar header with current file info
+		header, err := tar.FileInfoHeader(currentInfo, "")
 		if err != nil {
 			return err
 		}
 		header.Name = relPath
-		
+
 		// Write header
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return err
 		}
-		
+
 		// Write file content
 		file, err := os.Open(filePath)
 		if err != nil {
 			return err
 		}
 		defer file.Close()
-		
+
 		if _, err := io.Copy(tarWriter, file); err != nil {
 			return err
 		}
-		
+
 		return nil
 	})
 }
