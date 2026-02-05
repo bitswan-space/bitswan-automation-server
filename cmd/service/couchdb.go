@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
@@ -307,6 +308,13 @@ func newCouchDBBackupCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
+			// Resolve to absolute path so daemon knows the exact host location
+			absBackupPath, err := filepath.Abs(backupPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to resolve backup path: %v\n", err)
+				os.Exit(1)
+			}
+
 			client, err := daemon.NewClient()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -323,13 +331,15 @@ func newCouchDBBackupCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.BackupCouchDB(workspace, backupPath)
+			result, err := client.BackupCouchDB(workspace, absBackupPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 
-			fmt.Println(result.Message)
+			if result != nil && result.Message != "" {
+				fmt.Println(result.Message)
+			}
 			return nil
 		},
 	}
@@ -355,6 +365,13 @@ func newCouchDBRestoreCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
+			// Resolve to absolute path so daemon knows the exact host location
+			absBackupPath, err := filepath.Abs(backupPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to resolve backup path: %v\n", err)
+				os.Exit(1)
+			}
+
 			client, err := daemon.NewClient()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -371,13 +388,15 @@ func newCouchDBRestoreCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.RestoreCouchDB(workspace, backupPath)
+			result, err := client.RestoreCouchDB(workspace, absBackupPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
 
-			fmt.Println(result.Message)
+			if result != nil && result.Message != "" {
+				fmt.Println(result.Message)
+			}
 			return nil
 		},
 	}
