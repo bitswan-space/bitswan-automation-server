@@ -579,10 +579,11 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	for i, dbName := range userDatabases {
 		fmt.Printf("💾 Backing up database %d/%d: '%s'...\n", i+1, len(userDatabases), dbName)
 
-		// Get all documents using _all_docs with include_docs=true
+		// Get all documents using _all_docs with include_docs=true and attachments=true
+		// attachments=true includes binary attachments as base64-encoded data
 		backupCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-			fmt.Sprintf("http://localhost:5984/%s/_all_docs?include_docs=true", dbName))
+			fmt.Sprintf("http://localhost:5984/%s/_all_docs?include_docs=true&attachments=true", dbName))
 
 		var backupOutput bytes.Buffer
 		backupCmd.Stdout = &backupOutput
