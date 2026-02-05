@@ -532,12 +532,20 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		return fmt.Errorf("failed to get credentials: %w", err)
 	}
 
-	// Create temporary directory for backup files inside the daemon container
-	tempDir, err := os.MkdirTemp("", "couchdb-backup-*")
+	// Create temporary directory for backup files on the HOST filesystem
+	// We need to use /host/tmp so both the daemon and the node container can access it
+	hostTempBase := "/host/tmp"
+	if err := os.MkdirAll(hostTempBase, 0755); err != nil {
+		return fmt.Errorf("failed to create host temp directory: %w", err)
+	}
+	tempDir, err := os.MkdirTemp(hostTempBase, "couchdb-backup-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir) // Clean up temp directory
+
+	// The actual host path (without /host prefix) for mounting into the node container
+	hostTempDir := strings.TrimPrefix(tempDir, "/host")
 
 	fmt.Printf("📦 Starting CouchDB backup for workspace '%s'...\n", c.WorkspaceName)
 
@@ -586,9 +594,10 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 		// Run couchbackup via npx inside the container
 		// We use docker run with node image since couchdb image doesn't have node
+		// Mount the host temp directory (not the /host-prefixed path)
 		backupCmd := exec.Command("docker", "run", "--rm",
 			"--network", "container:"+containerName,
-			"-v", fmt.Sprintf("%s:/backup", tempDir),
+			"-v", fmt.Sprintf("%s:/backup", hostTempDir),
 			"node:20-alpine",
 			"sh", "-c",
 			fmt.Sprintf("npx --yes @cloudant/couchbackup --url '%s' --db '%s' > /backup/%s.txt", couchURL, dbName, dbName))
@@ -780,11 +789,19 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		return fmt.Errorf("failed to stat backup path: %w", err)
 	}
 
+	// hostExtractDir is the path on the host filesystem (for mounting into node container)
+	var hostExtractDir string
+
 	if !info.IsDir() && strings.HasSuffix(backupPath, ".tar.gz") {
 		// Extract tarball from host path via /host mount
 		fmt.Printf("📥 Reading backup from host: %s\n", backupPath)
 
-		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
+		// Create temp directory on host filesystem so node container can access it
+		hostTempBase := "/host/tmp"
+		if err := os.MkdirAll(hostTempBase, 0755); err != nil {
+			return fmt.Errorf("failed to create host temp directory: %w", err)
+		}
+		tempDir, err := os.MkdirTemp(hostTempBase, "couchdb-restore-*")
 		if err != nil {
 			return fmt.Errorf("failed to create temporary directory: %w", err)
 		}
@@ -797,10 +814,12 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		extractDir = tempDir
+		hostExtractDir = strings.TrimPrefix(tempDir, "/host")
 	} else {
-		// For directories, read directly from /host mount
+		// For directories, use the host path directly
 		fmt.Printf("📥 Reading backup directory from host: %s\n", backupPath)
 		extractDir = hostMountPath
+		hostExtractDir = backupPath
 	}
 
 	// Read manifest if it exists
@@ -908,10 +927,11 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		// Run couchrestore via npx inside a node container
+		// Use hostExtractDir (the actual host path) for the volume mount
 		fmt.Printf("   Restoring data...\n")
 		restoreCmd := exec.Command("docker", "run", "--rm",
 			"--network", "container:"+containerName,
-			"-v", fmt.Sprintf("%s:/backup:ro", extractDir),
+			"-v", fmt.Sprintf("%s:/backup:ro", hostExtractDir),
 			"node:20-alpine",
 			"sh", "-c",
 			fmt.Sprintf("cat /backup/%s.txt | npx --yes @cloudant/couchbackup --url '%s' --db '%s'", dbName, couchURL, dbName))
