@@ -540,10 +540,10 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	}
 	defer os.RemoveAll(tempDir) // Clean up temp directory
 
-	fmt.Printf("Starting CouchDB backup for workspace '%s'...\n", c.WorkspaceName)
+	fmt.Printf("📦 Starting CouchDB backup for workspace '%s'...\n", c.WorkspaceName)
 
 	// Get list of all databases
-	fmt.Println("Fetching database list...")
+	fmt.Println("🔍 Fetching database list...")
 	dbListCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 		fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
 		"http://localhost:5984/_all_dbs")
@@ -570,15 +570,15 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	}
 
 	if len(userDatabases) == 0 {
-		fmt.Println("No user databases found to backup.")
+		fmt.Println("📋 No user databases found to backup.")
 		return nil
 	}
 
-	fmt.Printf("Found %d database(s) to backup\n", len(userDatabases))
+	fmt.Printf("📋 Found %d database(s) to backup\n", len(userDatabases))
 
 	// Backup each database
-	for _, dbName := range userDatabases {
-		fmt.Printf("Backing up database '%s'...\n", dbName)
+	for i, dbName := range userDatabases {
+		fmt.Printf("💾 Backing up database %d/%d: '%s'...\n", i+1, len(userDatabases), dbName)
 
 		// Get all documents using _all_docs with include_docs=true
 		backupCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
@@ -600,7 +600,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			return fmt.Errorf("failed to write backup file for '%s': %w", dbName, err)
 		}
 
-		fmt.Printf("  ✓ Backed up '%s'\n", dbName)
+		fmt.Printf("   ✅ Backed up '%s'\n", dbName)
 	}
 
 	// Create a manifest file with metadata
@@ -629,7 +629,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	// Create tarball in the temp directory first (inside daemon container)
 	tempTarballPath := filepath.Join(tempDir, tarballName)
 
-	fmt.Printf("Creating tarball...\n")
+	fmt.Printf("📦 Creating backup tarball...\n")
 
 	// Create tarball in temp directory
 	if err := c.createTarball(tempDir, tempTarballPath); err != nil {
@@ -639,7 +639,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	// Use docker cp to copy the tarball from the daemon container to the host path
 	// The backupPath is a host path, so we need to copy the file out of the container
 	hostTarballPath := filepath.Join(backupPath, tarballName)
-	fmt.Printf("Copying backup to host: %s\n", hostTarballPath)
+	fmt.Printf("📤 Copying backup to host: %s\n", hostTarballPath)
 
 	// docker cp daemon_container:/tmp/backup.tar.gz /host/path/
 	cpCmd := exec.Command("docker", "cp",
@@ -651,8 +651,8 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		return fmt.Errorf("failed to copy backup to host: %w\nOutput: %s", err, string(cpOutput))
 	}
 
-	fmt.Printf("\n✓ Backup completed successfully!\n")
-	fmt.Printf("Backup tarball: %s\n", hostTarballPath)
+	fmt.Printf("✅ Backup completed successfully!\n")
+	fmt.Printf("📁 Backup tarball: %s\n", hostTarballPath)
 
 	return nil
 }
@@ -751,7 +751,7 @@ func (c *CouchDBService) Restore(backupPath string) error {
 
 	if !info.IsDir() && strings.HasSuffix(backupPath, ".tar.gz") {
 		// Copy the tarball from the host into the daemon container using docker cp
-		fmt.Printf("Copying backup from host: %s\n", backupPath)
+		fmt.Printf("📥 Copying backup from host: %s\n", backupPath)
 
 		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
 		if err != nil {
@@ -772,7 +772,7 @@ func (c *CouchDBService) Restore(backupPath string) error {
 		}
 
 		// Extract tarball to temporary directory
-		fmt.Printf("Extracting tarball...\n")
+		fmt.Printf("📦 Extracting tarball...\n")
 		if err := c.extractTarball(tempTarballPath, tempDir); err != nil {
 			return fmt.Errorf("failed to extract tarball: %w", err)
 		}
@@ -782,7 +782,7 @@ func (c *CouchDBService) Restore(backupPath string) error {
 	} else {
 		// For directories, we need to copy the entire directory from host
 		// Use docker cp to copy the directory
-		fmt.Printf("Copying backup directory from host: %s\n", backupPath)
+		fmt.Printf("📥 Copying backup directory from host: %s\n", backupPath)
 
 		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
 		if err != nil {
@@ -844,20 +844,20 @@ func (c *CouchDBService) Restore(backupPath string) error {
 		return fmt.Errorf("no databases found in backup")
 	}
 	
-	fmt.Printf("Starting CouchDB restore for workspace '%s'...\n", c.WorkspaceName)
-	fmt.Printf("Found %d database(s) to restore\n", len(databases))
+	fmt.Printf("📦 Starting CouchDB restore for workspace '%s'...\n", c.WorkspaceName)
+	fmt.Printf("📋 Found %d database(s) to restore\n", len(databases))
 	
 	// Restore each database
-	for _, dbName := range databases {
+	for i, dbName := range databases {
 		backupFile := filepath.Join(extractDir, fmt.Sprintf("%s.json", dbName))
-		
+
 		// Check if backup file exists
 		if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-			fmt.Printf("Warning: backup file not found for database '%s': %s\n", dbName, backupFile)
+			fmt.Printf("⚠️  Warning: backup file not found for database '%s': %s\n", dbName, backupFile)
 			continue
 		}
-		
-		fmt.Printf("Restoring database '%s'...\n", dbName)
+
+		fmt.Printf("💾 Restoring database %d/%d: '%s'...\n", i+1, len(databases), dbName)
 		
 		// Read the backup file
 		backupData, err := os.ReadFile(backupFile)
@@ -1010,10 +1010,10 @@ func (c *CouchDBService) Restore(backupPath string) error {
 			fmt.Printf("  Restored %d/%d documents\n", successfulDocs, totalDocs)
 		}
 		
-		fmt.Printf("  ✓ Restored '%s'\n", dbName)
+		fmt.Printf("   ✅ Restored '%s'\n", dbName)
 	}
 	
-	fmt.Printf("\n✓ Restore completed successfully!\n")
+	fmt.Printf("✅ Restore completed successfully!\n")
 	
 	// Note: shouldCleanup is handled by defer above
 	_ = shouldCleanup

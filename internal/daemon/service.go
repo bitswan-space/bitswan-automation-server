@@ -463,17 +463,75 @@ func (s *Server) handleServiceBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.backupCouchDB(req.Workspace, req.BackupPath); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+	// Set up streaming response
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Create a pipe to capture stdout
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(ServiceResponse{
-		Success: true,
-		Message: "CouchDB backup completed successfully",
-	})
+	// Redirect stdout to the pipe
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		// Always restore stdout, even on error
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	// Create a log stream writer that formats output as NDJSON
+	logWriter := NewLogStreamWriter(w, "info")
+
+	// Use a WaitGroup to wait for goroutines
+	var wg sync.WaitGroup
+
+	// Start goroutine to read from pipe and stream logs
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := rPipe.Read(buf)
+			if n > 0 {
+				// Write to log stream writer (which formats as NDJSON)
+				logWriter.Write(buf[:n])
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", err))
+				break
+			}
+		}
+	}()
+
+	// Run the backup operation
+	operationErr := s.backupCouchDB(req.Workspace, req.BackupPath)
+
+	// Close the write end of the pipe to signal EOF
+	wPipe.Close()
+
+	// Wait for log streaming to finish
+	wg.Wait()
+
+	// Send final result only if there was an error (success message already printed by service)
+	if operationErr != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", operationErr))
+	}
 }
 
 // handleServiceRestore handles POST /service/couchdb/restore
@@ -494,17 +552,75 @@ func (s *Server) handleServiceRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.restoreCouchDB(req.Workspace, req.BackupPath); err != nil {
-		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+	// Set up streaming response
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Create a pipe to capture stdout
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(ServiceResponse{
-		Success: true,
-		Message: "CouchDB restore completed successfully",
-	})
+	// Redirect stdout to the pipe
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		// Always restore stdout, even on error
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	// Create a log stream writer that formats output as NDJSON
+	logWriter := NewLogStreamWriter(w, "info")
+
+	// Use a WaitGroup to wait for goroutines
+	var wg sync.WaitGroup
+
+	// Start goroutine to read from pipe and stream logs
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := rPipe.Read(buf)
+			if n > 0 {
+				// Write to log stream writer (which formats as NDJSON)
+				logWriter.Write(buf[:n])
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", err))
+				break
+			}
+		}
+	}()
+
+	// Run the restore operation
+	operationErr := s.restoreCouchDB(req.Workspace, req.BackupPath)
+
+	// Close the write end of the pipe to signal EOF
+	wPipe.Close()
+
+	// Wait for log streaming to finish
+	wg.Wait()
+
+	// Send final result only if there was an error (success message already printed by service)
+	if operationErr != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", operationErr))
+	}
 }
 
 // Implementation functions that delegate to the services package

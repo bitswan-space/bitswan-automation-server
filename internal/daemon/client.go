@@ -1281,7 +1281,7 @@ func (c *Client) BackupCouchDB(workspace, backupPath string) (*ServiceResponse, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.doRequest(req)
+	resp, err := c.doStreamingRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
@@ -1300,6 +1300,14 @@ func (c *Client) BackupCouchDB(workspace, backupPath string) (*ServiceResponse, 
 		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
+	// Check Content-Type to determine response format
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/x-ndjson") {
+		// Stream logs to stdout and return result
+		return c.streamLogs(resp.Body, os.Stdout)
+	}
+
+	// Fall back to JSON response for backwards compatibility
 	var result ServiceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
@@ -1326,7 +1334,7 @@ func (c *Client) RestoreCouchDB(workspace, backupPath string) (*ServiceResponse,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.doRequest(req)
+	resp, err := c.doStreamingRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
@@ -1345,6 +1353,14 @@ func (c *Client) RestoreCouchDB(workspace, backupPath string) (*ServiceResponse,
 		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
+	// Check Content-Type to determine response format
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/x-ndjson") {
+		// Stream logs to stdout and return result
+		return c.streamLogs(resp.Body, os.Stdout)
+	}
+
+	// Fall back to JSON response for backwards compatibility
 	var result ServiceResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
