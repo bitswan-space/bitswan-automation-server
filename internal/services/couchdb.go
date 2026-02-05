@@ -519,7 +519,8 @@ func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 }
 
 // Backup creates a backup of all CouchDB databases as a tarball
-// Documents are fetched normally, then attachments are fetched separately using the standard attachment API
+// Documents are stored as JSON, attachments are stored as separate binary files
+// Structure: {dbname}/documents.json + {dbname}/attachments/{docid}/{attname}
 func (c *CouchDBService) Backup(backupPath string) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
 
@@ -580,6 +581,13 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	// Backup each database
 	for i, dbName := range userDatabases {
 		fmt.Printf("💾 Backing up database %d/%d: '%s'...\n", i+1, len(userDatabases), dbName)
+
+		// Create database directory structure
+		dbDir := filepath.Join(tempDir, dbName)
+		attachmentsDir := filepath.Join(dbDir, "attachments")
+		if err := os.MkdirAll(attachmentsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory for '%s': %w", dbName, err)
+		}
 
 		// First, get the total document count
 		countCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
@@ -658,6 +666,14 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 			// Check if document has attachments (stubs)
 			if attachments, hasAttachments := doc["_attachments"].(map[string]interface{}); hasAttachments {
+				// Create directory for this document's attachments
+				// Use a safe directory name (replace / with __)
+				safeDocID := strings.ReplaceAll(docID, "/", "__")
+				docAttDir := filepath.Join(attachmentsDir, safeDocID)
+				if err := os.MkdirAll(docAttDir, 0755); err != nil {
+					return fmt.Errorf("failed to create attachment directory for '%s': %w", docID, err)
+				}
+
 				// Fetch each attachment separately using the standard attachment API
 				for attName, attInfo := range attachments {
 					attInfoMap, ok := attInfo.(map[string]interface{})
@@ -687,15 +703,22 @@ func (c *CouchDBService) Backup(backupPath string) error {
 						return fmt.Errorf("failed to fetch attachment '%s' from document '%s': %w", attName, docID, err)
 					}
 
-					// Convert to base64 and store in the attachment info
-					attData := attOutput.Bytes()
-					attInfoMap["data"] = base64.StdEncoding.EncodeToString(attData)
-					delete(attInfoMap, "stub") // Remove the stub marker
+					// Save attachment as binary file
+					// Use a safe filename (replace / with __)
+					safeAttName := strings.ReplaceAll(attName, "/", "__")
+					attFilePath := filepath.Join(docAttDir, safeAttName)
+					if err := os.WriteFile(attFilePath, attOutput.Bytes(), 0644); err != nil {
+						return fmt.Errorf("failed to write attachment '%s' for document '%s': %w", attName, docID, err)
+					}
+
+					// Keep the stub info (content_type, length, etc.) but remove stub marker
+					// The restore process will read the file and upload it
+					delete(attInfoMap, "stub")
 					totalAttachments++
 				}
 			}
 
-			// Add to results
+			// Add to results (document still has attachment stubs with metadata)
 			allRows = append(allRows, map[string]interface{}{
 				"id":    docID,
 				"key":   rowMap["key"],
@@ -709,7 +732,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			}
 		}
 
-		fmt.Printf("\n   📥 Processed %d documents, fetched %d attachments\n", len(allRows), totalAttachments)
+		fmt.Printf("\n   📥 Processed %d documents, saved %d attachments\n", len(allRows), totalAttachments)
 
 		// Hard fail if we couldn't backup all documents
 		if len(allRows) == 0 && totalDocs > 0 {
@@ -732,10 +755,10 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			return fmt.Errorf("failed to marshal backup for '%s': %w", dbName, err)
 		}
 
-		// Save backup to file in temp directory
-		backupFile := filepath.Join(tempDir, fmt.Sprintf("%s.json", dbName))
-		if err := os.WriteFile(backupFile, backupData, 0644); err != nil {
-			return fmt.Errorf("failed to write backup file for '%s': %w", dbName, err)
+		// Save documents.json to database directory
+		docsFile := filepath.Join(dbDir, "documents.json")
+		if err := os.WriteFile(docsFile, backupData, 0644); err != nil {
+			return fmt.Errorf("failed to write documents file for '%s': %w", dbName, err)
 		}
 
 		fmt.Printf("   ✅ Backed up '%s'\n", dbName)
@@ -744,6 +767,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	// Create a manifest file with metadata
 	backupTime := time.Now()
 	manifest := map[string]interface{}{
+		"version":      2, // Version 2: attachments stored as separate files
 		"workspace":    c.WorkspaceName,
 		"backup_date":  backupTime.Format(time.RFC3339),
 		"databases":    userDatabases,
@@ -938,12 +962,17 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 	// Read manifest if it exists
 	manifestFile := filepath.Join(extractDir, "manifest.json")
 	var databases []string
+	backupVersion := 1 // Default to v1 (old format with {dbname}.json)
 
 	if _, err := os.Stat(manifestFile); err == nil {
 		manifestData, err := os.ReadFile(manifestFile)
 		if err == nil {
 			var manifest map[string]interface{}
 			if err := json.Unmarshal(manifestData, &manifest); err == nil {
+				// Check backup version
+				if v, ok := manifest["version"].(float64); ok {
+					backupVersion = int(v)
+				}
 				if dbList, ok := manifest["databases"].([]interface{}); ok {
 					for _, db := range dbList {
 						if dbName, ok := db.(string); ok {
@@ -955,7 +984,7 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 	}
 
-	// If no manifest, find all .json files in backup directory
+	// If no manifest, detect format and find databases
 	if len(databases) == 0 {
 		entries, err := os.ReadDir(extractDir)
 		if err != nil {
@@ -963,12 +992,22 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") && entry.Name() != "manifest.json" {
+			if entry.IsDir() && entry.Name() != "attachments" {
+				// Check if it's a v2 database directory (has documents.json)
+				docsFile := filepath.Join(extractDir, entry.Name(), "documents.json")
+				if _, err := os.Stat(docsFile); err == nil {
+					databases = append(databases, entry.Name())
+					backupVersion = 2
+				}
+			} else if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") && entry.Name() != "manifest.json" {
+				// V1 format: {dbname}.json files
 				dbName := strings.TrimSuffix(entry.Name(), ".json")
 				databases = append(databases, dbName)
 			}
 		}
 	}
+
+	fmt.Printf("📋 Detected backup format version: %d\n", backupVersion)
 
 	if len(databases) == 0 {
 		return fmt.Errorf("no databases found in backup")
@@ -979,7 +1018,16 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 
 	// Restore each database
 	for i, dbName := range databases {
-		backupFile := filepath.Join(extractDir, fmt.Sprintf("%s.json", dbName))
+		// Determine backup file location based on version
+		var backupFile string
+		var attachmentsDir string
+		if backupVersion >= 2 {
+			backupFile = filepath.Join(extractDir, dbName, "documents.json")
+			attachmentsDir = filepath.Join(extractDir, dbName, "attachments")
+		} else {
+			backupFile = filepath.Join(extractDir, fmt.Sprintf("%s.json", dbName))
+			attachmentsDir = "" // V1 has inline attachments
+		}
 
 		// Check if backup file exists
 		if _, err := os.Stat(backupFile); os.IsNotExist(err) {
@@ -1061,10 +1109,20 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 			// Continue anyway - might still work
 		}
 
+		// Track documents with attachments for v2 restore
+		type docAttachmentInfo struct {
+			docID       string
+			attachments map[string]interface{} // attachment name -> metadata
+		}
+		var docsWithAttachments []docAttachmentInfo
+
 		// Restore documents in batches
 		batchSize := 100
 		totalDocs := 0
 		successfulDocs := 0
+
+		// Map to store the revision of each created document (needed for attachment upload)
+		docRevisions := make(map[string]string)
 
 		for i := 0; i < len(rows); i += batchSize {
 			end := i + batchSize
@@ -1082,8 +1140,24 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 			for _, row := range batch {
 				if rowMap, ok := row.(map[string]interface{}); ok {
 					if doc, ok := rowMap["doc"].(map[string]interface{}); ok {
+						docID, _ := doc["_id"].(string)
+
 						// Keep _id but remove _rev to allow new document creation
 						delete(doc, "_rev")
+
+						// For v2 format, track attachments and remove them from doc
+						// (they will be uploaded separately after doc creation)
+						if backupVersion >= 2 && attachmentsDir != "" {
+							if attachments, hasAtt := doc["_attachments"].(map[string]interface{}); hasAtt {
+								docsWithAttachments = append(docsWithAttachments, docAttachmentInfo{
+									docID:       docID,
+									attachments: attachments,
+								})
+								// Remove attachments from doc - we'll upload them separately
+								delete(doc, "_attachments")
+							}
+						}
+
 						bulkDocs["docs"] = append(bulkDocs["docs"].([]interface{}), doc)
 						totalDocs++
 					}
@@ -1121,12 +1195,13 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 			if len(responseData) > 0 {
 				var response []map[string]interface{}
 				if err := json.Unmarshal(responseData, &response); err == nil {
-					// Count successful documents (those with "id" and "rev" and no "error")
+					// Count successful documents and track their revisions
 					for _, item := range response {
-						if _, hasId := item["id"]; hasId {
-							if _, hasRev := item["rev"]; hasRev {
+						if docID, hasId := item["id"].(string); hasId {
+							if rev, hasRev := item["rev"].(string); hasRev {
 								if _, hasError := item["error"]; !hasError {
 									successfulDocs++
+									docRevisions[docID] = rev
 								} else {
 									fmt.Printf("Warning: document error in batch: %v\n", item)
 								}
@@ -1139,6 +1214,82 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 
 		if totalDocs > 0 {
 			fmt.Printf("  Restored %d/%d documents\n", successfulDocs, totalDocs)
+		}
+
+		// For v2 format, upload attachments from files
+		if backupVersion >= 2 && attachmentsDir != "" && len(docsWithAttachments) > 0 {
+			fmt.Printf("  Uploading attachments...\n")
+			totalAttachments := 0
+			successfulAttachments := 0
+
+			for _, docInfo := range docsWithAttachments {
+				// Get the current revision for this document
+				currentRev := docRevisions[docInfo.docID]
+				if currentRev == "" {
+					fmt.Printf("Warning: no revision found for document '%s', skipping attachments\n", docInfo.docID)
+					continue
+				}
+
+				// Safe directory name (matches backup naming)
+				safeDocID := strings.ReplaceAll(docInfo.docID, "/", "__")
+				docAttDir := filepath.Join(attachmentsDir, safeDocID)
+
+				for attName, attMeta := range docInfo.attachments {
+					totalAttachments++
+
+					// Get content type from metadata
+					contentType := "application/octet-stream"
+					if meta, ok := attMeta.(map[string]interface{}); ok {
+						if ct, ok := meta["content_type"].(string); ok {
+							contentType = ct
+						}
+					}
+
+					// Safe filename (matches backup naming)
+					safeAttName := strings.ReplaceAll(attName, "/", "__")
+					attFilePath := filepath.Join(docAttDir, safeAttName)
+
+					// Read attachment file
+					attData, err := os.ReadFile(attFilePath)
+					if err != nil {
+						fmt.Printf("Warning: failed to read attachment file '%s': %v\n", attFilePath, err)
+						continue
+					}
+
+					// URL-encode the document ID and attachment name
+					encodedDocID := url.PathEscape(docInfo.docID)
+					encodedAttName := url.PathEscape(attName)
+
+					// Upload attachment using PUT /{db}/{docid}/{attname}?rev={rev}
+					uploadCmd := exec.Command("docker", "exec", "-i", containerName, "sh", "-c",
+						fmt.Sprintf("curl -s -X PUT -H 'Content-Type: %s' -u '%s:%s' --data-binary @- 'http://localhost:5984/%s/%s/%s?rev=%s'",
+							contentType, secrets.User, secrets.Password, dbName, encodedDocID, encodedAttName, currentRev))
+
+					uploadCmd.Stdin = bytes.NewReader(attData)
+					var uploadOutput bytes.Buffer
+					uploadCmd.Stdout = &uploadOutput
+					uploadCmd.Stderr = os.Stderr
+
+					if err := uploadCmd.Run(); err != nil {
+						fmt.Printf("Warning: failed to upload attachment '%s' for '%s': %v\n", attName, docInfo.docID, err)
+						continue
+					}
+
+					// Check response and update revision for next attachment
+					var uploadResp map[string]interface{}
+					if err := json.Unmarshal(uploadOutput.Bytes(), &uploadResp); err == nil {
+						if newRev, ok := uploadResp["rev"].(string); ok {
+							currentRev = newRev
+							docRevisions[docInfo.docID] = newRev
+							successfulAttachments++
+						} else if errMsg, hasError := uploadResp["error"]; hasError {
+							fmt.Printf("Warning: attachment upload error for '%s/%s': %v\n", docInfo.docID, attName, errMsg)
+						}
+					}
+				}
+			}
+
+			fmt.Printf("  Uploaded %d/%d attachments\n", successfulAttachments, totalAttachments)
 		}
 
 		fmt.Printf("   ✅ Restored '%s'\n", dbName)
