@@ -1011,6 +1011,10 @@ func (c *Client) PullAndDeploy(workspaceName, branchName string) error {
 // streamLogs reads NDJSON from the response and displays logs in real-time
 func (c *Client) streamLogs(body io.Reader, output io.Writer) (*ServiceResponse, error) {
 	scanner := bufio.NewScanner(body)
+	// Increase buffer size to handle large log lines (e.g., base64-encoded attachments)
+	// Default is 64KB, increase to 64MB to handle ~48MB attachments
+	const maxScannerBuffer = 64 * 1024 * 1024
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 	var lastEntry LogEntry
 	var hasError bool
 
@@ -1481,6 +1485,9 @@ func (c *Client) StreamJobOutput(jobID string, output io.Writer, input io.Reader
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
+	// Increase buffer size to handle large log lines (e.g., base64-encoded attachments)
+	const maxScannerBuffer = 64 * 1024 * 1024
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScannerBuffer)
 	inputReader := bufio.NewReader(input)
 
 	for scanner.Scan() {
