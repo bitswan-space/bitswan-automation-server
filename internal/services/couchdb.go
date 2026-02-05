@@ -589,20 +589,17 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		countCmd.Stderr = os.Stderr
 
 		if err := countCmd.Run(); err != nil {
-			fmt.Printf("Warning: failed to get info for database '%s': %v\n", dbName, err)
-			continue
+			return fmt.Errorf("failed to get info for database '%s': %w", dbName, err)
 		}
 
 		var dbInfo map[string]interface{}
 		if err := json.Unmarshal(countOutput.Bytes(), &dbInfo); err != nil {
-			fmt.Printf("Warning: failed to parse database info for '%s': %v\n", dbName, err)
-			continue
+			return fmt.Errorf("failed to parse database info for '%s': %w", dbName, err)
 		}
 
 		// Check for error response
 		if _, hasError := dbInfo["error"]; hasError {
-			fmt.Printf("Warning: error getting database info for '%s': %v\n", dbName, dbInfo["reason"])
-			continue
+			return fmt.Errorf("failed to get database info for '%s': %v", dbName, dbInfo["reason"])
 		}
 
 		totalDocs := 0
@@ -618,8 +615,6 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		minBatchSize := 1
 		var allRows []interface{}
 		skip := 0
-		consecutiveFailures := 0
-		maxConsecutiveFailures := 3
 
 		for skip < totalDocs || totalDocs == 0 {
 			// Fetch a batch of documents with attachments
@@ -632,23 +627,12 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			batchCmd.Stderr = os.Stderr
 
 			if err := batchCmd.Run(); err != nil {
-				fmt.Printf("\n   ⚠️  Failed to backup batch at skip=%d for '%s': %v\n", skip, dbName, err)
-				consecutiveFailures++
-				if consecutiveFailures >= maxConsecutiveFailures {
-					fmt.Printf("   ❌ Too many consecutive failures, skipping database\n")
-					break
-				}
-				continue
+				return fmt.Errorf("failed to backup database '%s' at skip=%d: %w", dbName, skip, err)
 			}
 
 			var batchResult map[string]interface{}
 			if err := json.Unmarshal(batchOutput.Bytes(), &batchResult); err != nil {
-				fmt.Printf("\n   ⚠️  Failed to parse batch at skip=%d for '%s': %v\n", skip, dbName, err)
-				consecutiveFailures++
-				if consecutiveFailures >= maxConsecutiveFailures {
-					break
-				}
-				continue
+				return fmt.Errorf("failed to parse backup response for '%s' at skip=%d: %w", dbName, skip, err)
 			}
 
 			// Check for error response (e.g., timeout)
@@ -661,7 +645,6 @@ func (c *CouchDBService) Backup(backupPath string) error {
 					}
 					fmt.Printf("\n   ⚠️  Timeout with batch size %d, reducing to %d and retrying...\n", batchSize, newBatchSize)
 					batchSize = newBatchSize
-					consecutiveFailures = 0 // Reset on batch size change
 					continue
 				} else {
 					// Even batch size of 1 failed - try fetching document individually by ID
@@ -677,23 +660,12 @@ func (c *CouchDBService) Backup(backupPath string) error {
 					idsCmd.Stderr = os.Stderr
 
 					if err := idsCmd.Run(); err != nil {
-						fmt.Printf("   ❌ Failed to get document ID: %v\n", err)
-						skip++ // Skip this document
-						consecutiveFailures++
-						if consecutiveFailures >= maxConsecutiveFailures {
-							break
-						}
-						continue
+						return fmt.Errorf("failed to get document IDs for '%s' at skip=%d: %w", dbName, skip, err)
 					}
 
 					var idsResult map[string]interface{}
 					if err := json.Unmarshal(idsOutput.Bytes(), &idsResult); err != nil {
-						skip++
-						consecutiveFailures++
-						if consecutiveFailures >= maxConsecutiveFailures {
-							break
-						}
-						continue
+						return fmt.Errorf("failed to parse document IDs response for '%s' at skip=%d: %w", dbName, skip, err)
 					}
 
 					idsRows, ok := idsResult["rows"].([]interface{})
@@ -704,13 +676,11 @@ func (c *CouchDBService) Backup(backupPath string) error {
 					// Get the document ID
 					rowMap, ok := idsRows[0].(map[string]interface{})
 					if !ok {
-						skip++
-						continue
+						return fmt.Errorf("failed to parse document row for '%s' at skip=%d: invalid format", dbName, skip)
 					}
 					docID, ok := rowMap["id"].(string)
 					if !ok {
-						skip++
-						continue
+						return fmt.Errorf("failed to get document ID for '%s' at skip=%d: missing id field", dbName, skip)
 					}
 
 					// Fetch individual document with attachments
@@ -723,31 +693,17 @@ func (c *CouchDBService) Backup(backupPath string) error {
 					docCmd.Stderr = os.Stderr
 
 					if err := docCmd.Run(); err != nil {
-						fmt.Printf("   ⚠️  Failed to fetch document '%s': %v\n", docID, err)
-						skip++
-						consecutiveFailures++
-						if consecutiveFailures >= maxConsecutiveFailures {
-							break
-						}
-						continue
+						return fmt.Errorf("failed to fetch document '%s' from '%s': %w", docID, dbName, err)
 					}
 
 					var doc map[string]interface{}
 					if err := json.Unmarshal(docOutput.Bytes(), &doc); err != nil {
-						skip++
-						consecutiveFailures++
-						continue
+						return fmt.Errorf("failed to parse document '%s' from '%s': %w", docID, dbName, err)
 					}
 
 					// Check for error
-					if _, hasError := doc["error"]; hasError {
-						fmt.Printf("   ⚠️  Error fetching document '%s': %v\n", docID, doc["reason"])
-						skip++
-						consecutiveFailures++
-						if consecutiveFailures >= maxConsecutiveFailures {
-							break
-						}
-						continue
+					if errReason, hasError := doc["error"]; hasError {
+						return fmt.Errorf("CouchDB error fetching document '%s' from '%s': %v", docID, dbName, errReason)
 					}
 
 					// Add to results in the same format as _all_docs row
@@ -758,7 +714,6 @@ func (c *CouchDBService) Backup(backupPath string) error {
 						"doc":   doc,
 					})
 
-					consecutiveFailures = 0
 					skip++
 					fmt.Printf("   📥 Fetched %d/%d documents (individual mode)...\r", len(allRows), totalDocs)
 					continue
@@ -767,8 +722,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 			rows, ok := batchResult["rows"].([]interface{})
 			if !ok {
-				fmt.Printf("\n   ⚠️  No rows in batch at skip=%d for '%s'\n", skip, dbName)
-				break
+				return fmt.Errorf("failed to backup database '%s': invalid response format at skip=%d", dbName, skip)
 			}
 
 			if len(rows) == 0 {
@@ -777,7 +731,6 @@ func (c *CouchDBService) Backup(backupPath string) error {
 			}
 
 			allRows = append(allRows, rows...)
-			consecutiveFailures = 0
 
 			// Progress indicator
 			fmt.Printf("   📥 Fetched %d/%d documents...\r", len(allRows), totalDocs)
@@ -792,9 +745,13 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 		fmt.Printf("\n   📥 Fetched %d documents total\n", len(allRows))
 
-		if len(allRows) == 0 {
-			fmt.Printf("Warning: no documents backed up for '%s'\n", dbName)
-			continue
+		// Hard fail if we couldn't backup all documents
+		if len(allRows) == 0 && totalDocs > 0 {
+			return fmt.Errorf("failed to backup database '%s': no documents could be fetched (expected %d)", dbName, totalDocs)
+		}
+
+		if len(allRows) < totalDocs {
+			return fmt.Errorf("failed to backup database '%s': only fetched %d of %d documents", dbName, len(allRows), totalDocs)
 		}
 
 		// Create the backup document in the same format as _all_docs response
@@ -806,8 +763,7 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 		backupData, err := json.Marshal(backupDoc)
 		if err != nil {
-			fmt.Printf("Warning: failed to marshal backup for '%s': %v\n", dbName, err)
-			continue
+			return fmt.Errorf("failed to marshal backup for '%s': %w", dbName, err)
 		}
 
 		// Save backup to file in temp directory
