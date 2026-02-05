@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -517,7 +518,9 @@ func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 	return secrets, nil
 }
 
-// Backup creates a backup of all CouchDB databases using couchbackup
+// Backup creates a backup of all CouchDB databases as a tarball
+// Documents are stored as JSON, attachments are stored as separate binary files
+// Structure: {dbname}/documents.json + {dbname}/attachments/{docid}/{attname}
 func (c *CouchDBService) Backup(backupPath string) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
 
@@ -532,20 +535,12 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		return fmt.Errorf("failed to get credentials: %w", err)
 	}
 
-	// Create temporary directory for backup files on the HOST filesystem
-	// We need to use /host/tmp so both the daemon and the node container can access it
-	hostTempBase := "/host/tmp"
-	if err := os.MkdirAll(hostTempBase, 0755); err != nil {
-		return fmt.Errorf("failed to create host temp directory: %w", err)
-	}
-	tempDir, err := os.MkdirTemp(hostTempBase, "couchdb-backup-*")
+	// Create temporary directory for backup files inside the daemon container
+	tempDir, err := os.MkdirTemp("", "couchdb-backup-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir) // Clean up temp directory
-
-	// The actual host path (without /host prefix) for mounting into the node container
-	hostTempDir := strings.TrimPrefix(tempDir, "/host")
 
 	fmt.Printf("📦 Starting CouchDB backup for workspace '%s'...\n", c.WorkspaceName)
 
@@ -583,48 +578,196 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 	fmt.Printf("📋 Found %d database(s) to backup\n", len(userDatabases))
 
-	// CouchDB URL for couchbackup
-	couchURL := fmt.Sprintf("http://%s:%s@localhost:5984", secrets.User, secrets.Password)
-
-	// Backup each database using couchbackup
+	// Backup each database
 	for i, dbName := range userDatabases {
 		fmt.Printf("💾 Backing up database %d/%d: '%s'...\n", i+1, len(userDatabases), dbName)
 
-		backupFile := filepath.Join(tempDir, fmt.Sprintf("%s.txt", dbName))
-
-		// Run couchbackup via npx inside the container
-		// We use docker run with node image since couchdb image doesn't have node
-		// Mount the host temp directory (not the /host-prefixed path)
-		// --attachments flag includes binary attachments (PDFs, images, etc.) instead of just stubs
-		backupCmd := exec.Command("docker", "run", "--rm",
-			"--network", "container:"+containerName,
-			"-v", fmt.Sprintf("%s:/backup", hostTempDir),
-			"node:20-alpine",
-			"sh", "-c",
-			fmt.Sprintf("npx --yes @cloudant/couchbackup --url '%s' --db '%s' --attachments > /backup/%s.txt", couchURL, dbName, dbName))
-
-		backupCmd.Stdout = os.Stdout
-		backupCmd.Stderr = os.Stderr
-
-		if err := backupCmd.Run(); err != nil {
-			return fmt.Errorf("failed to backup database '%s': %w", dbName, err)
+		// Create database directory structure
+		dbDir := filepath.Join(tempDir, dbName)
+		attachmentsDir := filepath.Join(dbDir, "attachments")
+		if err := os.MkdirAll(attachmentsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory for '%s': %w", dbName, err)
 		}
 
-		// Verify the backup file was created and has content
-		info, err := os.Stat(backupFile)
+		// First, get the total document count
+		countCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+			fmt.Sprintf("http://localhost:5984/%s", dbName))
+
+		var countOutput bytes.Buffer
+		countCmd.Stdout = &countOutput
+		countCmd.Stderr = os.Stderr
+
+		if err := countCmd.Run(); err != nil {
+			return fmt.Errorf("failed to get info for database '%s': %w", dbName, err)
+		}
+
+		var dbInfo map[string]interface{}
+		if err := json.Unmarshal(countOutput.Bytes(), &dbInfo); err != nil {
+			return fmt.Errorf("failed to parse database info for '%s': %w", dbName, err)
+		}
+
+		// Check for error response
+		if _, hasError := dbInfo["error"]; hasError {
+			return fmt.Errorf("failed to get database info for '%s': %v", dbName, dbInfo["reason"])
+		}
+
+		totalDocs := 0
+		if docCount, ok := dbInfo["doc_count"].(float64); ok {
+			totalDocs = int(docCount)
+		}
+
+		fmt.Printf("   📊 Database has %d documents\n", totalDocs)
+
+		// Get all documents with include_docs=true (but without inline attachments)
+		// This gives us the document content with attachment stubs
+		docsCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+			fmt.Sprintf("http://localhost:5984/%s/_all_docs?include_docs=true", dbName))
+
+		var docsOutput bytes.Buffer
+		docsCmd.Stdout = &docsOutput
+		docsCmd.Stderr = os.Stderr
+
+		if err := docsCmd.Run(); err != nil {
+			return fmt.Errorf("failed to get documents for '%s': %w", dbName, err)
+		}
+
+		var docsResult map[string]interface{}
+		if err := json.Unmarshal(docsOutput.Bytes(), &docsResult); err != nil {
+			return fmt.Errorf("failed to parse documents for '%s': %w", dbName, err)
+		}
+
+		// Check for error response
+		if errMsg, hasError := docsResult["error"]; hasError {
+			return fmt.Errorf("CouchDB error getting documents for '%s': %v", dbName, errMsg)
+		}
+
+		rows, ok := docsResult["rows"].([]interface{})
+		if !ok {
+			return fmt.Errorf("invalid response format for '%s': no rows", dbName)
+		}
+
+		// Process each document and fetch attachments separately
+		var allRows []interface{}
+		totalAttachments := 0
+		for j, row := range rows {
+			rowMap, ok := row.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid row format for '%s' at index %d", dbName, j)
+			}
+
+			doc, ok := rowMap["doc"].(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("missing doc in row for '%s' at index %d", dbName, j)
+			}
+
+			docID, _ := doc["_id"].(string)
+
+			// Check if document has attachments (stubs)
+			if attachments, hasAttachments := doc["_attachments"].(map[string]interface{}); hasAttachments {
+				// Create directory for this document's attachments
+				// Use a safe directory name (replace / with __)
+				safeDocID := strings.ReplaceAll(docID, "/", "__")
+				docAttDir := filepath.Join(attachmentsDir, safeDocID)
+				if err := os.MkdirAll(docAttDir, 0755); err != nil {
+					return fmt.Errorf("failed to create attachment directory for '%s': %w", docID, err)
+				}
+
+				// Fetch each attachment separately using the standard attachment API
+				for attName, attInfo := range attachments {
+					attInfoMap, ok := attInfo.(map[string]interface{})
+					if !ok {
+						continue
+					}
+
+					// Skip if already has data (not a stub)
+					if _, hasData := attInfoMap["data"]; hasData {
+						continue
+					}
+
+					// URL-encode the document ID and attachment name
+					encodedDocID := url.PathEscape(docID)
+					encodedAttName := url.PathEscape(attName)
+
+					// Fetch the attachment as binary data
+					attCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+						fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+						fmt.Sprintf("http://localhost:5984/%s/%s/%s", dbName, encodedDocID, encodedAttName))
+
+					var attOutput bytes.Buffer
+					attCmd.Stdout = &attOutput
+					attCmd.Stderr = os.Stderr
+
+					if err := attCmd.Run(); err != nil {
+						return fmt.Errorf("failed to fetch attachment '%s' from document '%s': %w", attName, docID, err)
+					}
+
+					// Save attachment as binary file
+					// Use a safe filename (replace / with __)
+					safeAttName := strings.ReplaceAll(attName, "/", "__")
+					attFilePath := filepath.Join(docAttDir, safeAttName)
+					if err := os.WriteFile(attFilePath, attOutput.Bytes(), 0644); err != nil {
+						return fmt.Errorf("failed to write attachment '%s' for document '%s': %w", attName, docID, err)
+					}
+
+					// Keep the stub info (content_type, length, etc.) but remove stub marker
+					// The restore process will read the file and upload it
+					delete(attInfoMap, "stub")
+					totalAttachments++
+				}
+			}
+
+			// Add to results (document still has attachment stubs with metadata)
+			allRows = append(allRows, map[string]interface{}{
+				"id":    docID,
+				"key":   rowMap["key"],
+				"value": rowMap["value"],
+				"doc":   doc,
+			})
+
+			// Progress indicator
+			if (j+1)%10 == 0 || j+1 == len(rows) {
+				fmt.Printf("   📥 Processed %d/%d documents...\r", j+1, len(rows))
+			}
+		}
+
+		fmt.Printf("\n   📥 Processed %d documents, saved %d attachments\n", len(allRows), totalAttachments)
+
+		// Hard fail if we couldn't backup all documents
+		if len(allRows) == 0 && totalDocs > 0 {
+			return fmt.Errorf("failed to backup database '%s': no documents could be fetched (expected %d)", dbName, totalDocs)
+		}
+
+		if len(allRows) < totalDocs {
+			return fmt.Errorf("failed to backup database '%s': only fetched %d of %d documents", dbName, len(allRows), totalDocs)
+		}
+
+		// Create the backup document in the same format as _all_docs response
+		backupDoc := map[string]interface{}{
+			"total_rows": len(allRows),
+			"offset":     0,
+			"rows":       allRows,
+		}
+
+		backupData, err := json.Marshal(backupDoc)
 		if err != nil {
-			return fmt.Errorf("backup file not created for '%s': %w", dbName, err)
-		}
-		if info.Size() == 0 {
-			return fmt.Errorf("backup file is empty for '%s'", dbName)
+			return fmt.Errorf("failed to marshal backup for '%s': %w", dbName, err)
 		}
 
-		fmt.Printf("   ✅ Backed up '%s' (%d bytes)\n", dbName, info.Size())
+		// Save documents.json to database directory
+		docsFile := filepath.Join(dbDir, "documents.json")
+		if err := os.WriteFile(docsFile, backupData, 0644); err != nil {
+			return fmt.Errorf("failed to write documents file for '%s': %w", dbName, err)
+		}
+
+		fmt.Printf("   ✅ Backed up '%s'\n", dbName)
 	}
 
 	// Create a manifest file with metadata
 	backupTime := time.Now()
 	manifest := map[string]interface{}{
+		"version":      2, // Version 2: attachments stored as separate files
 		"workspace":    c.WorkspaceName,
 		"backup_date":  backupTime.Format(time.RFC3339),
 		"databases":    userDatabases,
@@ -760,7 +903,8 @@ func (c *CouchDBService) createTarball(sourceDir, tarballPath string) error {
 	})
 }
 
-// Restore restores CouchDB databases from a backup using couchrestore
+// Restore restores CouchDB databases from a backup (tarball or directory)
+// Supports both v1 (inline attachments) and v2 (separate attachment files) formats
 // If force is true, skip confirmation prompts for existing databases
 func (c *CouchDBService) Restore(backupPath string, force bool) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
@@ -784,25 +928,18 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 
 	// Determine if backupPath is a tarball or directory
 	var extractDir string
+	var shouldCleanup bool
 
 	info, err := os.Stat(hostMountPath)
 	if err != nil {
 		return fmt.Errorf("failed to stat backup path: %w", err)
 	}
 
-	// hostExtractDir is the path on the host filesystem (for mounting into node container)
-	var hostExtractDir string
-
 	if !info.IsDir() && strings.HasSuffix(backupPath, ".tar.gz") {
 		// Extract tarball from host path via /host mount
 		fmt.Printf("📥 Reading backup from host: %s\n", backupPath)
 
-		// Create temp directory on host filesystem so node container can access it
-		hostTempBase := "/host/tmp"
-		if err := os.MkdirAll(hostTempBase, 0755); err != nil {
-			return fmt.Errorf("failed to create host temp directory: %w", err)
-		}
-		tempDir, err := os.MkdirTemp(hostTempBase, "couchdb-restore-*")
+		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
 		if err != nil {
 			return fmt.Errorf("failed to create temporary directory: %w", err)
 		}
@@ -815,23 +952,28 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		extractDir = tempDir
-		hostExtractDir = strings.TrimPrefix(tempDir, "/host")
+		shouldCleanup = true
 	} else {
-		// For directories, use the host path directly
+		// For directories, read directly from /host mount
 		fmt.Printf("📥 Reading backup directory from host: %s\n", backupPath)
 		extractDir = hostMountPath
-		hostExtractDir = backupPath
+		shouldCleanup = false
 	}
 
 	// Read manifest if it exists
 	manifestFile := filepath.Join(extractDir, "manifest.json")
 	var databases []string
+	backupVersion := 1 // Default to v1 (old format)
 
 	if _, err := os.Stat(manifestFile); err == nil {
 		manifestData, err := os.ReadFile(manifestFile)
 		if err == nil {
 			var manifest map[string]interface{}
 			if err := json.Unmarshal(manifestData, &manifest); err == nil {
+				// Check backup version
+				if v, ok := manifest["version"].(float64); ok {
+					backupVersion = int(v)
+				}
 				if dbList, ok := manifest["databases"].([]interface{}); ok {
 					for _, db := range dbList {
 						if dbName, ok := db.(string); ok {
@@ -843,7 +985,7 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 	}
 
-	// If no manifest, find all .txt files (couchbackup format) in backup directory
+	// If no manifest, detect format and find databases
 	if len(databases) == 0 {
 		entries, err := os.ReadDir(extractDir)
 		if err != nil {
@@ -851,12 +993,22 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".txt") {
-				dbName := strings.TrimSuffix(entry.Name(), ".txt")
+			if entry.IsDir() && entry.Name() != "attachments" {
+				// Check if it's a v2 database directory (has documents.json)
+				docsFile := filepath.Join(extractDir, entry.Name(), "documents.json")
+				if _, err := os.Stat(docsFile); err == nil {
+					databases = append(databases, entry.Name())
+					backupVersion = 2
+				}
+			} else if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") && entry.Name() != "manifest.json" {
+				// V1 format: {dbname}.json files
+				dbName := strings.TrimSuffix(entry.Name(), ".json")
 				databases = append(databases, dbName)
 			}
 		}
 	}
+
+	fmt.Printf("📋 Detected backup format version: %d\n", backupVersion)
 
 	if len(databases) == 0 {
 		return fmt.Errorf("no databases found in backup")
@@ -865,21 +1017,42 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 	fmt.Printf("📦 Starting CouchDB restore for workspace '%s'...\n", c.WorkspaceName)
 	fmt.Printf("📋 Found %d database(s) to restore\n", len(databases))
 
-	// CouchDB URL for couchrestore
-	couchURL := fmt.Sprintf("http://%s:%s@localhost:5984", secrets.User, secrets.Password)
-
 	// Restore each database
 	for i, dbName := range databases {
-		backupFile := filepath.Join(extractDir, fmt.Sprintf("%s.txt", dbName))
+		// Determine backup file location based on version
+		var backupFile string
+		var attachmentsDir string
+		if backupVersion >= 2 {
+			backupFile = filepath.Join(extractDir, dbName, "documents.json")
+			attachmentsDir = filepath.Join(extractDir, dbName, "attachments")
+		} else {
+			backupFile = filepath.Join(extractDir, fmt.Sprintf("%s.json", dbName))
+			attachmentsDir = "" // V1 has inline attachments
+		}
 
 		// Check if backup file exists
 		if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-			return fmt.Errorf("backup file not found for database '%s': %s", dbName, backupFile)
+			fmt.Printf("⚠️  Warning: backup file not found for database '%s': %s\n", dbName, backupFile)
+			continue
 		}
 
 		fmt.Printf("💾 Restoring database %d/%d: '%s'...\n", i+1, len(databases), dbName)
 
-		// Check if database exists
+		// Read the backup file
+		backupData, err := os.ReadFile(backupFile)
+		if err != nil {
+			fmt.Printf("Warning: failed to read backup file for '%s': %v\n", dbName, err)
+			continue
+		}
+
+		// Parse the backup JSON
+		var backupDoc map[string]interface{}
+		if err := json.Unmarshal(backupData, &backupDoc); err != nil {
+			fmt.Printf("Warning: failed to parse backup file for '%s': %v\n", dbName, err)
+			continue
+		}
+
+		// Check if database exists, create if not
 		checkCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
 			"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
 			fmt.Sprintf("http://localhost:5984/%s", dbName))
@@ -891,63 +1064,242 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		checkCmd.Run()
 		statusCode := strings.TrimSpace(checkOutput.String())
 
-		if statusCode == "200" {
+		if statusCode != "200" {
+			// Create database
+			fmt.Printf("  Creating database '%s'...\n", dbName)
+			createCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-X", "PUT",
+				"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+				fmt.Sprintf("http://localhost:5984/%s", dbName))
+
+			var createOutput bytes.Buffer
+			createCmd.Stdout = &createOutput
+			createCmd.Stderr = os.Stderr
+
+			if err := createCmd.Run(); err != nil {
+				fmt.Printf("Warning: failed to create database '%s': %v\n", dbName, err)
+				continue
+			}
+		} else {
 			// Database exists - check if it has documents
 			hasDocuments, docCount, err := c.databaseHasDocuments(containerName, secrets, dbName)
 			if err != nil {
 				fmt.Printf("Warning: failed to check documents in '%s': %v\n", dbName, err)
+				// Continue anyway
 			} else if hasDocuments && !force {
 				// Prompt for confirmation (only if not forced)
 				fmt.Printf("\n⚠️  Database '%s' already contains %d document(s).\n", dbName, docCount)
-				fmt.Printf("Restoring will DELETE the database and recreate it from the backup.\n")
+				fmt.Printf("Restoring will DELETE all existing documents and replace them with the backup.\n")
 				if !c.promptConfirmation(fmt.Sprintf("Do you want to continue with restoring '%s'? (yes/no): ", dbName)) {
 					fmt.Printf("  Skipping restore for '%s'\n", dbName)
 					continue
 				}
 			}
+		}
 
-			// Delete the existing database
-			fmt.Printf("   Deleting existing database '%s'...\n", dbName)
-			deleteCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-X", "DELETE",
-				"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-				fmt.Sprintf("http://localhost:5984/%s", dbName))
+		// Extract rows from backup
+		rows, ok := backupDoc["rows"].([]interface{})
+		if !ok {
+			fmt.Printf("Warning: invalid backup format for '%s' (no rows found)\n", dbName)
+			continue
+		}
 
-			if err := deleteCmd.Run(); err != nil {
-				return fmt.Errorf("failed to delete existing database '%s': %w", dbName, err)
+		// Delete all existing documents in the database first to avoid conflicts
+		fmt.Printf("  Clearing existing documents in '%s'...\n", dbName)
+		if err := c.clearDatabase(containerName, secrets, dbName); err != nil {
+			fmt.Printf("Warning: failed to clear database '%s': %v\n", dbName, err)
+			// Continue anyway - might still work
+		}
+
+		// Track documents with attachments for v2 restore
+		type docAttachmentInfo struct {
+			docID       string
+			attachments map[string]interface{} // attachment name -> metadata
+		}
+		var docsWithAttachments []docAttachmentInfo
+
+		// Restore documents in batches
+		batchSize := 100
+		totalDocs := 0
+		successfulDocs := 0
+
+		// Map to store the revision of each created document (needed for attachment upload)
+		docRevisions := make(map[string]string)
+
+		for i := 0; i < len(rows); i += batchSize {
+			end := i + batchSize
+			if end > len(rows) {
+				end = len(rows)
+			}
+
+			batch := rows[i:end]
+
+			// Build bulk docs payload
+			bulkDocs := map[string]interface{}{
+				"docs": []interface{}{},
+			}
+
+			for _, row := range batch {
+				if rowMap, ok := row.(map[string]interface{}); ok {
+					if doc, ok := rowMap["doc"].(map[string]interface{}); ok {
+						docID, _ := doc["_id"].(string)
+
+						// Keep _id but remove _rev to allow new document creation
+						delete(doc, "_rev")
+
+						// For v2 format, track attachments and remove them from doc
+						// (they will be uploaded separately after doc creation)
+						if backupVersion >= 2 && attachmentsDir != "" {
+							if attachments, hasAtt := doc["_attachments"].(map[string]interface{}); hasAtt {
+								docsWithAttachments = append(docsWithAttachments, docAttachmentInfo{
+									docID:       docID,
+									attachments: attachments,
+								})
+								// Remove attachments from doc - we'll upload them separately
+								delete(doc, "_attachments")
+							}
+						}
+
+						bulkDocs["docs"] = append(bulkDocs["docs"].([]interface{}), doc)
+						totalDocs++
+					}
+				}
+			}
+
+			if len(bulkDocs["docs"].([]interface{})) == 0 {
+				continue
+			}
+
+			// Send bulk docs request
+			bulkData, err := json.Marshal(bulkDocs)
+			if err != nil {
+				fmt.Printf("Warning: failed to marshal bulk docs for '%s': %v\n", dbName, err)
+				continue
+			}
+
+			// Use curl to POST bulk_docs via stdin
+			restoreCmd := exec.Command("docker", "exec", "-i", containerName, "sh", "-c",
+				fmt.Sprintf("curl -s -X POST -H 'Content-Type: application/json' -u '%s:%s' --data-binary @- 'http://localhost:5984/%s/_bulk_docs'",
+					secrets.User, secrets.Password, dbName))
+
+			restoreCmd.Stdin = bytes.NewReader(bulkData)
+			var restoreOutput bytes.Buffer
+			restoreCmd.Stdout = &restoreOutput
+			restoreCmd.Stderr = os.Stderr
+
+			if err := restoreCmd.Run(); err != nil {
+				fmt.Printf("Warning: failed to restore batch for '%s': %v\n", dbName, err)
+				continue
+			}
+
+			// Check the response to see if documents were actually created
+			responseData := restoreOutput.Bytes()
+			if len(responseData) > 0 {
+				var response []map[string]interface{}
+				if err := json.Unmarshal(responseData, &response); err == nil {
+					// Count successful documents and track their revisions
+					for _, item := range response {
+						if docID, hasId := item["id"].(string); hasId {
+							if rev, hasRev := item["rev"].(string); hasRev {
+								if _, hasError := item["error"]; !hasError {
+									successfulDocs++
+									docRevisions[docID] = rev
+								} else {
+									fmt.Printf("Warning: document error in batch: %v\n", item)
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 
-		// Create the database
-		fmt.Printf("   Creating database '%s'...\n", dbName)
-		createCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-X", "PUT",
-			"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-			fmt.Sprintf("http://localhost:5984/%s", dbName))
-
-		if err := createCmd.Run(); err != nil {
-			return fmt.Errorf("failed to create database '%s': %w", dbName, err)
+		if totalDocs > 0 {
+			fmt.Printf("  Restored %d/%d documents\n", successfulDocs, totalDocs)
 		}
 
-		// Run couchrestore via npx inside a node container
-		// Use hostExtractDir (the actual host path) for the volume mount
-		fmt.Printf("   Restoring data...\n")
-		restoreCmd := exec.Command("docker", "run", "--rm",
-			"--network", "container:"+containerName,
-			"-v", fmt.Sprintf("%s:/backup:ro", hostExtractDir),
-			"node:20-alpine",
-			"sh", "-c",
-			fmt.Sprintf("cat /backup/%s.txt | npx --yes @cloudant/couchbackup --url '%s' --db '%s'", dbName, couchURL, dbName))
+		// For v2 format, upload attachments from files
+		if backupVersion >= 2 && attachmentsDir != "" && len(docsWithAttachments) > 0 {
+			fmt.Printf("  Uploading attachments...\n")
+			totalAttachments := 0
+			successfulAttachments := 0
 
-		restoreCmd.Stdout = os.Stdout
-		restoreCmd.Stderr = os.Stderr
+			for _, docInfo := range docsWithAttachments {
+				// Get the current revision for this document
+				currentRev := docRevisions[docInfo.docID]
+				if currentRev == "" {
+					fmt.Printf("Warning: no revision found for document '%s', skipping attachments\n", docInfo.docID)
+					continue
+				}
 
-		if err := restoreCmd.Run(); err != nil {
-			return fmt.Errorf("failed to restore database '%s': %w", dbName, err)
+				// Safe directory name (matches backup naming)
+				safeDocID := strings.ReplaceAll(docInfo.docID, "/", "__")
+				docAttDir := filepath.Join(attachmentsDir, safeDocID)
+
+				for attName, attMeta := range docInfo.attachments {
+					totalAttachments++
+
+					// Get content type from metadata
+					contentType := "application/octet-stream"
+					if meta, ok := attMeta.(map[string]interface{}); ok {
+						if ct, ok := meta["content_type"].(string); ok {
+							contentType = ct
+						}
+					}
+
+					// Safe filename (matches backup naming)
+					safeAttName := strings.ReplaceAll(attName, "/", "__")
+					attFilePath := filepath.Join(docAttDir, safeAttName)
+
+					// Read attachment file
+					attData, err := os.ReadFile(attFilePath)
+					if err != nil {
+						fmt.Printf("Warning: failed to read attachment file '%s': %v\n", attFilePath, err)
+						continue
+					}
+
+					// URL-encode the document ID and attachment name
+					encodedDocID := url.PathEscape(docInfo.docID)
+					encodedAttName := url.PathEscape(attName)
+
+					// Upload attachment using PUT /{db}/{docid}/{attname}?rev={rev}
+					uploadCmd := exec.Command("docker", "exec", "-i", containerName, "sh", "-c",
+						fmt.Sprintf("curl -s -X PUT -H 'Content-Type: %s' -u '%s:%s' --data-binary @- 'http://localhost:5984/%s/%s/%s?rev=%s'",
+							contentType, secrets.User, secrets.Password, dbName, encodedDocID, encodedAttName, currentRev))
+
+					uploadCmd.Stdin = bytes.NewReader(attData)
+					var uploadOutput bytes.Buffer
+					uploadCmd.Stdout = &uploadOutput
+					uploadCmd.Stderr = os.Stderr
+
+					if err := uploadCmd.Run(); err != nil {
+						fmt.Printf("Warning: failed to upload attachment '%s' for '%s': %v\n", attName, docInfo.docID, err)
+						continue
+					}
+
+					// Check response and update revision for next attachment
+					var uploadResp map[string]interface{}
+					if err := json.Unmarshal(uploadOutput.Bytes(), &uploadResp); err == nil {
+						if newRev, ok := uploadResp["rev"].(string); ok {
+							currentRev = newRev
+							docRevisions[docInfo.docID] = newRev
+							successfulAttachments++
+						} else if errMsg, hasError := uploadResp["error"]; hasError {
+							fmt.Printf("Warning: attachment upload error for '%s/%s': %v\n", docInfo.docID, attName, errMsg)
+						}
+					}
+				}
+			}
+
+			fmt.Printf("  Uploaded %d/%d attachments\n", successfulAttachments, totalAttachments)
 		}
 
 		fmt.Printf("   ✅ Restored '%s'\n", dbName)
 	}
 
 	fmt.Printf("✅ Restore completed successfully!\n")
+
+	// Note: shouldCleanup is handled by defer above
+	_ = shouldCleanup
 
 	return nil
 }
