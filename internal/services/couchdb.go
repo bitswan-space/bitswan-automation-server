@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,12 +32,12 @@ type CouchDBService struct {
 // NewCouchDBService creates a new CouchDB service manager
 func NewCouchDBService(workspaceName string) (*CouchDBService, error) {
 	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
-	
+
 	// Check if workspace exists
 	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace '%s' does not exist", workspaceName)
 	}
-	
+
 	return &CouchDBService{
 		WorkspaceName: workspaceName,
 		WorkspacePath: workspacePath,
@@ -62,21 +63,21 @@ func (c *CouchDBService) GenerateSecrets() *CouchDBSecrets {
 // SaveSecrets saves CouchDB secrets to the workspace secrets directory
 func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 	secretsDir := filepath.Join(c.WorkspacePath, "secrets")
-	
+
 	// Ensure secrets directory exists
 	if err := os.MkdirAll(secretsDir, 0700); err != nil {
 		return fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	
+
 	// Create the secrets content
 	secretsContent := fmt.Sprintf("COUCHDB_USER=%s\nCOUCHDB_PASSWORD=%s\nCOUCHDB_HOST=%s\n",
 		secrets.User, secrets.Password, secrets.Host)
-	
+
 	secretsFile := filepath.Join(secretsDir, "couchdb")
 	if err := os.WriteFile(secretsFile, []byte(secretsContent), 0600); err != nil {
 		return fmt.Errorf("failed to write secrets file: %w", err)
 	}
-	
+
 	// Change ownership to gitops user (1000:1000) on Linux
 	if runtime.GOOS == "linux" {
 		// Check if we're running as root (daemon runs as root)
@@ -92,7 +93,7 @@ func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 			return fmt.Errorf("failed to change ownership of secrets file: %w\nOutput: %s", err, string(output))
 		}
 	}
-	
+
 	fmt.Printf("CouchDB secrets saved to: %s\n", secretsFile)
 	return nil
 }
@@ -100,7 +101,7 @@ func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 // CreateDockerCompose generates a docker-compose.yml file for CouchDB
 func (c *CouchDBService) CreateDockerCompose() (string, error) {
 	secretsPath := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
-	
+
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
 		"services": map[string]interface{}{
@@ -122,33 +123,33 @@ func (c *CouchDBService) CreateDockerCompose() (string, error) {
 			},
 		},
 	}
-	
+
 	var buf bytes.Buffer
-	
+
 	// Serialize the docker-compose data structure to YAML
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2)
 	if err := encoder.Encode(dockerCompose); err != nil {
 		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
 	}
-	
+
 	return buf.String(), nil
 }
 
 // SaveDockerCompose saves the docker-compose.yml file to the deployment directory
 func (c *CouchDBService) SaveDockerCompose(composeContent string) error {
 	deploymentDir := filepath.Join(c.WorkspacePath, "deployment")
-	
+
 	// Ensure deployment directory exists
 	if err := os.MkdirAll(deploymentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
-	
+
 	composeFile := filepath.Join(deploymentDir, "docker-compose-couchdb.yml")
 	if err := os.WriteFile(composeFile, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write docker-compose file: %w", err)
 	}
-	
+
 	fmt.Printf("CouchDB docker-compose file saved to: %s\n", composeFile)
 	return nil
 }
@@ -156,33 +157,33 @@ func (c *CouchDBService) SaveDockerCompose(composeContent string) error {
 // Enable enables the CouchDB service for the workspace
 func (c *CouchDBService) Enable() error {
 	fmt.Printf("Enabling CouchDB service for workspace '%s'\n", c.WorkspaceName)
-	
+
 	// Generate secrets
 	secrets := c.GenerateSecrets()
 	if err := c.SaveSecrets(secrets); err != nil {
 		return fmt.Errorf("failed to save secrets: %w", err)
 	}
-	
+
 	// Create docker-compose file
 	composeContent, err := c.CreateDockerCompose()
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
-	
+
 	if err := c.SaveDockerCompose(composeContent); err != nil {
 		return fmt.Errorf("failed to save docker-compose file: %w", err)
 	}
-	
+
 	// Start the CouchDB container using docker-compose
 	if err := c.StartContainer(); err != nil {
 		return fmt.Errorf("failed to start CouchDB container: %w", err)
 	}
-	
+
 	// Register with Caddy
 	if err := c.RegisterWithCaddy(); err != nil {
 		return fmt.Errorf("failed to register with Caddy: %w", err)
 	}
-	
+
 	fmt.Println("CouchDB service enabled successfully!")
 
 	// Print connection info in a single, logically-grouped block:
@@ -217,38 +218,38 @@ func (c *CouchDBService) Enable() error {
 	fmt.Println("  Username: admin")
 	fmt.Printf("  Password: %s\n", secrets.Password)
 	fmt.Println()
-	
+
 	return nil
 }
 
 // Disable disables the CouchDB service for the workspace
 func (c *CouchDBService) Disable() error {
 	fmt.Printf("Disabling CouchDB service for workspace '%s'\n", c.WorkspaceName)
-	
+
 	// Stop and remove the CouchDB container
 	if err := c.StopContainer(); err != nil {
 		fmt.Printf("Warning: failed to stop CouchDB container: %v\n", err)
 	}
-	
+
 	// Unregister from Caddy
 	if err := c.UnregisterFromCaddy(); err != nil {
 		fmt.Printf("Warning: failed to unregister from Caddy: %v\n", err)
 	}
-	
+
 	// Remove secrets file
 	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
 	if err := os.Remove(secretsFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove secrets file: %w", err)
 	}
-	
+
 	// Remove docker-compose file
 	composeFile := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
 	if err := os.Remove(composeFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove docker-compose file: %w", err)
 	}
-	
+
 	fmt.Println("CouchDB service disabled successfully!")
-	
+
 	return nil
 }
 
@@ -256,10 +257,10 @@ func (c *CouchDBService) Disable() error {
 func (c *CouchDBService) IsEnabled() bool {
 	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
 	composeFile := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
-	
+
 	_, secretsExists := os.Stat(secretsFile)
 	_, composeExists := os.Stat(composeFile)
-	
+
 	return secretsExists == nil && composeExists == nil
 }
 
@@ -270,21 +271,21 @@ func (c *CouchDBService) RegisterWithCaddy() error {
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
-	
+
 	if metadata.Domain == "" {
 		return fmt.Errorf("no domain configured for workspace '%s'", c.WorkspaceName)
 	}
-	
+
 	// Create hostname in the format: workspacename--couchdb.domain
 	hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
-	
+
 	// Register with Caddy using the container name as upstream
 	upstream := fmt.Sprintf("%s__couchdb:5984", c.WorkspaceName)
-	
+
 	if err := caddyapi.AddRoute(hostname, upstream); err != nil {
 		return fmt.Errorf("failed to register CouchDB route: %w", err)
 	}
-	
+
 	fmt.Printf("Registered CouchDB with Caddy: %s -> %s\n", hostname, upstream)
 	return nil
 }
@@ -296,18 +297,18 @@ func (c *CouchDBService) UnregisterFromCaddy() error {
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
-	
+
 	if metadata.Domain == "" {
 		return fmt.Errorf("no domain configured for workspace '%s'", c.WorkspaceName)
 	}
-	
+
 	// Create hostname in the format: workspacename--couchdb.domain
 	hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
-	
+
 	if err := caddyapi.RemoveRoute(hostname); err != nil {
 		return fmt.Errorf("failed to unregister CouchDB route: %w", err)
 	}
-	
+
 	fmt.Printf("Unregistered CouchDB from Caddy: %s\n", hostname)
 	return nil
 }
@@ -327,9 +328,9 @@ func (c *CouchDBService) ShowAccessInfo() error {
 	if err != nil {
 		return err
 	}
-	
+
 	fmt.Println("\nCouchDB Access Information:")
-	
+
 	if metadata.Domain != "" {
 		hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
 		fmt.Printf("  Web access: https://%s\n", hostname)
@@ -337,7 +338,7 @@ func (c *CouchDBService) ShowAccessInfo() error {
 	} else {
 		fmt.Printf("  No domain configured - web access not available\n")
 	}
-	
+
 	return nil
 }
 
@@ -345,25 +346,25 @@ func (c *CouchDBService) ShowAccessInfo() error {
 func (c *CouchDBService) StartContainer() error {
 	deploymentDir := filepath.Join(c.WorkspacePath, "deployment")
 	composeFile := filepath.Join(deploymentDir, "docker-compose-couchdb.yml")
-	
+
 	// Check if docker-compose file exists
 	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
 		return fmt.Errorf("docker-compose file not found: %s", composeFile)
 	}
-	
+
 	projectName := fmt.Sprintf("%s-couchdb", c.WorkspaceName)
-	
+
 	fmt.Printf("Starting CouchDB container (project: %s)...\n", projectName)
-	
+
 	// Run docker-compose up -d
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "up", "-d")
 	cmd.Dir = deploymentDir
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to start CouchDB container: %w\nOutput: %s", err, string(output))
 	}
-	
+
 	fmt.Printf("CouchDB container started successfully!\n")
 	return nil
 }
@@ -372,20 +373,20 @@ func (c *CouchDBService) StartContainer() error {
 func (c *CouchDBService) StopContainer() error {
 	deploymentDir := filepath.Join(c.WorkspacePath, "deployment")
 	composeFile := filepath.Join(deploymentDir, "docker-compose-couchdb.yml")
-	
+
 	projectName := fmt.Sprintf("%s-couchdb", c.WorkspaceName)
-	
+
 	fmt.Printf("Stopping CouchDB container (project: %s)...\n", projectName)
-	
+
 	// Run docker-compose down
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "down")
 	cmd.Dir = deploymentDir
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to stop CouchDB container: %w\nOutput: %s", err, string(output))
 	}
-	
+
 	fmt.Printf("CouchDB container stopped successfully!\n")
 	return nil
 }
@@ -393,28 +394,28 @@ func (c *CouchDBService) StopContainer() error {
 // IsContainerRunning checks if the CouchDB container is currently running
 func (c *CouchDBService) IsContainerRunning() bool {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
-	
+
 	cmd := exec.Command("docker", "ps", "--filter", fmt.Sprintf("name=%s", containerName), "--format", "{{.Names}}")
 	output, err := cmd.Output()
 	if err != nil {
 		return false
 	}
-	
+
 	return string(output) != ""
 }
 
 // ShowCredentials displays the CouchDB credentials from the secrets file
 func (c *CouchDBService) ShowCredentials() error {
 	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
-	
+
 	// Read the secrets file
 	data, err := os.ReadFile(secretsFile)
 	if err != nil {
 		return fmt.Errorf("failed to read secrets file: %w", err)
 	}
-	
+
 	fmt.Println("\nCouchDB Credentials:")
-	
+
 	// Parse and display the credentials
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
@@ -422,7 +423,7 @@ func (c *CouchDBService) ShowCredentials() error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		if strings.HasPrefix(line, "COUCHDB_USER=") {
 			user := strings.TrimPrefix(line, "COUCHDB_USER=")
 			fmt.Printf("  Username: %s\n", user)
@@ -431,7 +432,7 @@ func (c *CouchDBService) ShowCredentials() error {
 			fmt.Printf("  Password: %s\n", password)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -440,20 +441,20 @@ func (c *CouchDBService) UpdateImage(newImage string) error {
 	if newImage == "" {
 		return nil
 	}
-	
+
 	// Read the current docker-compose-couchdb.yml file
 	composePath := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
 	data, err := os.ReadFile(composePath)
 	if err != nil {
 		return fmt.Errorf("failed to read docker-compose-couchdb.yml: %w", err)
 	}
-	
+
 	// Parse the YAML
 	var compose map[string]interface{}
 	if err := yaml.Unmarshal(data, &compose); err != nil {
 		return fmt.Errorf("failed to parse docker-compose-couchdb.yml: %w", err)
 	}
-	
+
 	// Update the image in the couchdb service
 	if services, ok := compose["services"].(map[string]interface{}); ok {
 		if couchdbService, ok := services["couchdb"].(map[string]interface{}); ok {
@@ -464,17 +465,17 @@ func (c *CouchDBService) UpdateImage(newImage string) error {
 	} else {
 		return fmt.Errorf("services section not found in docker-compose-couchdb.yml")
 	}
-	
+
 	// Write the updated file back
 	updatedData, err := yaml.Marshal(compose)
 	if err != nil {
 		return fmt.Errorf("failed to marshal updated docker-compose: %w", err)
 	}
-	
+
 	if err := os.WriteFile(composePath, updatedData, 0644); err != nil {
 		return fmt.Errorf("failed to write updated docker-compose-couchdb.yml: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -491,12 +492,12 @@ func (c *CouchDBService) getLatestVersion() (string, error) {
 // getCredentials retrieves CouchDB credentials from the secrets file
 func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
-	
+
 	data, err := os.ReadFile(secretsFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read secrets file: %w", err)
 	}
-	
+
 	secrets := &CouchDBSecrets{}
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
@@ -509,15 +510,16 @@ func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 			secrets.Host = strings.TrimPrefix(line, "COUCHDB_HOST=")
 		}
 	}
-	
+
 	if secrets.User == "" || secrets.Password == "" {
 		return nil, fmt.Errorf("invalid credentials in secrets file")
 	}
-	
+
 	return secrets, nil
 }
 
-// Backup creates a backup of all CouchDB databases using couchbackup
+// Backup creates a backup of all CouchDB databases as a tarball
+// Documents with attachments are fetched individually to ensure full attachment data is captured
 func (c *CouchDBService) Backup(backupPath string) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
 
@@ -532,20 +534,12 @@ func (c *CouchDBService) Backup(backupPath string) error {
 		return fmt.Errorf("failed to get credentials: %w", err)
 	}
 
-	// Create temporary directory for backup files on the HOST filesystem
-	// We need to use /host/tmp so both the daemon and the node container can access it
-	hostTempBase := "/host/tmp"
-	if err := os.MkdirAll(hostTempBase, 0755); err != nil {
-		return fmt.Errorf("failed to create host temp directory: %w", err)
-	}
-	tempDir, err := os.MkdirTemp(hostTempBase, "couchdb-backup-*")
+	// Create temporary directory for backup files inside the daemon container
+	tempDir, err := os.MkdirTemp("", "couchdb-backup-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary directory: %w", err)
 	}
 	defer os.RemoveAll(tempDir) // Clean up temp directory
-
-	// The actual host path (without /host prefix) for mounting into the node container
-	hostTempDir := strings.TrimPrefix(tempDir, "/host")
 
 	fmt.Printf("📦 Starting CouchDB backup for workspace '%s'...\n", c.WorkspaceName)
 
@@ -583,44 +577,151 @@ func (c *CouchDBService) Backup(backupPath string) error {
 
 	fmt.Printf("📋 Found %d database(s) to backup\n", len(userDatabases))
 
-	// CouchDB URL for couchbackup
-	couchURL := fmt.Sprintf("http://%s:%s@localhost:5984", secrets.User, secrets.Password)
-
-	// Backup each database using couchbackup
+	// Backup each database
 	for i, dbName := range userDatabases {
 		fmt.Printf("💾 Backing up database %d/%d: '%s'...\n", i+1, len(userDatabases), dbName)
 
-		backupFile := filepath.Join(tempDir, fmt.Sprintf("%s.txt", dbName))
+		// First, get the total document count
+		countCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+			fmt.Sprintf("http://localhost:5984/%s", dbName))
 
-		// Run couchbackup via npx inside the container
-		// We use docker run with node image since couchdb image doesn't have node
-		// Mount the host temp directory (not the /host-prefixed path)
-		// --attachments flag includes binary attachments (PDFs, images, etc.) instead of just stubs
-		// Pass through stderr for real-time progress output
-		backupCmd := exec.Command("docker", "run", "--rm",
-			"--network", "container:"+containerName,
-			"-v", fmt.Sprintf("%s:/backup", hostTempDir),
-			"node:20-alpine",
-			"sh", "-c",
-			fmt.Sprintf("npx --yes @cloudant/couchbackup --url '%s' --db '%s' --attachments > /backup/%s.txt", couchURL, dbName, dbName))
+		var countOutput bytes.Buffer
+		countCmd.Stdout = &countOutput
+		countCmd.Stderr = os.Stderr
 
-		backupCmd.Stdout = os.Stdout
-		backupCmd.Stderr = os.Stderr
-
-		if err := backupCmd.Run(); err != nil {
-			return fmt.Errorf("failed to backup database '%s': %w", dbName, err)
+		if err := countCmd.Run(); err != nil {
+			return fmt.Errorf("failed to get info for database '%s': %w", dbName, err)
 		}
 
-		// Verify the backup file was created and has content
-		info, err := os.Stat(backupFile)
+		var dbInfo map[string]interface{}
+		if err := json.Unmarshal(countOutput.Bytes(), &dbInfo); err != nil {
+			return fmt.Errorf("failed to parse database info for '%s': %w", dbName, err)
+		}
+
+		// Check for error response
+		if _, hasError := dbInfo["error"]; hasError {
+			return fmt.Errorf("failed to get database info for '%s': %v", dbName, dbInfo["reason"])
+		}
+
+		totalDocs := 0
+		if docCount, ok := dbInfo["doc_count"].(float64); ok {
+			totalDocs = int(docCount)
+		}
+
+		fmt.Printf("   📊 Database has %d documents\n", totalDocs)
+
+		// Get all document IDs first (without full docs/attachments for speed)
+		idsCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+			fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+			fmt.Sprintf("http://localhost:5984/%s/_all_docs", dbName))
+
+		var idsOutput bytes.Buffer
+		idsCmd.Stdout = &idsOutput
+		idsCmd.Stderr = os.Stderr
+
+		if err := idsCmd.Run(); err != nil {
+			return fmt.Errorf("failed to get document IDs for '%s': %w", dbName, err)
+		}
+
+		var idsResult map[string]interface{}
+		if err := json.Unmarshal(idsOutput.Bytes(), &idsResult); err != nil {
+			return fmt.Errorf("failed to parse document IDs for '%s': %w", dbName, err)
+		}
+
+		// Check for error response
+		if errMsg, hasError := idsResult["error"]; hasError {
+			return fmt.Errorf("CouchDB error getting document IDs for '%s': %v", dbName, errMsg)
+		}
+
+		idsRows, ok := idsResult["rows"].([]interface{})
+		if !ok {
+			return fmt.Errorf("invalid response format for '%s': no rows", dbName)
+		}
+
+		// Fetch each document individually with attachments=true
+		// This ensures we get full attachment data (not just stubs) for documents with large attachments
+		var allRows []interface{}
+		for j, row := range idsRows {
+			rowMap, ok := row.(map[string]interface{})
+			if !ok {
+				return fmt.Errorf("invalid row format for '%s' at index %d", dbName, j)
+			}
+			docID, ok := rowMap["id"].(string)
+			if !ok {
+				return fmt.Errorf("missing document ID for '%s' at index %d", dbName, j)
+			}
+
+			// URL-encode the document ID to handle special characters
+			encodedDocID := url.PathEscape(docID)
+
+			// Fetch the document with full attachments
+			docCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
+				fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+				fmt.Sprintf("http://localhost:5984/%s/%s?attachments=true", dbName, encodedDocID))
+
+			var docOutput bytes.Buffer
+			docCmd.Stdout = &docOutput
+			docCmd.Stderr = os.Stderr
+
+			if err := docCmd.Run(); err != nil {
+				return fmt.Errorf("failed to fetch document '%s' from '%s': %w", docID, dbName, err)
+			}
+
+			var doc map[string]interface{}
+			if err := json.Unmarshal(docOutput.Bytes(), &doc); err != nil {
+				return fmt.Errorf("failed to parse document '%s' from '%s': %w\nResponse: %s", docID, dbName, err, docOutput.String())
+			}
+
+			// Check for error
+			if errReason, hasError := doc["error"]; hasError {
+				return fmt.Errorf("CouchDB error fetching document '%s' from '%s': %v", docID, dbName, errReason)
+			}
+
+			// Add to results in the same format as _all_docs row
+			allRows = append(allRows, map[string]interface{}{
+				"id":    docID,
+				"key":   docID,
+				"value": map[string]interface{}{"rev": doc["_rev"]},
+				"doc":   doc,
+			})
+
+			// Progress indicator
+			if (j+1)%10 == 0 || j+1 == len(idsRows) {
+				fmt.Printf("   📥 Fetched %d/%d documents...\r", j+1, len(idsRows))
+			}
+		}
+
+		fmt.Printf("\n   📥 Fetched %d documents total\n", len(allRows))
+
+		// Hard fail if we couldn't backup all documents
+		if len(allRows) == 0 && totalDocs > 0 {
+			return fmt.Errorf("failed to backup database '%s': no documents could be fetched (expected %d)", dbName, totalDocs)
+		}
+
+		if len(allRows) < totalDocs {
+			return fmt.Errorf("failed to backup database '%s': only fetched %d of %d documents", dbName, len(allRows), totalDocs)
+		}
+
+		// Create the backup document in the same format as _all_docs response
+		backupDoc := map[string]interface{}{
+			"total_rows": len(allRows),
+			"offset":     0,
+			"rows":       allRows,
+		}
+
+		backupData, err := json.Marshal(backupDoc)
 		if err != nil {
-			return fmt.Errorf("backup file not created for '%s': %w", dbName, err)
-		}
-		if info.Size() == 0 {
-			return fmt.Errorf("backup file is empty for '%s'", dbName)
+			return fmt.Errorf("failed to marshal backup for '%s': %w", dbName, err)
 		}
 
-		fmt.Printf("   ✅ Backed up '%s' (%d bytes)\n", dbName, info.Size())
+		// Save backup to file in temp directory
+		backupFile := filepath.Join(tempDir, fmt.Sprintf("%s.json", dbName))
+		if err := os.WriteFile(backupFile, backupData, 0644); err != nil {
+			return fmt.Errorf("failed to write backup file for '%s': %w", dbName, err)
+		}
+
+		fmt.Printf("   ✅ Backed up '%s'\n", dbName)
 	}
 
 	// Create a manifest file with metadata
@@ -761,7 +862,7 @@ func (c *CouchDBService) createTarball(sourceDir, tarballPath string) error {
 	})
 }
 
-// Restore restores CouchDB databases from a backup using couchrestore
+// Restore restores CouchDB databases from a backup (tarball or directory)
 // If force is true, skip confirmation prompts for existing databases
 func (c *CouchDBService) Restore(backupPath string, force bool) error {
 	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
@@ -785,25 +886,18 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 
 	// Determine if backupPath is a tarball or directory
 	var extractDir string
+	var shouldCleanup bool
 
 	info, err := os.Stat(hostMountPath)
 	if err != nil {
 		return fmt.Errorf("failed to stat backup path: %w", err)
 	}
 
-	// hostExtractDir is the path on the host filesystem (for mounting into node container)
-	var hostExtractDir string
-
 	if !info.IsDir() && strings.HasSuffix(backupPath, ".tar.gz") {
 		// Extract tarball from host path via /host mount
 		fmt.Printf("📥 Reading backup from host: %s\n", backupPath)
 
-		// Create temp directory on host filesystem so node container can access it
-		hostTempBase := "/host/tmp"
-		if err := os.MkdirAll(hostTempBase, 0755); err != nil {
-			return fmt.Errorf("failed to create host temp directory: %w", err)
-		}
-		tempDir, err := os.MkdirTemp(hostTempBase, "couchdb-restore-*")
+		tempDir, err := os.MkdirTemp("", "couchdb-restore-*")
 		if err != nil {
 			return fmt.Errorf("failed to create temporary directory: %w", err)
 		}
@@ -816,12 +910,12 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		extractDir = tempDir
-		hostExtractDir = strings.TrimPrefix(tempDir, "/host")
+		shouldCleanup = true
 	} else {
-		// For directories, use the host path directly
+		// For directories, read directly from /host mount
 		fmt.Printf("📥 Reading backup directory from host: %s\n", backupPath)
 		extractDir = hostMountPath
-		hostExtractDir = backupPath
+		shouldCleanup = false
 	}
 
 	// Read manifest if it exists
@@ -844,7 +938,7 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 	}
 
-	// If no manifest, find all .txt files (couchbackup format) in backup directory
+	// If no manifest, find all .json files in backup directory
 	if len(databases) == 0 {
 		entries, err := os.ReadDir(extractDir)
 		if err != nil {
@@ -852,8 +946,8 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		}
 
 		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".txt") {
-				dbName := strings.TrimSuffix(entry.Name(), ".txt")
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") && entry.Name() != "manifest.json" {
+				dbName := strings.TrimSuffix(entry.Name(), ".json")
 				databases = append(databases, dbName)
 			}
 		}
@@ -866,21 +960,33 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 	fmt.Printf("📦 Starting CouchDB restore for workspace '%s'...\n", c.WorkspaceName)
 	fmt.Printf("📋 Found %d database(s) to restore\n", len(databases))
 
-	// CouchDB URL for couchrestore
-	couchURL := fmt.Sprintf("http://%s:%s@localhost:5984", secrets.User, secrets.Password)
-
 	// Restore each database
 	for i, dbName := range databases {
-		backupFile := filepath.Join(extractDir, fmt.Sprintf("%s.txt", dbName))
+		backupFile := filepath.Join(extractDir, fmt.Sprintf("%s.json", dbName))
 
 		// Check if backup file exists
 		if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-			return fmt.Errorf("backup file not found for database '%s': %s", dbName, backupFile)
+			fmt.Printf("⚠️  Warning: backup file not found for database '%s': %s\n", dbName, backupFile)
+			continue
 		}
 
 		fmt.Printf("💾 Restoring database %d/%d: '%s'...\n", i+1, len(databases), dbName)
 
-		// Check if database exists
+		// Read the backup file
+		backupData, err := os.ReadFile(backupFile)
+		if err != nil {
+			fmt.Printf("Warning: failed to read backup file for '%s': %v\n", dbName, err)
+			continue
+		}
+
+		// Parse the backup JSON
+		var backupDoc map[string]interface{}
+		if err := json.Unmarshal(backupData, &backupDoc); err != nil {
+			fmt.Printf("Warning: failed to parse backup file for '%s': %v\n", dbName, err)
+			continue
+		}
+
+		// Check if database exists, create if not
 		checkCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
 			"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
 			fmt.Sprintf("http://localhost:5984/%s", dbName))
@@ -892,63 +998,139 @@ func (c *CouchDBService) Restore(backupPath string, force bool) error {
 		checkCmd.Run()
 		statusCode := strings.TrimSpace(checkOutput.String())
 
-		if statusCode == "200" {
+		if statusCode != "200" {
+			// Create database
+			fmt.Printf("  Creating database '%s'...\n", dbName)
+			createCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-X", "PUT",
+				"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
+				fmt.Sprintf("http://localhost:5984/%s", dbName))
+
+			var createOutput bytes.Buffer
+			createCmd.Stdout = &createOutput
+			createCmd.Stderr = os.Stderr
+
+			if err := createCmd.Run(); err != nil {
+				fmt.Printf("Warning: failed to create database '%s': %v\n", dbName, err)
+				continue
+			}
+		} else {
 			// Database exists - check if it has documents
 			hasDocuments, docCount, err := c.databaseHasDocuments(containerName, secrets, dbName)
 			if err != nil {
 				fmt.Printf("Warning: failed to check documents in '%s': %v\n", dbName, err)
+				// Continue anyway
 			} else if hasDocuments && !force {
 				// Prompt for confirmation (only if not forced)
 				fmt.Printf("\n⚠️  Database '%s' already contains %d document(s).\n", dbName, docCount)
-				fmt.Printf("Restoring will DELETE the database and recreate it from the backup.\n")
+				fmt.Printf("Restoring will DELETE all existing documents and replace them with the backup.\n")
 				if !c.promptConfirmation(fmt.Sprintf("Do you want to continue with restoring '%s'? (yes/no): ", dbName)) {
 					fmt.Printf("  Skipping restore for '%s'\n", dbName)
 					continue
 				}
 			}
+		}
 
-			// Delete the existing database
-			fmt.Printf("   Deleting existing database '%s'...\n", dbName)
-			deleteCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-X", "DELETE",
-				"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-				fmt.Sprintf("http://localhost:5984/%s", dbName))
+		// Extract rows from backup
+		rows, ok := backupDoc["rows"].([]interface{})
+		if !ok {
+			fmt.Printf("Warning: invalid backup format for '%s' (no rows found)\n", dbName)
+			continue
+		}
 
-			if err := deleteCmd.Run(); err != nil {
-				return fmt.Errorf("failed to delete existing database '%s': %w", dbName, err)
+		// Delete all existing documents in the database first to avoid conflicts
+		fmt.Printf("  Clearing existing documents in '%s'...\n", dbName)
+		if err := c.clearDatabase(containerName, secrets, dbName); err != nil {
+			fmt.Printf("Warning: failed to clear database '%s': %v\n", dbName, err)
+			// Continue anyway - might still work
+		}
+
+		// Restore documents in batches
+		batchSize := 100
+		totalDocs := 0
+		successfulDocs := 0
+
+		for i := 0; i < len(rows); i += batchSize {
+			end := i + batchSize
+			if end > len(rows) {
+				end = len(rows)
+			}
+
+			batch := rows[i:end]
+
+			// Build bulk docs payload
+			bulkDocs := map[string]interface{}{
+				"docs": []interface{}{},
+			}
+
+			for _, row := range batch {
+				if rowMap, ok := row.(map[string]interface{}); ok {
+					if doc, ok := rowMap["doc"].(map[string]interface{}); ok {
+						// Keep _id but remove _rev to allow new document creation
+						delete(doc, "_rev")
+						bulkDocs["docs"] = append(bulkDocs["docs"].([]interface{}), doc)
+						totalDocs++
+					}
+				}
+			}
+
+			if len(bulkDocs["docs"].([]interface{})) == 0 {
+				continue
+			}
+
+			// Send bulk docs request
+			bulkData, err := json.Marshal(bulkDocs)
+			if err != nil {
+				fmt.Printf("Warning: failed to marshal bulk docs for '%s': %v\n", dbName, err)
+				continue
+			}
+
+			// Use curl to POST bulk_docs via stdin
+			restoreCmd := exec.Command("docker", "exec", "-i", containerName, "sh", "-c",
+				fmt.Sprintf("curl -s -X POST -H 'Content-Type: application/json' -u '%s:%s' --data-binary @- 'http://localhost:5984/%s/_bulk_docs'",
+					secrets.User, secrets.Password, dbName))
+
+			restoreCmd.Stdin = bytes.NewReader(bulkData)
+			var restoreOutput bytes.Buffer
+			restoreCmd.Stdout = &restoreOutput
+			restoreCmd.Stderr = os.Stderr
+
+			if err := restoreCmd.Run(); err != nil {
+				fmt.Printf("Warning: failed to restore batch for '%s': %v\n", dbName, err)
+				continue
+			}
+
+			// Check the response to see if documents were actually created
+			responseData := restoreOutput.Bytes()
+			if len(responseData) > 0 {
+				var response []map[string]interface{}
+				if err := json.Unmarshal(responseData, &response); err == nil {
+					// Count successful documents (those with "id" and "rev" and no "error")
+					for _, item := range response {
+						if _, hasId := item["id"]; hasId {
+							if _, hasRev := item["rev"]; hasRev {
+								if _, hasError := item["error"]; !hasError {
+									successfulDocs++
+								} else {
+									fmt.Printf("Warning: document error in batch: %v\n", item)
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 
-		// Create the database
-		fmt.Printf("   Creating database '%s'...\n", dbName)
-		createCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-X", "PUT",
-			"-u", fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
-			fmt.Sprintf("http://localhost:5984/%s", dbName))
-
-		if err := createCmd.Run(); err != nil {
-			return fmt.Errorf("failed to create database '%s': %w", dbName, err)
-		}
-
-		// Run couchrestore via npx inside a node container
-		// Use hostExtractDir (the actual host path) for the volume mount
-		fmt.Printf("   Restoring data...\n")
-		restoreCmd := exec.Command("docker", "run", "--rm",
-			"--network", "container:"+containerName,
-			"-v", fmt.Sprintf("%s:/backup:ro", hostExtractDir),
-			"node:20-alpine",
-			"sh", "-c",
-			fmt.Sprintf("cat /backup/%s.txt | npx --yes @cloudant/couchbackup --url '%s' --db '%s'", dbName, couchURL, dbName))
-
-		restoreCmd.Stdout = os.Stdout
-		restoreCmd.Stderr = os.Stderr
-
-		if err := restoreCmd.Run(); err != nil {
-			return fmt.Errorf("failed to restore database '%s': %w", dbName, err)
+		if totalDocs > 0 {
+			fmt.Printf("  Restored %d/%d documents\n", successfulDocs, totalDocs)
 		}
 
 		fmt.Printf("   ✅ Restored '%s'\n", dbName)
 	}
 
 	fmt.Printf("✅ Restore completed successfully!\n")
+
+	// Note: shouldCleanup is handled by defer above
+	_ = shouldCleanup
 
 	return nil
 }
@@ -959,27 +1141,27 @@ func (c *CouchDBService) databaseHasDocuments(containerName string, secrets *Cou
 	cmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 		fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
 		fmt.Sprintf("http://localhost:5984/%s/_all_docs?limit=0", dbName))
-	
+
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = os.Stderr
-	
+
 	if err := cmd.Run(); err != nil {
 		return false, 0, fmt.Errorf("failed to query database: %w", err)
 	}
-	
+
 	var result map[string]interface{}
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		return false, 0, fmt.Errorf("failed to parse response: %w", err)
 	}
-	
+
 	// Get total_rows from the response (always present even with limit=0)
 	totalRows, ok := result["total_rows"].(float64)
 	if !ok {
 		// If total_rows is missing, assume no documents
 		return false, 0, nil
 	}
-	
+
 	docCount := int(totalRows)
 	return docCount > 0, docCount, nil
 }
@@ -988,13 +1170,13 @@ func (c *CouchDBService) databaseHasDocuments(containerName string, secrets *Cou
 func (c *CouchDBService) promptConfirmation(prompt string) bool {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print(prompt)
-	
+
 	response, err := reader.ReadString('\n')
 	if err != nil {
 		fmt.Printf("Error reading input: %v\n", err)
 		return false
 	}
-	
+
 	response = strings.ToLower(strings.TrimSpace(response))
 	return response == "yes" || response == "y"
 }
@@ -1005,43 +1187,43 @@ func (c *CouchDBService) clearDatabase(containerName string, secrets *CouchDBSec
 	cmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-u",
 		fmt.Sprintf("%s:%s", secrets.User, secrets.Password),
 		fmt.Sprintf("http://localhost:5984/%s/_all_docs", dbName))
-	
+
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = os.Stderr
-	
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to get document list: %w", err)
 	}
-	
+
 	var result map[string]interface{}
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		return fmt.Errorf("failed to parse document list: %w", err)
 	}
-	
+
 	rows, ok := result["rows"].([]interface{})
 	if !ok {
 		// No documents to delete
 		return nil
 	}
-	
+
 	if len(rows) == 0 {
 		// No documents to delete
 		return nil
 	}
-	
+
 	// Build bulk delete payload
 	bulkDelete := map[string]interface{}{
 		"docs": []interface{}{},
 	}
-	
+
 	for _, row := range rows {
 		if rowMap, ok := row.(map[string]interface{}); ok {
 			docID, hasID := rowMap["id"].(string)
 			if !hasID {
 				continue
 			}
-			
+
 			// Get revision from value.rev
 			var rev string
 			if value, hasValue := rowMap["value"].(map[string]interface{}); hasValue {
@@ -1049,7 +1231,7 @@ func (c *CouchDBService) clearDatabase(containerName string, secrets *CouchDBSec
 					rev = revStr
 				}
 			}
-			
+
 			// If no rev found, we can't delete it properly, but try anyway
 			doc := map[string]interface{}{
 				"_id":      docID,
@@ -1058,30 +1240,30 @@ func (c *CouchDBService) clearDatabase(containerName string, secrets *CouchDBSec
 			if rev != "" {
 				doc["_rev"] = rev
 			}
-			
+
 			bulkDelete["docs"] = append(bulkDelete["docs"].([]interface{}), doc)
 		}
 	}
-	
+
 	// Send bulk delete request
 	bulkData, err := json.Marshal(bulkDelete)
 	if err != nil {
 		return fmt.Errorf("failed to marshal bulk delete: %w", err)
 	}
-	
+
 	deleteCmd := exec.Command("docker", "exec", "-i", containerName, "sh", "-c",
 		fmt.Sprintf("curl -s -X POST -H 'Content-Type: application/json' -u '%s:%s' --data-binary @- 'http://localhost:5984/%s/_bulk_docs'",
 			secrets.User, secrets.Password, dbName))
-	
+
 	deleteCmd.Stdin = bytes.NewReader(bulkData)
 	var deleteOutput bytes.Buffer
 	deleteCmd.Stdout = &deleteOutput
 	deleteCmd.Stderr = os.Stderr
-	
+
 	if err := deleteCmd.Run(); err != nil {
 		return fmt.Errorf("failed to delete documents: %w", err)
 	}
-	
+
 	// Check if there were any errors in the response
 	responseData := deleteOutput.Bytes()
 	if len(responseData) > 0 {
@@ -1094,7 +1276,7 @@ func (c *CouchDBService) clearDatabase(containerName string, secrets *CouchDBSec
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -1106,17 +1288,17 @@ func (c *CouchDBService) extractTarball(tarballPath, extractDir string) error {
 		return fmt.Errorf("failed to open tarball file: %w", err)
 	}
 	defer tarballFile.Close()
-	
+
 	// Create gzip reader
 	gzipReader, err := gzip.NewReader(tarballFile)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
 	defer gzipReader.Close()
-	
+
 	// Create tar reader
 	tarReader := tar.NewReader(gzipReader)
-	
+
 	// Extract files
 	for {
 		header, err := tarReader.Next()
@@ -1126,34 +1308,34 @@ func (c *CouchDBService) extractTarball(tarballPath, extractDir string) error {
 		if err != nil {
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
-		
+
 		// Get the target file path
 		targetPath := filepath.Join(extractDir, header.Name)
-		
+
 		// Create parent directories if needed
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
-		
+
 		// Skip directories (they're created above)
 		if header.Typeflag == tar.TypeDir {
 			continue
 		}
-		
+
 		// Create the file
 		file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
 		if err != nil {
 			return fmt.Errorf("failed to create file: %w", err)
 		}
-		
+
 		// Copy file content
 		if _, err := io.Copy(file, tarReader); err != nil {
 			file.Close()
 			return fmt.Errorf("failed to extract file content: %w", err)
 		}
-		
+
 		file.Close()
 	}
-	
+
 	return nil
-} 
+}
