@@ -482,21 +482,68 @@ func (s *Server) runCouchDBRestoreJob(job *Job, workspace, backupPath string) {
 	os.Stdout = stdoutW
 	os.Stdin = stdinR
 
+	// Channel to signal stdout reader to stop
+	stopReader := make(chan struct{})
+
 	// Goroutine to read stdout and send to job
+	// Uses byte-by-byte reading with timeout to detect prompts (which don't end with newline)
 	go func() {
-		scanner := bufio.NewScanner(stdoutR)
-		for scanner.Scan() {
-			line := scanner.Text()
-			// Check if this is a prompt
-			if strings.Contains(line, "(yes/no)") {
-				job.SetState(JobStateWaitingInput)
-				job.outputChan <- JobLogEntry{
-					Time:   time.Now().Format(time.RFC3339),
-					Level:  "prompt",
-					Prompt: line,
+		var buffer strings.Builder
+		readByte := make([]byte, 1)
+
+		for {
+			// Set read deadline to detect when output has paused (likely a prompt)
+			stdoutR.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			n, err := stdoutR.Read(readByte)
+
+			if n > 0 {
+				buffer.Write(readByte[:n])
+
+				// If we got a newline, flush the line
+				if readByte[0] == '\n' {
+					line := strings.TrimRight(buffer.String(), "\n\r")
+					buffer.Reset()
+					if line != "" {
+						job.Log("info", line)
+					}
 				}
-			} else {
-				job.Log("info", line)
+			}
+
+			if err != nil {
+				// Check if it's a timeout
+				if os.IsTimeout(err) {
+					// We have a timeout - check if there's partial content that looks like a prompt
+					partial := buffer.String()
+					if partial != "" && strings.Contains(partial, "(yes/no)") {
+						// This is a prompt waiting for input
+						job.SetState(JobStateWaitingInput)
+						job.outputChan <- JobLogEntry{
+							Time:   time.Now().Format(time.RFC3339),
+							Level:  "prompt",
+							Prompt: partial,
+						}
+						buffer.Reset()
+					}
+					continue
+				}
+
+				// Check for stop signal or EOF
+				select {
+				case <-stopReader:
+					// Flush any remaining content
+					if buffer.Len() > 0 {
+						job.Log("info", buffer.String())
+					}
+					return
+				default:
+					if err == io.EOF {
+						// Flush any remaining content
+						if buffer.Len() > 0 {
+							job.Log("info", buffer.String())
+						}
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -517,11 +564,17 @@ func (s *Server) runCouchDBRestoreJob(job *Job, workspace, backupPath string) {
 	// Run the actual restore
 	err := s.restoreCouchDB(workspace, backupPath, false)
 
+	// Close write end first to signal EOF to reader
+	stdoutW.Close()
+	stdinW.Close()
+
+	// Signal reader to stop and wait a bit for it to finish
+	close(stopReader)
+	time.Sleep(200 * time.Millisecond)
+
 	// Restore stdout/stdin
 	os.Stdout = oldStdout
 	os.Stdin = oldStdin
-	stdoutW.Close()
-	stdinW.Close()
 
 	job.Complete(err)
 }
