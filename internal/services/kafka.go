@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -18,25 +19,110 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// instanceNameRegex validates instance names: lowercase alphanumeric + hyphens, starts with letter, max 32 chars
+var instanceNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// ValidateInstanceName validates that the given name is a valid instance name.
+// Empty string is always valid (default unnamed instance).
+func ValidateInstanceName(name string) error {
+	if name == "" {
+		return nil
+	}
+	if !instanceNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid instance name '%s': must be lowercase alphanumeric with hyphens, start with a letter, max 32 characters", name)
+	}
+	return nil
+}
+
 // KafkaService manages Kafka service deployment for workspaces
 type KafkaService struct {
 	WorkspaceName string
 	WorkspacePath string
+	InstanceName  string
 }
 
-// NewKafkaService creates a new Kafka service manager
+// NewKafkaService creates a new Kafka service manager for the default (unnamed) instance
 func NewKafkaService(workspaceName string) (*KafkaService, error) {
+	return NewKafkaServiceWithName(workspaceName, "")
+}
+
+// NewKafkaServiceWithName creates a new Kafka service manager for a named instance
+func NewKafkaServiceWithName(workspaceName, instanceName string) (*KafkaService, error) {
+	if err := ValidateInstanceName(instanceName); err != nil {
+		return nil, err
+	}
+
 	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
-	
+
 	// Check if workspace exists
 	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace '%s' does not exist", workspaceName)
 	}
-	
+
 	return &KafkaService{
 		WorkspaceName: workspaceName,
 		WorkspacePath: workspacePath,
+		InstanceName:  instanceName,
 	}, nil
+}
+
+// serviceSuffix returns "-foo" for named instances, "" for default
+func (k *KafkaService) serviceSuffix() string {
+	if k.InstanceName == "" {
+		return ""
+	}
+	return "-" + k.InstanceName
+}
+
+// secretsFileName returns "kafka" or "kafka-foo"
+func (k *KafkaService) secretsFileName() string {
+	return "kafka" + k.serviceSuffix()
+}
+
+// composeFileName returns "docker-compose-kafka.yml" or "docker-compose-kafka-foo.yml"
+func (k *KafkaService) composeFileName() string {
+	return "docker-compose-kafka" + k.serviceSuffix() + ".yml"
+}
+
+// jaasFileName returns "kafka_server_jaas.conf" or "kafka-foo_server_jaas.conf"
+func (k *KafkaService) jaasFileName() string {
+	if k.InstanceName == "" {
+		return "kafka_server_jaas.conf"
+	}
+	return "kafka-" + k.InstanceName + "_server_jaas.conf"
+}
+
+// containerName returns "{ws}__kafka" or "{ws}__kafka-foo"
+func (k *KafkaService) containerName() string {
+	return fmt.Sprintf("%s__kafka%s", k.WorkspaceName, k.serviceSuffix())
+}
+
+// uiContainerName returns "{ws}__kafka-ui" or "{ws}__kafka-foo-ui"
+func (k *KafkaService) uiContainerName() string {
+	return fmt.Sprintf("%s__kafka%s-ui", k.WorkspaceName, k.serviceSuffix())
+}
+
+// volumeName returns "{ws}-kafka-data" or "{ws}-kafka-foo-data"
+func (k *KafkaService) volumeName() string {
+	return fmt.Sprintf("%s-kafka%s-data", k.WorkspaceName, k.serviceSuffix())
+}
+
+// projectName returns "{ws}-kafka" or "{ws}-kafka-foo"
+func (k *KafkaService) projectName() string {
+	return fmt.Sprintf("%s-kafka%s", k.WorkspaceName, k.serviceSuffix())
+}
+
+// caddyHostname returns "{ws}--kafka.{domain}" or "{ws}--kafka-foo.{domain}"
+func (k *KafkaService) caddyHostname(domain string) string {
+	return fmt.Sprintf("%s--kafka%s.%s", k.WorkspaceName, k.serviceSuffix(), domain)
+}
+
+// displayName returns "Kafka" or "Kafka (foo)"
+func (k *KafkaService) displayName() string {
+	if k.InstanceName == "" {
+		return "Kafka"
+	}
+	return fmt.Sprintf("Kafka (%s)", k.InstanceName)
 }
 
 // KafkaSecrets represents the secrets for Kafka
@@ -62,8 +148,8 @@ func (k *KafkaService) generateClusterID() (string, error) {
 		return "", fmt.Errorf("failed to generate random cluster ID: %w", err)
 	}
 	
-	// Encode to base64 and remove padding to match Kafka format
-	clusterID := base64.StdEncoding.EncodeToString(bytes)
+	// Encode to URL-safe base64 and remove padding to match Kafka KRaft format
+	clusterID := base64.URLEncoding.EncodeToString(bytes)
 	clusterID = strings.TrimRight(clusterID, "=")
 	
 	return clusterID, nil
@@ -72,19 +158,19 @@ func (k *KafkaService) generateClusterID() (string, error) {
 // SaveSecrets saves Kafka secrets to the workspace secrets directory
 func (k *KafkaService) SaveSecrets(secrets *KafkaSecrets) error {
 	secretsDir := filepath.Join(k.WorkspacePath, "secrets")
-	
+
 	// Ensure secrets directory exists
 	if err := os.MkdirAll(secretsDir, 0700); err != nil {
 		return fmt.Errorf("failed to create secrets directory: %w", err)
 	}
-	
+
 	// Create hostname for Kafka container
-	kafkaHost := fmt.Sprintf("%s__kafka", k.WorkspaceName)
-	
+	kafkaHost := k.containerName()
+
 	// Create JAAS config strings
-	jaasConfig := fmt.Sprintf("org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"%s\" user_admin=\"%s\";", 
+	jaasConfig := fmt.Sprintf("org.apache.kafka.common.security.plain.PlainLoginModule required username=\"admin\" password=\"%s\" user_admin=\"%s\";",
 		secrets.KafkaAdminPassword, secrets.KafkaAdminPassword)
-	
+
 	// Create secrets map for better readability
 	secretsMap := map[string]string{
 		"KAFKA_ADMIN_PASSWORD":     secrets.KafkaAdminPassword,
@@ -94,14 +180,14 @@ func (k *KafkaService) SaveSecrets(secrets *KafkaSecrets) error {
 		"SPRING_SECURITY_USER_PASSWORD":                            secrets.KafkaUIPassword,
 		"KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG":             "'" + jaasConfig + "'",
 	}
-	
+
 	// Build the secrets content
 	var secretsContent strings.Builder
 	for key, value := range secretsMap {
 		secretsContent.WriteString(fmt.Sprintf("%s=%s\n", key, value))
 	}
-	
-	secretsFile := filepath.Join(secretsDir, "kafka")
+
+	secretsFile := filepath.Join(secretsDir, k.secretsFileName())
 	if err := os.WriteFile(secretsFile, []byte(secretsContent.String()), 0600); err != nil {
 		return fmt.Errorf("failed to write secrets file: %w", err)
 	}
@@ -122,7 +208,7 @@ func (k *KafkaService) SaveSecrets(secrets *KafkaSecrets) error {
 		}
 	}
 	
-	fmt.Printf("Kafka secrets saved to: %s\n", secretsFile)
+	fmt.Printf("%s secrets saved to: %s\n", k.displayName(), secretsFile)
 	return nil
 }
 
@@ -152,21 +238,21 @@ Client {
 };
 `, secrets.KafkaAdminPassword, secrets.KafkaAdminPassword, secrets.KafkaAdminPassword, secrets.KafkaAdminPassword)
 
-	jaasFile := filepath.Join(deploymentDir, "kafka_server_jaas.conf")
+	jaasFile := filepath.Join(deploymentDir, k.jaasFileName())
 	if err := os.WriteFile(jaasFile, []byte(jaasContent), 0644); err != nil {
 		return fmt.Errorf("failed to write JAAS config file: %w", err)
 	}
-	
-	fmt.Printf("Kafka JAAS config saved to: %s\n", jaasFile)
+
+	fmt.Printf("%s JAAS config saved to: %s\n", k.displayName(), jaasFile)
 	return nil
 }
 
 // CreateDockerCompose generates a docker-compose.yml file for Kafka
 func (k *KafkaService) CreateDockerCompose() (string, error) {
-	secretsPath := filepath.Join(k.WorkspacePath, "secrets", "kafka")
-	containerName := fmt.Sprintf("%s__kafka", k.WorkspaceName)
-	uiContainerName := fmt.Sprintf("%s__kafka-ui", k.WorkspaceName)
-	volumeName := fmt.Sprintf("%s-kafka-data", k.WorkspaceName)
+	secretsPath := filepath.Join(k.WorkspacePath, "secrets", k.secretsFileName())
+	containerName := k.containerName()
+	uiContainerName := k.uiContainerName()
+	volumeName := k.volumeName()
 	
 	// Generate a random cluster ID
 	clusterID, err := k.generateClusterID()
@@ -218,7 +304,7 @@ func (k *KafkaService) CreateDockerCompose() (string, error) {
 				},
 				"volumes": []string{
 					volumeName + ":/var/lib/kafka/data",
-					"./kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf",
+					"./" + k.jaasFileName() + ":/etc/kafka/kafka_server_jaas.conf",
 				},
 				"env_file": []string{secretsPath},
 				"restart":  "unless-stopped",
@@ -256,18 +342,18 @@ func (k *KafkaService) SaveDockerCompose(composeContent string) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 	
-	composeFile := filepath.Join(deploymentDir, "docker-compose-kafka.yml")
+	composeFile := filepath.Join(deploymentDir, k.composeFileName())
 	if err := os.WriteFile(composeFile, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write docker-compose file: %w", err)
 	}
-	
-	fmt.Printf("Kafka docker-compose file saved to: %s\n", composeFile)
+
+	fmt.Printf("%s docker-compose file saved to: %s\n", k.displayName(), composeFile)
 	return nil
 }
 
 // Enable enables the Kafka service for the workspace
 func (k *KafkaService) Enable() error {
-	fmt.Printf("Enabling Kafka service for workspace '%s'\n", k.WorkspaceName)
+	fmt.Printf("Enabling %s service for workspace '%s'\n", k.displayName(), k.WorkspaceName)
 	
 	// Generate secrets
 	secrets := k.GenerateSecrets()
@@ -300,7 +386,7 @@ func (k *KafkaService) Enable() error {
 		return fmt.Errorf("failed to register with Caddy: %w", err)
 	}
 	
-	fmt.Println("Kafka service enabled successfully!")
+	fmt.Printf("%s service enabled successfully!\n", k.displayName())
 
 	// Print connection info in a single, logically-grouped block:
 	// 1) Kafka UI URL + UI username + UI password
@@ -311,9 +397,9 @@ func (k *KafkaService) Enable() error {
 	}
 
 	fmt.Println()
-	fmt.Println("Kafka UI:")
+	fmt.Printf("%s UI:\n", k.displayName())
 	if metadata.Domain != "" {
-		hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
+		hostname := k.caddyHostname(metadata.Domain)
 		fmt.Printf("  URL:      https://%s/kafka\n", hostname)
 	} else {
 		fmt.Printf("  URL:      (no domain configured)\n")
@@ -322,8 +408,8 @@ func (k *KafkaService) Enable() error {
 	fmt.Printf("  Password: %s\n", secrets.KafkaUIPassword)
 
 	fmt.Println()
-	fmt.Println("Kafka Broker (SASL_PLAINTEXT):")
-	fmt.Printf("  Address:  %s--kafka:9092\n", k.WorkspaceName)
+	fmt.Printf("%s Broker (SASL_PLAINTEXT):\n", k.displayName())
+	fmt.Printf("  Address:  %s:9092\n", k.containerName())
 	fmt.Println("  Username: admin")
 	fmt.Printf("  Password: %s\n", secrets.KafkaAdminPassword)
 	fmt.Println()
@@ -333,52 +419,49 @@ func (k *KafkaService) Enable() error {
 
 // Disable disables the Kafka service for the workspace
 func (k *KafkaService) Disable() error {
-	fmt.Printf("Disabling Kafka service for workspace '%s'\n", k.WorkspaceName)
-	
+	fmt.Printf("Disabling %s service for workspace '%s'\n", k.displayName(), k.WorkspaceName)
+
 	// Stop and remove the Kafka containers
 	if err := k.StopContainer(); err != nil {
-		fmt.Printf("Warning: failed to stop Kafka containers: %v\n", err)
+		fmt.Printf("Warning: failed to stop %s containers: %v\n", k.displayName(), err)
 	}
-	
+
 	// Unregister from Caddy
 	if err := k.UnregisterFromCaddy(); err != nil {
 		fmt.Printf("Warning: failed to unregister from Caddy: %v\n", err)
 	}
-	
+
 	// Remove secrets file
-	secretsFile := filepath.Join(k.WorkspacePath, "secrets", "kafka")
+	secretsFile := filepath.Join(k.WorkspacePath, "secrets", k.secretsFileName())
 	if err := os.Remove(secretsFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove secrets file: %w", err)
 	}
-	
+
 	// Remove deployment files
 	deploymentDir := filepath.Join(k.WorkspacePath, "deployment")
 	files := []string{
-		"docker-compose-kafka.yml",
-		"kafka_server_jaas.conf",
+		k.composeFileName(),
+		k.jaasFileName(),
 	}
-	
+
 	for _, file := range files {
 		filePath := filepath.Join(deploymentDir, file)
 		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 			fmt.Printf("Warning: failed to remove %s: %v\n", file, err)
 		}
 	}
-	
-	fmt.Println("Kafka service disabled successfully!")
-	
+
+	fmt.Printf("%s service disabled successfully!\n", k.displayName())
+
 	return nil
 }
 
-// IsEnabled checks if Kafka service is enabled for the workspace
+// IsEnabled checks if Kafka service is enabled for the workspace.
+// Only checks for the secrets file — compose is now managed by gitops.
 func (k *KafkaService) IsEnabled() bool {
-	secretsFile := filepath.Join(k.WorkspacePath, "secrets", "kafka")
-	composeFile := filepath.Join(k.WorkspacePath, "deployment", "docker-compose-kafka.yml")
-	
-	_, secretsExists := os.Stat(secretsFile)
-	_, composeExists := os.Stat(composeFile)
-	
-	return secretsExists == nil && composeExists == nil
+	secretsFile := filepath.Join(k.WorkspacePath, "secrets", k.secretsFileName())
+	_, err := os.Stat(secretsFile)
+	return err == nil
 }
 
 // RegisterWithCaddy registers the Kafka UI service with Caddy
@@ -388,22 +471,21 @@ func (k *KafkaService) RegisterWithCaddy() error {
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
-	
+
 	if metadata.Domain == "" {
 		return fmt.Errorf("no domain configured for workspace '%s'", k.WorkspaceName)
 	}
-	
-	// Create hostname in the format: workspacename--kafka.domain
-	hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
-	
+
+	hostname := k.caddyHostname(metadata.Domain)
+
 	// Register with Caddy using the Kafka UI container name as upstream
-	upstream := fmt.Sprintf("%s__kafka-ui:8080", k.WorkspaceName)
-	
+	upstream := fmt.Sprintf("%s:8080", k.uiContainerName())
+
 	if err := caddyapi.AddRoute(hostname, upstream); err != nil {
-		return fmt.Errorf("failed to register Kafka UI route: %w", err)
+		return fmt.Errorf("failed to register %s UI route: %w", k.displayName(), err)
 	}
-	
-	fmt.Printf("Registered Kafka UI with Caddy: %s -> %s\n", hostname, upstream)
+
+	fmt.Printf("Registered %s UI with Caddy: %s -> %s\n", k.displayName(), hostname, upstream)
 	return nil
 }
 
@@ -414,19 +496,18 @@ func (k *KafkaService) UnregisterFromCaddy() error {
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
-	
+
 	if metadata.Domain == "" {
 		return fmt.Errorf("no domain configured for workspace '%s'", k.WorkspaceName)
 	}
-	
-	// Create hostname in the format: workspacename--kafka.domain
-	hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
-	
+
+	hostname := k.caddyHostname(metadata.Domain)
+
 	if err := caddyapi.RemoveRoute(hostname); err != nil {
-		return fmt.Errorf("failed to unregister Kafka UI route: %w", err)
+		return fmt.Errorf("failed to unregister %s UI route: %w", k.displayName(), err)
 	}
-	
-	fmt.Printf("Unregistered Kafka UI from Caddy: %s\n", hostname)
+
+	fmt.Printf("Unregistered %s UI from Caddy: %s\n", k.displayName(), hostname)
 	return nil
 }
 
@@ -445,36 +526,36 @@ func (k *KafkaService) ShowAccessInfo() error {
 	if err != nil {
 		return err
 	}
-	
-	fmt.Println("\nKafka Access Information:")
-	
+
+	fmt.Printf("\n%s Access Information:\n", k.displayName())
+
 	if metadata.Domain != "" {
-		hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
+		hostname := k.caddyHostname(metadata.Domain)
 		fmt.Printf("  Kafka UI:   https://%s/kafka\n", hostname)
 		fmt.Printf("  Username:   admin\n")
 	} else {
 		fmt.Printf("  No domain configured - web access not available\n")
 	}
-	
-	fmt.Printf("  Kafka broker: %s--kafka:9092 (SASL_PLAINTEXT)\n", k.WorkspaceName)
+
+	fmt.Printf("  Kafka broker: %s:9092 (SASL_PLAINTEXT)\n", k.containerName())
 	fmt.Printf("  SASL username: admin\n")
-	
+
 	return nil
 }
 
 // StartContainer starts the Kafka containers using docker-compose
 func (k *KafkaService) StartContainer() error {
 	deploymentDir := filepath.Join(k.WorkspacePath, "deployment")
-	composeFile := filepath.Join(deploymentDir, "docker-compose-kafka.yml")
-	
+	composeFile := filepath.Join(deploymentDir, k.composeFileName())
+
 	// Check if docker-compose file exists
 	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
 		return fmt.Errorf("docker-compose file not found: %s", composeFile)
 	}
-	
-	projectName := fmt.Sprintf("%s-kafka", k.WorkspaceName)
-	
-	fmt.Printf("Starting Kafka containers (project: %s)...\n", projectName)
+
+	projectName := k.projectName()
+
+	fmt.Printf("Starting %s containers (project: %s)...\n", k.displayName(), projectName)
 	
 	// Run docker-compose up -d
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "up", "-d")
@@ -482,21 +563,21 @@ func (k *KafkaService) StartContainer() error {
 	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to start Kafka containers: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to start %s containers: %w\nOutput: %s", k.displayName(), err, string(output))
 	}
-	
-	fmt.Printf("Kafka containers started successfully!\n")
+
+	fmt.Printf("%s containers started successfully!\n", k.displayName())
 	return nil
 }
 
 // StopContainer stops and removes the Kafka containers
 func (k *KafkaService) StopContainer() error {
 	deploymentDir := filepath.Join(k.WorkspacePath, "deployment")
-	composeFile := filepath.Join(deploymentDir, "docker-compose-kafka.yml")
-	
-	projectName := fmt.Sprintf("%s-kafka", k.WorkspaceName)
-	
-	fmt.Printf("Stopping Kafka containers (project: %s)...\n", projectName)
+	composeFile := filepath.Join(deploymentDir, k.composeFileName())
+
+	projectName := k.projectName()
+
+	fmt.Printf("Stopping %s containers (project: %s)...\n", k.displayName(), projectName)
 	
 	// Run docker-compose down
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "down")
@@ -504,16 +585,16 @@ func (k *KafkaService) StopContainer() error {
 	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to stop Kafka containers: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to stop %s containers: %w\nOutput: %s", k.displayName(), err, string(output))
 	}
-	
-	fmt.Printf("Kafka containers stopped successfully!\n")
+
+	fmt.Printf("%s containers stopped successfully!\n", k.displayName())
 	return nil
 }
 
 // IsContainerRunning checks if the Kafka containers are currently running
 func (k *KafkaService) IsContainerRunning() bool {
-	containerName := fmt.Sprintf("%s__kafka", k.WorkspaceName)
+	containerName := k.containerName()
 	
 	cmd := exec.Command("docker", "ps", "--filter", fmt.Sprintf("name=%s", containerName), "--format", "{{.Names}}")
 	output, err := cmd.Output()
@@ -526,15 +607,15 @@ func (k *KafkaService) IsContainerRunning() bool {
 
 // ShowCredentials displays the Kafka credentials from the secrets file
 func (k *KafkaService) ShowCredentials() error {
-	secretsFile := filepath.Join(k.WorkspacePath, "secrets", "kafka")
-	
+	secretsFile := filepath.Join(k.WorkspacePath, "secrets", k.secretsFileName())
+
 	// Read the secrets file
 	data, err := os.ReadFile(secretsFile)
 	if err != nil {
 		return fmt.Errorf("failed to read secrets file: %w", err)
 	}
-	
-	fmt.Println("\nKafka Credentials:")
+
+	fmt.Printf("\n%s Credentials:\n", k.displayName())
 	
 	// Parse and display the credentials
 	lines := strings.Split(string(data), "\n")
@@ -569,8 +650,8 @@ func (k *KafkaService) UpdateImages(kafkaImage, zookeeperImage string) error {
 		return fmt.Errorf("Both kafkaImage and zookeeperImage are required")
 	}
 
-	// Read the current docker-compose-kafka.yml file
-	composePath := filepath.Join(k.WorkspacePath, "deployment", "docker-compose-kafka.yml")
+	// Read the current docker-compose file
+	composePath := filepath.Join(k.WorkspacePath, "deployment", k.composeFileName())
 	data, err := os.ReadFile(composePath)
 	if err != nil {
 		return fmt.Errorf("failed to read docker-compose-kafka.yml: %w", err)

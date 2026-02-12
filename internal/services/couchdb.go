@@ -27,21 +27,83 @@ import (
 type CouchDBService struct {
 	WorkspaceName string
 	WorkspacePath string
+	InstanceName  string
 }
 
-// NewCouchDBService creates a new CouchDB service manager
+// NewCouchDBService creates a new CouchDB service manager for the default (unnamed) instance
 func NewCouchDBService(workspaceName string) (*CouchDBService, error) {
+	return NewCouchDBServiceWithName(workspaceName, "")
+}
+
+// NewCouchDBServiceWithName creates a new CouchDB service manager for a named instance
+func NewCouchDBServiceWithName(workspaceName, instanceName string) (*CouchDBService, error) {
+	if err := ValidateInstanceName(instanceName); err != nil {
+		return nil, err
+	}
+
 	workspacePath := filepath.Join(os.Getenv("HOME"), ".config", "bitswan", "workspaces", workspaceName)
-	
+
 	// Check if workspace exists
 	if _, err := os.Stat(workspacePath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("workspace '%s' does not exist", workspaceName)
 	}
-	
+
 	return &CouchDBService{
 		WorkspaceName: workspaceName,
 		WorkspacePath: workspacePath,
+		InstanceName:  instanceName,
 	}, nil
+}
+
+// serviceSuffix returns "-foo" for named instances, "" for default
+func (c *CouchDBService) serviceSuffix() string {
+	if c.InstanceName == "" {
+		return ""
+	}
+	return "-" + c.InstanceName
+}
+
+// secretsFileName returns "couchdb" or "couchdb-foo"
+func (c *CouchDBService) secretsFileName() string {
+	return "couchdb" + c.serviceSuffix()
+}
+
+// composeFileName returns "docker-compose-couchdb.yml" or "docker-compose-couchdb-foo.yml"
+func (c *CouchDBService) composeFileName() string {
+	return "docker-compose-couchdb" + c.serviceSuffix() + ".yml"
+}
+
+// containerName returns "{ws}__couchdb" or "{ws}__couchdb-foo"
+func (c *CouchDBService) containerName() string {
+	return fmt.Sprintf("%s__couchdb%s", c.WorkspaceName, c.serviceSuffix())
+}
+
+// volumeName returns "{ws}-couchdb-data" or "{ws}-couchdb-foo-data"
+func (c *CouchDBService) volumeName() string {
+	return fmt.Sprintf("%s-couchdb%s-data", c.WorkspaceName, c.serviceSuffix())
+}
+
+// projectName returns "{ws}-couchdb" or "{ws}-couchdb-foo"
+func (c *CouchDBService) projectName() string {
+	return fmt.Sprintf("%s-couchdb%s", c.WorkspaceName, c.serviceSuffix())
+}
+
+// caddyHostname returns "{ws}--couchdb.{domain}" or "{ws}--couchdb-foo.{domain}"
+func (c *CouchDBService) caddyHostname(domain string) string {
+	return fmt.Sprintf("%s--couchdb%s.%s", c.WorkspaceName, c.serviceSuffix(), domain)
+}
+
+// displayName returns "CouchDB" or "CouchDB (foo)"
+func (c *CouchDBService) displayName() string {
+	if c.InstanceName == "" {
+		return "CouchDB"
+	}
+	return fmt.Sprintf("CouchDB (%s)", c.InstanceName)
+}
+
+// backupPrefix returns "couchdb" or "couchdb-foo" for backup tarball naming
+func (c *CouchDBService) backupPrefix() string {
+	return "couchdb" + c.serviceSuffix()
 }
 
 // CouchDBSecrets represents the secrets for CouchDB
@@ -56,7 +118,7 @@ func (c *CouchDBService) GenerateSecrets() *CouchDBSecrets {
 	return &CouchDBSecrets{
 		User:     "admin",
 		Password: uniuri.NewLen(32),
-		Host:     c.WorkspaceName + "__couchdb",
+		Host:     c.containerName(),
 	}
 }
 
@@ -73,7 +135,7 @@ func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 	secretsContent := fmt.Sprintf("COUCHDB_USER=%s\nCOUCHDB_PASSWORD=%s\nCOUCHDB_HOST=%s\n",
 		secrets.User, secrets.Password, secrets.Host)
 	
-	secretsFile := filepath.Join(secretsDir, "couchdb")
+	secretsFile := filepath.Join(secretsDir, c.secretsFileName())
 	if err := os.WriteFile(secretsFile, []byte(secretsContent), 0600); err != nil {
 		return fmt.Errorf("failed to write secrets file: %w", err)
 	}
@@ -94,28 +156,29 @@ func (c *CouchDBService) SaveSecrets(secrets *CouchDBSecrets) error {
 		}
 	}
 	
-	fmt.Printf("CouchDB secrets saved to: %s\n", secretsFile)
+	fmt.Printf("%s secrets saved to: %s\n", c.displayName(), secretsFile)
 	return nil
 }
 
 // CreateDockerCompose generates a docker-compose.yml file for CouchDB
 func (c *CouchDBService) CreateDockerCompose() (string, error) {
-	secretsPath := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
-	
+	secretsPath := filepath.Join(c.WorkspacePath, "secrets", c.secretsFileName())
+	volName := c.volumeName()
+
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
 		"services": map[string]interface{}{
 			"couchdb": map[string]interface{}{
 				"image":          "couchdb:3.3",
-				"container_name": c.WorkspaceName + "__couchdb",
+				"container_name": c.containerName(),
 				"restart":        "unless-stopped",
 				"env_file":       []string{secretsPath},
-				"volumes":        []string{"couchdb-data:/opt/couchdb/data"},
+				"volumes":        []string{volName + ":/opt/couchdb/data"},
 				"networks":       []string{"bitswan_network"},
 			},
 		},
 		"volumes": map[string]interface{}{
-			"couchdb-data": nil,
+			volName: nil,
 		},
 		"networks": map[string]interface{}{
 			"bitswan_network": map[string]interface{}{
@@ -145,18 +208,18 @@ func (c *CouchDBService) SaveDockerCompose(composeContent string) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 	
-	composeFile := filepath.Join(deploymentDir, "docker-compose-couchdb.yml")
+	composeFile := filepath.Join(deploymentDir, c.composeFileName())
 	if err := os.WriteFile(composeFile, []byte(composeContent), 0644); err != nil {
 		return fmt.Errorf("failed to write docker-compose file: %w", err)
 	}
-	
-	fmt.Printf("CouchDB docker-compose file saved to: %s\n", composeFile)
+
+	fmt.Printf("%s docker-compose file saved to: %s\n", c.displayName(), composeFile)
 	return nil
 }
 
 // Enable enables the CouchDB service for the workspace
 func (c *CouchDBService) Enable() error {
-	fmt.Printf("Enabling CouchDB service for workspace '%s'\n", c.WorkspaceName)
+	fmt.Printf("Enabling %s service for workspace '%s'\n", c.displayName(), c.WorkspaceName)
 	
 	// Generate secrets
 	secrets := c.GenerateSecrets()
@@ -184,7 +247,7 @@ func (c *CouchDBService) Enable() error {
 		return fmt.Errorf("failed to register with Caddy: %w", err)
 	}
 	
-	fmt.Println("CouchDB service enabled successfully!")
+	fmt.Printf("%s service enabled successfully!\n", c.displayName())
 
 	// Print connection info in a single, logically-grouped block:
 	// 1) Admin UI URL + username + password
@@ -195,9 +258,9 @@ func (c *CouchDBService) Enable() error {
 	}
 
 	fmt.Println()
-	fmt.Println("CouchDB Admin UI:")
+	fmt.Printf("%s Admin UI:\n", c.displayName())
 	if metadata.Domain != "" {
-		hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
+		hostname := c.caddyHostname(metadata.Domain)
 		fmt.Printf("  URL:      https://%s/_utils/\n", hostname)
 		fmt.Println("  Username: admin")
 		fmt.Printf("  Password: %s\n", secrets.Password)
@@ -208,9 +271,9 @@ func (c *CouchDBService) Enable() error {
 	}
 
 	fmt.Println()
-	fmt.Println("CouchDB API:")
+	fmt.Printf("%s API:\n", c.displayName())
 	if metadata.Domain != "" {
-		hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
+		hostname := c.caddyHostname(metadata.Domain)
 		fmt.Printf("  URL:      https://%s/\n", hostname)
 	} else {
 		fmt.Printf("  URL:      (no domain configured)\n")
@@ -224,44 +287,41 @@ func (c *CouchDBService) Enable() error {
 
 // Disable disables the CouchDB service for the workspace
 func (c *CouchDBService) Disable() error {
-	fmt.Printf("Disabling CouchDB service for workspace '%s'\n", c.WorkspaceName)
-	
+	fmt.Printf("Disabling %s service for workspace '%s'\n", c.displayName(), c.WorkspaceName)
+
 	// Stop and remove the CouchDB container
 	if err := c.StopContainer(); err != nil {
-		fmt.Printf("Warning: failed to stop CouchDB container: %v\n", err)
+		fmt.Printf("Warning: failed to stop %s container: %v\n", c.displayName(), err)
 	}
-	
+
 	// Unregister from Caddy
 	if err := c.UnregisterFromCaddy(); err != nil {
 		fmt.Printf("Warning: failed to unregister from Caddy: %v\n", err)
 	}
-	
+
 	// Remove secrets file
-	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
+	secretsFile := filepath.Join(c.WorkspacePath, "secrets", c.secretsFileName())
 	if err := os.Remove(secretsFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove secrets file: %w", err)
 	}
-	
+
 	// Remove docker-compose file
-	composeFile := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
+	composeFile := filepath.Join(c.WorkspacePath, "deployment", c.composeFileName())
 	if err := os.Remove(composeFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove docker-compose file: %w", err)
 	}
-	
-	fmt.Println("CouchDB service disabled successfully!")
-	
+
+	fmt.Printf("%s service disabled successfully!\n", c.displayName())
+
 	return nil
 }
 
-// IsEnabled checks if CouchDB service is enabled for the workspace
+// IsEnabled checks if CouchDB service is enabled for the workspace.
+// Only checks for the secrets file — compose is now managed by gitops.
 func (c *CouchDBService) IsEnabled() bool {
-	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
-	composeFile := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
-	
-	_, secretsExists := os.Stat(secretsFile)
-	_, composeExists := os.Stat(composeFile)
-	
-	return secretsExists == nil && composeExists == nil
+	secretsFile := filepath.Join(c.WorkspacePath, "secrets", c.secretsFileName())
+	_, err := os.Stat(secretsFile)
+	return err == nil
 }
 
 // RegisterWithCaddy registers the CouchDB service with Caddy
@@ -271,22 +331,21 @@ func (c *CouchDBService) RegisterWithCaddy() error {
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
-	
+
 	if metadata.Domain == "" {
 		return fmt.Errorf("no domain configured for workspace '%s'", c.WorkspaceName)
 	}
-	
-	// Create hostname in the format: workspacename--couchdb.domain
-	hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
-	
+
+	hostname := c.caddyHostname(metadata.Domain)
+
 	// Register with Caddy using the container name as upstream
-	upstream := fmt.Sprintf("%s__couchdb:5984", c.WorkspaceName)
-	
+	upstream := fmt.Sprintf("%s:5984", c.containerName())
+
 	if err := caddyapi.AddRoute(hostname, upstream); err != nil {
-		return fmt.Errorf("failed to register CouchDB route: %w", err)
+		return fmt.Errorf("failed to register %s route: %w", c.displayName(), err)
 	}
-	
-	fmt.Printf("Registered CouchDB with Caddy: %s -> %s\n", hostname, upstream)
+
+	fmt.Printf("Registered %s with Caddy: %s -> %s\n", c.displayName(), hostname, upstream)
 	return nil
 }
 
@@ -297,19 +356,18 @@ func (c *CouchDBService) UnregisterFromCaddy() error {
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
-	
+
 	if metadata.Domain == "" {
 		return fmt.Errorf("no domain configured for workspace '%s'", c.WorkspaceName)
 	}
-	
-	// Create hostname in the format: workspacename--couchdb.domain
-	hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
-	
+
+	hostname := c.caddyHostname(metadata.Domain)
+
 	if err := caddyapi.RemoveRoute(hostname); err != nil {
-		return fmt.Errorf("failed to unregister CouchDB route: %w", err)
+		return fmt.Errorf("failed to unregister %s route: %w", c.displayName(), err)
 	}
-	
-	fmt.Printf("Unregistered CouchDB from Caddy: %s\n", hostname)
+
+	fmt.Printf("Unregistered %s from Caddy: %s\n", c.displayName(), hostname)
 	return nil
 }
 
@@ -328,33 +386,33 @@ func (c *CouchDBService) ShowAccessInfo() error {
 	if err != nil {
 		return err
 	}
-	
-	fmt.Println("\nCouchDB Access Information:")
-	
+
+	fmt.Printf("\n%s Access Information:\n", c.displayName())
+
 	if metadata.Domain != "" {
-		hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
+		hostname := c.caddyHostname(metadata.Domain)
 		fmt.Printf("  Web access: https://%s\n", hostname)
 		fmt.Printf("  Admin UI:   https://%s/_utils/\n", hostname)
 	} else {
 		fmt.Printf("  No domain configured - web access not available\n")
 	}
-	
+
 	return nil
 }
 
 // StartContainer starts the CouchDB container using docker-compose
 func (c *CouchDBService) StartContainer() error {
 	deploymentDir := filepath.Join(c.WorkspacePath, "deployment")
-	composeFile := filepath.Join(deploymentDir, "docker-compose-couchdb.yml")
-	
+	composeFile := filepath.Join(deploymentDir, c.composeFileName())
+
 	// Check if docker-compose file exists
 	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
 		return fmt.Errorf("docker-compose file not found: %s", composeFile)
 	}
-	
-	projectName := fmt.Sprintf("%s-couchdb", c.WorkspaceName)
-	
-	fmt.Printf("Starting CouchDB container (project: %s)...\n", projectName)
+
+	projectName := c.projectName()
+
+	fmt.Printf("Starting %s container (project: %s)...\n", c.displayName(), projectName)
 	
 	// Run docker-compose up -d
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "up", "-d")
@@ -362,21 +420,21 @@ func (c *CouchDBService) StartContainer() error {
 	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to start CouchDB container: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to start %s container: %w\nOutput: %s", c.displayName(), err, string(output))
 	}
-	
-	fmt.Printf("CouchDB container started successfully!\n")
+
+	fmt.Printf("%s container started successfully!\n", c.displayName())
 	return nil
 }
 
 // StopContainer stops and removes the CouchDB container
 func (c *CouchDBService) StopContainer() error {
 	deploymentDir := filepath.Join(c.WorkspacePath, "deployment")
-	composeFile := filepath.Join(deploymentDir, "docker-compose-couchdb.yml")
-	
-	projectName := fmt.Sprintf("%s-couchdb", c.WorkspaceName)
-	
-	fmt.Printf("Stopping CouchDB container (project: %s)...\n", projectName)
+	composeFile := filepath.Join(deploymentDir, c.composeFileName())
+
+	projectName := c.projectName()
+
+	fmt.Printf("Stopping %s container (project: %s)...\n", c.displayName(), projectName)
 	
 	// Run docker-compose down
 	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", projectName, "down")
@@ -384,16 +442,16 @@ func (c *CouchDBService) StopContainer() error {
 	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to stop CouchDB container: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to stop %s container: %w\nOutput: %s", c.displayName(), err, string(output))
 	}
-	
-	fmt.Printf("CouchDB container stopped successfully!\n")
+
+	fmt.Printf("%s container stopped successfully!\n", c.displayName())
 	return nil
 }
 
 // IsContainerRunning checks if the CouchDB container is currently running
 func (c *CouchDBService) IsContainerRunning() bool {
-	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
+	containerName := c.containerName()
 	
 	cmd := exec.Command("docker", "ps", "--filter", fmt.Sprintf("name=%s", containerName), "--format", "{{.Names}}")
 	output, err := cmd.Output()
@@ -406,15 +464,15 @@ func (c *CouchDBService) IsContainerRunning() bool {
 
 // ShowCredentials displays the CouchDB credentials from the secrets file
 func (c *CouchDBService) ShowCredentials() error {
-	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
-	
+	secretsFile := filepath.Join(c.WorkspacePath, "secrets", c.secretsFileName())
+
 	// Read the secrets file
 	data, err := os.ReadFile(secretsFile)
 	if err != nil {
 		return fmt.Errorf("failed to read secrets file: %w", err)
 	}
-	
-	fmt.Println("\nCouchDB Credentials:")
+
+	fmt.Printf("\n%s Credentials:\n", c.displayName())
 	
 	// Parse and display the credentials
 	lines := strings.Split(string(data), "\n")
@@ -442,8 +500,8 @@ func (c *CouchDBService) UpdateImage(newImage string) error {
 		return nil
 	}
 	
-	// Read the current docker-compose-couchdb.yml file
-	composePath := filepath.Join(c.WorkspacePath, "deployment", "docker-compose-couchdb.yml")
+	// Read the current docker-compose file
+	composePath := filepath.Join(c.WorkspacePath, "deployment", c.composeFileName())
 	data, err := os.ReadFile(composePath)
 	if err != nil {
 		return fmt.Errorf("failed to read docker-compose-couchdb.yml: %w", err)
@@ -491,7 +549,7 @@ func (c *CouchDBService) getLatestVersion() (string, error) {
 
 // getCredentials retrieves CouchDB credentials from the secrets file
 func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
-	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
+	secretsFile := filepath.Join(c.WorkspacePath, "secrets", c.secretsFileName())
 	
 	data, err := os.ReadFile(secretsFile)
 	if err != nil {
@@ -522,7 +580,7 @@ func (c *CouchDBService) getCredentials() (*CouchDBSecrets, error) {
 // Documents are stored as JSON, attachments are stored as separate binary files
 // Structure: {dbname}/documents.json + {dbname}/attachments/{docid}/{attname}
 func (c *CouchDBService) Backup(backupPath string) error {
-	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
+	containerName := c.containerName()
 
 	// Check if container is running
 	if !c.IsContainerRunning() {
@@ -785,8 +843,8 @@ func (c *CouchDBService) Backup(backupPath string) error {
 	}
 
 	// Generate tarball filename with date and time
-	// Format: couchdb-backup-YYYYMMDD-HHMMSS.tar.gz
-	tarballName := fmt.Sprintf("couchdb-backup-%s.tar.gz", backupTime.Format("20060102-150405"))
+	// Format: couchdb-backup-YYYYMMDD-HHMMSS.tar.gz or couchdb-foo-backup-YYYYMMDD-HHMMSS.tar.gz
+	tarballName := fmt.Sprintf("%s-backup-%s.tar.gz", c.backupPrefix(), backupTime.Format("20060102-150405"))
 
 	// Create tarball in the temp directory first (inside daemon container)
 	tempTarballPath := filepath.Join(tempDir, tarballName)
@@ -907,7 +965,7 @@ func (c *CouchDBService) createTarball(sourceDir, tarballPath string) error {
 // Supports both v1 (inline attachments) and v2 (separate attachment files) formats
 // If force is true, skip confirmation prompts for existing databases
 func (c *CouchDBService) Restore(backupPath string, force bool) error {
-	containerName := fmt.Sprintf("%s__couchdb", c.WorkspaceName)
+	containerName := c.containerName()
 
 	// Check if container is running
 	if !c.IsContainerRunning() {

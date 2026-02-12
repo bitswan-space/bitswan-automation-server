@@ -126,7 +126,7 @@ func newEditorDisableCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.DisableService("editor", workspace)
+			result, err := client.DisableService("editor", workspace, "")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -166,7 +166,7 @@ func newEditorStatusCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.GetServiceStatus("editor", workspace, showPasswords)
+			result, err := client.GetServiceStatus("editor", workspace, "", showPasswords)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -228,7 +228,7 @@ func newEditorStartCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.StartService("editor", workspace)
+			result, err := client.StartService("editor", workspace, "")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -267,7 +267,7 @@ func newEditorStopCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.StopService("editor", workspace)
+			result, err := client.StopService("editor", workspace, "")
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)

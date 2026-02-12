@@ -32,6 +32,7 @@ func NewKafkaCmd() *cobra.Command {
 
 func newKafkaEnableCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -53,7 +54,12 @@ func newKafkaEnableCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.EnableService("kafka", workspace, make(map[string]interface{}))
+			options := make(map[string]interface{})
+			if stage != "" {
+				options["stage"] = stage
+			}
+
+			result, err := client.EnableService("kafka", workspace, options)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -67,12 +73,14 @@ func newKafkaEnableCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
 
 func newKafkaDisableCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "disable",
@@ -94,7 +102,7 @@ func newKafkaDisableCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.DisableService("kafka", workspace)
+			result, err := client.DisableService("kafka", workspace, stage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -106,6 +114,7 @@ func newKafkaDisableCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
@@ -113,6 +122,7 @@ func newKafkaDisableCmd() *cobra.Command {
 func newKafkaStatusCmd() *cobra.Command {
 	var showPasswords bool
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -134,7 +144,7 @@ func newKafkaStatusCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.GetServiceStatus("kafka", workspace, showPasswords)
+			result, err := client.GetServiceStatus("kafka", workspace, stage, showPasswords)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -163,12 +173,14 @@ func newKafkaStatusCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&showPasswords, "passwords", false, "Show Kafka credentials")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
 
 func newKafkaStartCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "start",
@@ -190,7 +202,7 @@ func newKafkaStartCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.StartService("kafka", workspace)
+			result, err := client.StartService("kafka", workspace, stage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -202,12 +214,14 @@ func newKafkaStartCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
 
 func newKafkaStopCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "stop",
@@ -229,7 +243,7 @@ func newKafkaStopCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.StopService("kafka", workspace)
+			result, err := client.StopService("kafka", workspace, stage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -241,6 +255,7 @@ func newKafkaStopCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
@@ -249,6 +264,7 @@ func newKafkaUpdateCmd() *cobra.Command {
 	var kafkaImage string
 	var zookeeperImage string
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -271,6 +287,9 @@ func newKafkaUpdateCmd() *cobra.Command {
 			}
 
 			options := make(map[string]interface{})
+			if stage != "" {
+				options["stage"] = stage
+			}
 			if kafkaImage != "" {
 				options["kafka_image"] = kafkaImage
 			}
@@ -292,6 +311,7 @@ func newKafkaUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&kafkaImage, "kafka-image", "", "Custom image for Kafka")
 	cmd.Flags().StringVar(&zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
