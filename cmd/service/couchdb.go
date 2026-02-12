@@ -35,6 +35,7 @@ func NewCouchDBCmd() *cobra.Command {
 
 func newCouchDBEnableCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -56,7 +57,12 @@ func newCouchDBEnableCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.EnableService("couchdb", workspace, make(map[string]interface{}))
+			options := make(map[string]interface{})
+			if stage != "" {
+				options["stage"] = stage
+			}
+
+			result, err := client.EnableService("couchdb", workspace, options)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -70,12 +76,14 @@ func newCouchDBEnableCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
 
 func newCouchDBDisableCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "disable",
@@ -97,7 +105,7 @@ func newCouchDBDisableCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.DisableService("couchdb", workspace)
+			result, err := client.DisableService("couchdb", workspace, stage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -109,6 +117,7 @@ func newCouchDBDisableCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
@@ -116,6 +125,7 @@ func newCouchDBDisableCmd() *cobra.Command {
 func newCouchDBStatusCmd() *cobra.Command {
 	var showPasswords bool
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -137,7 +147,7 @@ func newCouchDBStatusCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.GetServiceStatus("couchdb", workspace, showPasswords)
+			result, err := client.GetServiceStatus("couchdb", workspace, stage, showPasswords)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -166,12 +176,14 @@ func newCouchDBStatusCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&showPasswords, "passwords", false, "Show CouchDB credentials")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
 
 func newCouchDBStartCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "start",
@@ -193,7 +205,7 @@ func newCouchDBStartCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.StartService("couchdb", workspace)
+			result, err := client.StartService("couchdb", workspace, stage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -205,12 +217,14 @@ func newCouchDBStartCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
 
 func newCouchDBStopCmd() *cobra.Command {
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "stop",
@@ -232,7 +246,7 @@ func newCouchDBStopCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.StopService("couchdb", workspace)
+			result, err := client.StopService("couchdb", workspace, stage)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -244,6 +258,7 @@ func newCouchDBStopCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
@@ -251,6 +266,7 @@ func newCouchDBStopCmd() *cobra.Command {
 func newCouchDBUpdateCmd() *cobra.Command {
 	var couchdbImage string
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -273,6 +289,9 @@ func newCouchDBUpdateCmd() *cobra.Command {
 			}
 
 			options := make(map[string]interface{})
+			if stage != "" {
+				options["stage"] = stage
+			}
 			if couchdbImage != "" {
 				options["couchdb_image"] = couchdbImage
 			}
@@ -290,6 +309,7 @@ func newCouchDBUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&couchdbImage, "couchdb-image", "", "Custom image for CouchDB")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
@@ -297,6 +317,7 @@ func newCouchDBUpdateCmd() *cobra.Command {
 func newCouchDBBackupCmd() *cobra.Command {
 	var backupPath string
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "backup",
@@ -331,7 +352,7 @@ func newCouchDBBackupCmd() *cobra.Command {
 				}
 			}
 
-			result, err := client.BackupCouchDB(workspace, absBackupPath)
+			result, err := client.BackupCouchDB(workspace, stage, absBackupPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -346,6 +367,7 @@ func newCouchDBBackupCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&backupPath, "path", "", "Directory where the backup tarball will be saved (required)")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 	cmd.MarkFlagRequired("path")
 
 	return cmd
@@ -354,6 +376,7 @@ func newCouchDBBackupCmd() *cobra.Command {
 func newCouchDBRestoreCmd() *cobra.Command {
 	var backupPath string
 	var workspace string
+	var stage string
 
 	cmd := &cobra.Command{
 		Use:   "restore",
@@ -389,7 +412,7 @@ func newCouchDBRestoreCmd() *cobra.Command {
 			}
 
 			// Use interactive job API for restore to handle prompts
-			err = client.RestoreCouchDBInteractive(workspace, absBackupPath)
+			err = client.RestoreCouchDBInteractive(workspace, stage, absBackupPath)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -401,6 +424,7 @@ func newCouchDBRestoreCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&backupPath, "path", "", "Path to the backup tarball (.tar.gz) or directory (required)")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 	cmd.MarkFlagRequired("path")
 
 	return cmd

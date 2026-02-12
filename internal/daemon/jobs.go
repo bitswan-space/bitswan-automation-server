@@ -298,7 +298,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	case "couchdb_restore":
 		workspace := req.Workspace
 		backupPath, _ := req.Params["backup_path"].(string)
-		go s.runCouchDBRestoreJob(job, workspace, backupPath)
+		stage, _ := req.Params["stage"].(string)
+		go s.runCouchDBRestoreJob(job, workspace, stage, backupPath)
 	default:
 		job.Complete(fmt.Errorf("unknown job type: %s", req.Type))
 	}
@@ -464,7 +465,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 // runCouchDBRestoreJob runs the CouchDB restore as an interactive job
-func (s *Server) runCouchDBRestoreJob(job *Job, workspace, backupPath string) {
+func (s *Server) runCouchDBRestoreJob(job *Job, workspace, stage, backupPath string) {
 	defer func() {
 		if r := recover(); r != nil {
 			job.Complete(fmt.Errorf("panic: %v", r))
@@ -561,8 +562,8 @@ func (s *Server) runCouchDBRestoreJob(job *Job, workspace, backupPath string) {
 		}
 	}()
 
-	// Run the actual restore
-	err := s.restoreCouchDB(workspace, backupPath, false)
+	// Proxy the restore to gitops
+	err := s.proxyCouchDBRestore(workspace, stage, backupPath)
 
 	// Close write end first to signal EOF to reader
 	stdoutW.Close()

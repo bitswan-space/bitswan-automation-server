@@ -762,6 +762,9 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	}
 
 	// Set service-specific options
+	if stage, ok := options["stage"].(string); ok {
+		reqBody.Stage = stage
+	}
 	if editorImage, ok := options["editor_image"].(string); ok {
 		reqBody.EditorImage = editorImage
 	}
@@ -1069,10 +1072,11 @@ func (c *Client) streamLogs(body io.Reader, output io.Writer) (*ServiceResponse,
 }
 
 // DisableService disables a service
-func (c *Client) DisableService(serviceType, workspace string) (*ServiceResponse, error) {
+func (c *Client) DisableService(serviceType, workspace, stage string) (*ServiceResponse, error) {
 	reqBody := ServiceDisableRequest{
 		ServiceType: serviceType,
 		Workspace:   workspace,
+		Stage:       stage,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -1114,8 +1118,11 @@ func (c *Client) DisableService(serviceType, workspace string) (*ServiceResponse
 }
 
 // GetServiceStatus gets the status of a service
-func (c *Client) GetServiceStatus(serviceType, workspace string, showPasswords bool) (*ServiceResponse, error) {
+func (c *Client) GetServiceStatus(serviceType, workspace, stage string, showPasswords bool) (*ServiceResponse, error) {
 	url := fmt.Sprintf("http://unix/service/%s/status?workspace=%s", serviceType, workspace)
+	if stage != "" {
+		url += "&stage=" + stage
+	}
 	if showPasswords {
 		url += "&show_passwords=true"
 	}
@@ -1153,10 +1160,11 @@ func (c *Client) GetServiceStatus(serviceType, workspace string, showPasswords b
 }
 
 // StartService starts a service
-func (c *Client) StartService(serviceType, workspace string) (*ServiceResponse, error) {
+func (c *Client) StartService(serviceType, workspace, stage string) (*ServiceResponse, error) {
 	reqBody := ServiceStartRequest{
 		ServiceType: serviceType,
 		Workspace:   workspace,
+		Stage:       stage,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -1198,10 +1206,11 @@ func (c *Client) StartService(serviceType, workspace string) (*ServiceResponse, 
 }
 
 // StopService stops a service
-func (c *Client) StopService(serviceType, workspace string) (*ServiceResponse, error) {
+func (c *Client) StopService(serviceType, workspace, stage string) (*ServiceResponse, error) {
 	reqBody := ServiceStopRequest{
 		ServiceType: serviceType,
 		Workspace:   workspace,
+		Stage:       stage,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -1250,6 +1259,9 @@ func (c *Client) UpdateService(serviceType, workspace string, options map[string
 	}
 
 	// Set service-specific options
+	if stage, ok := options["stage"].(string); ok {
+		reqBody.Stage = stage
+	}
 	if editorImage, ok := options["editor_image"].(string); ok {
 		reqBody.EditorImage = editorImage
 	}
@@ -1305,10 +1317,11 @@ func (c *Client) UpdateService(serviceType, workspace string, options map[string
 }
 
 // BackupCouchDB creates a backup of CouchDB
-func (c *Client) BackupCouchDB(workspace, backupPath string) (*ServiceResponse, error) {
+func (c *Client) BackupCouchDB(workspace, stage, backupPath string) (*ServiceResponse, error) {
 	reqBody := ServiceBackupRequest{
 		Workspace:  workspace,
 		BackupPath: backupPath,
+		Stage:      stage,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -1549,11 +1562,15 @@ func (c *Client) SendJobInput(jobID, input string) error {
 }
 
 // RestoreCouchDBInteractive restores CouchDB using the interactive job API
-func (c *Client) RestoreCouchDBInteractive(workspace, backupPath string) error {
+func (c *Client) RestoreCouchDBInteractive(workspace, stage, backupPath string) error {
 	// Create the job
-	jobID, err := c.CreateJob("couchdb_restore", workspace, map[string]interface{}{
+	params := map[string]interface{}{
 		"backup_path": backupPath,
-	})
+	}
+	if stage != "" {
+		params["stage"] = stage
+	}
+	jobID, err := c.CreateJob("couchdb_restore", workspace, params)
 	if err != nil {
 		return err
 	}
