@@ -1,12 +1,17 @@
 package daemon
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/bitswan-space/bitswan-workspaces/internal/workspace"
@@ -248,88 +253,55 @@ func fixEditorPermissions(workspaceName string) error {
 	return nil
 }
 
-// updateKafkaService updates the Kafka service for a specific workspace
+// updateKafkaService updates the Kafka service via the gitops API
 func updateKafkaService(workspaceName, kafkaImage, zookeeperImage string) error {
-	kafkaService, err := services.NewKafkaService(workspaceName)
-	if err != nil {
-		return fmt.Errorf("failed to create Kafka service: %w", err)
+	body := gitopsServiceRequest{
+		KafkaImage: kafkaImage,
 	}
-
-	if !kafkaService.IsEnabled() {
-		fmt.Printf("Kafka service is not enabled for workspace '%s', skipping update\n", workspaceName)
-		return nil
-	}
-
-	fmt.Println("Stopping current Kafka containers...")
-	if err := kafkaService.StopContainer(); err != nil {
-		return fmt.Errorf("failed to stop current Kafka containers: %w", err)
-	}
-
-	if kafkaImage != "" || zookeeperImage != "" {
-		bitswanKafkaImage := kafkaImage
-		if bitswanKafkaImage == "" {
-			bitswanKafkaImage = "bitswan/bitswan-kafka:latest"
-		}
-
-		bitswanZookeeperImage := zookeeperImage
-		if bitswanZookeeperImage == "" {
-			bitswanZookeeperImage = "bitswan/bitswan-zookeeper:latest"
-		}
-
-		fmt.Printf("Updating Kafka service with custom images:\n")
-		fmt.Printf("  Kafka: %s\n", bitswanKafkaImage)
-		fmt.Printf("  Zookeeper: %s\n", bitswanZookeeperImage)
-
-		if err := kafkaService.UpdateImages(bitswanKafkaImage, bitswanZookeeperImage); err != nil {
-			return fmt.Errorf("failed to update docker-compose file: %w", err)
-		}
-	} else {
-		fmt.Println("Updating Kafka service to latest versions...")
-		if err := kafkaService.UpdateToLatest(); err != nil {
-			return fmt.Errorf("failed to update to latest versions: %w", err)
-		}
-	}
-
-	fmt.Println("Starting Kafka containers with new images...")
-	if err := kafkaService.StartContainer(); err != nil {
-		return fmt.Errorf("failed to start Kafka containers: %w", err)
-	}
-
-	return nil
+	return callGitopsService(workspaceName, "kafka", "update", body)
 }
 
-// updateCouchDBService updates the CouchDB service for a specific workspace
+// updateCouchDBService updates the CouchDB service via the gitops API
 func updateCouchDBService(workspaceName, couchdbImage string) error {
-	couchdbService, err := services.NewCouchDBService(workspaceName)
+	body := gitopsServiceRequest{
+		Image: couchdbImage,
+	}
+	return callGitopsService(workspaceName, "couchdb", "update", body)
+}
+
+// callGitopsService sends a POST request to a gitops service endpoint.
+func callGitopsService(workspaceName, serviceType, action string, body interface{}) error {
+	metadata, err := config.GetWorkspaceMetadata(workspaceName)
 	if err != nil {
-		return fmt.Errorf("failed to create CouchDB service: %w", err)
+		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
 
-	if !couchdbService.IsEnabled() {
-		fmt.Printf("CouchDB service is not enabled for workspace '%s', skipping update\n", workspaceName)
-		return nil
+	gitopsPath := fmt.Sprintf("/services/%s/%s", serviceType, action)
+	reqURL := fmt.Sprintf("%s%s", metadata.GitopsURL, gitopsPath)
+	reqURL = automations.TransformURLForDaemon(reqURL, workspaceName)
+
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	fmt.Println("Stopping current CouchDB container...")
-	if err := couchdbService.StopContainer(); err != nil {
-		return fmt.Errorf("failed to stop current CouchDB container: %w", err)
+	req, err := http.NewRequest("POST", reqURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+metadata.GitopsSecret)
 
-	if couchdbImage != "" {
-		fmt.Printf("Updating CouchDB service with custom image: %s\n", couchdbImage)
-		if err := couchdbService.UpdateImage(couchdbImage); err != nil {
-			return fmt.Errorf("failed to update docker-compose file: %w", err)
-		}
-	} else {
-		fmt.Println("Updating CouchDB service to latest version...")
-		if err := couchdbService.UpdateToLatest(); err != nil {
-			return fmt.Errorf("failed to update to latest version: %w", err)
-		}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to gitops: %w", err)
 	}
+	defer resp.Body.Close()
 
-	fmt.Println("Starting CouchDB container with new image...")
-	if err := couchdbService.StartContainer(); err != nil {
-		return fmt.Errorf("failed to start CouchDB container: %w", err)
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("gitops returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
