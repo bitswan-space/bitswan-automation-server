@@ -345,7 +345,7 @@ func initWorkspaceCaddy(workspaceName string, verbose bool) (bool, error) {
 	// Try to connect via container name (if we're on the same network) or use docker exec
 	workspaceCaddyURL := fmt.Sprintf("http://%s:2019", containerName)
 
-	// First try direct connection (if daemon is on bitswan_caddy network)
+	// First try direct connection (if daemon is on bitswan_network)
 	client := &http.Client{
 		Timeout: 2 * time.Second,
 	}
