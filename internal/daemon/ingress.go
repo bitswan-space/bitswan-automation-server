@@ -1,20 +1,18 @@
 package daemon
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 )
 
 // IngressInitRequest represents the request to initialize ingress
@@ -213,7 +211,7 @@ func initIngress(verbose bool) (bool, error) {
 		}
 	}
 
-	if err := runCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
+	if err := util.RunCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
 		return false, fmt.Errorf("failed to start ingress: %w", err)
 	}
 
@@ -235,16 +233,15 @@ func initCaddy(workspaceName string, verbose bool) (bool, error) {
 	homeDir := os.Getenv("HOME")
 	workspaceConfig := fmt.Sprintf("%s/.config/bitswan/workspaces/%s", homeDir, workspaceName)
 	caddyConfig := workspaceConfig + "/caddy"
-	setup_tls := workspaceName == ""
 
 	caddyProjectName := "bitswan-caddy"
 	if workspaceName != "" {
-			caddyProjectName = fmt.Sprintf("bitswan-%s-caddy", workspaceName)
+		caddyProjectName = fmt.Sprintf("bitswan-%s-caddy", workspaceName)
 	}
 
 	containerName := "bitswan-caddy"
 	if workspaceName != "" {
-			containerName = fmt.Sprintf("%s__caddy", workspaceName)
+		containerName = fmt.Sprintf("%s__caddy", workspaceName)
 	}
 
 	// Check if workspace caddy container already exists
@@ -339,7 +336,7 @@ func initCaddy(workspaceName string, verbose bool) (bool, error) {
 		}
 	}
 
-	if err := runCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
+	if err := util.RunCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
 		return false, fmt.Errorf("failed to start workspace caddy: %w", err)
 	}
 
@@ -389,73 +386,6 @@ func initCaddy(workspaceName string, verbose bool) (bool, error) {
 	}
 
 	return true, nil
-}
-
-// runCommandVerbose runs a command with optional verbose output
-func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
-	var stdoutBuf, stderrBuf bytes.Buffer
-
-	if verbose {
-		// Set up pipes for real-time streaming
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			return fmt.Errorf("failed to create stdout pipe: %w", err)
-		}
-
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			return fmt.Errorf("failed to create stderr pipe: %w", err)
-		}
-
-		// Create multi-writers to both stream and capture output
-		stdoutWriter := io.MultiWriter(os.Stdout, &stdoutBuf)
-		stderrWriter := io.MultiWriter(os.Stderr, &stderrBuf)
-
-		// Start the command
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("failed to start command: %w", err)
-		}
-
-		// Copy stdout and stderr in separate goroutines
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		go func() {
-			defer wg.Done()
-			io.Copy(stdoutWriter, stdoutPipe)
-		}()
-
-		go func() {
-			defer wg.Done()
-			io.Copy(stderrWriter, stderrPipe)
-		}()
-
-		// Wait for all output to be processed
-		wg.Wait()
-
-		// Wait for command to complete
-		err = cmd.Wait()
-		if err != nil {
-			// Include captured output in error message
-			fullOutput := stdoutBuf.String() + stderrBuf.String()
-			return fmt.Errorf("%w\nOutput:\n%s", err, fullOutput)
-		}
-		return nil
-	} else {
-		// Not verbose, just capture output for potential error reporting
-		cmd.Stdout = &stdoutBuf
-		cmd.Stderr = &stderrBuf
-
-		err := cmd.Run()
-
-		// If command failed, return error with output
-		if err != nil {
-			fullOutput := stdoutBuf.String() + stderrBuf.String()
-			return fmt.Errorf("%w\nOutput:\n%s", err, fullOutput)
-		}
-
-		return nil
-	}
 }
 
 // parseJWTToken extracts workspace ID or workspace name from a JWT token
@@ -551,26 +481,13 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 
 	// Handle certificate generation and installation
 	if req.Mkcert {
-		// Extract domain from hostname
-		parts := strings.Split(req.Hostname, ".")
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid hostname format: must contain at least one dot")
-		}
-		domain := strings.Join(parts[1:], ".")
-
-		// Generate certificate for the specific hostname
-		if err := caddyapi.GenerateAndInstallCertsForHostname(req.Hostname, domain); err != nil {
+		// Generate and install certificates for the specific hostname
+		if err := caddyapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
 			return fmt.Errorf("failed to generate and install certificates: %w", err)
 		}
-
-		// Install TLS policies for the specific hostname
-		if err := caddyapi.InstallTLSCertsForHostname(req.Hostname, domain, "default"); err != nil {
-			return fmt.Errorf("failed to install TLS policies: %w", err)
-		}
 	} else if req.CertsDir != "" {
-		// Install certificates from directory
-		caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-		if err := caddyapi.InstallCertsFromDir(req.CertsDir, req.Hostname, caddyConfig); err != nil {
+		// Install certificates from directory and set up TLS policies
+		if err := caddyapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
 			return fmt.Errorf("failed to install certificates from directory: %w", err)
 		}
 	}
@@ -628,26 +545,13 @@ func addRouteToIngressWithWorkspace(hostname, upstream string, workspaceName str
 		// Handle certificate generation and installation for global caddy only
 		// Global caddy handles TLS termination and proxies to workspace caddy
 		if mkcert {
-			// Extract domain from hostname
-			parts := strings.Split(hostname, ".")
-			if len(parts) < 2 {
-				return fmt.Errorf("invalid hostname format: must contain at least one dot")
-			}
-			domain := strings.Join(parts[1:], ".")
-
-			// Generate certificate for the specific hostname (installs to global caddy)
-			if err := caddyapi.GenerateAndInstallCertsForHostname(hostname, domain); err != nil {
+			// Generate and install certificates for the specific hostname (installs to global caddy)
+			if err := caddyapi.InstallTLSCerts(hostname, true, ""); err != nil {
 				return fmt.Errorf("failed to generate and install certificates: %w", err)
 			}
-
-			// Install TLS policies for the specific hostname in global caddy
-			if err := caddyapi.InstallTLSCertsForHostname(hostname, domain, workspaceName); err != nil {
-				return fmt.Errorf("failed to install TLS policies: %w", err)
-			}
 		} else if certsDir != "" {
-			// Install certificates from directory to global caddy
-			caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-			if err := caddyapi.InstallCertsFromDir(certsDir, hostname, caddyConfig); err != nil {
+			// Install certificates from directory and set up TLS policies
+			if err := caddyapi.InstallTLSCerts(hostname, false, certsDir); err != nil {
 				return fmt.Errorf("failed to install certificates from directory: %w", err)
 			}
 		}
