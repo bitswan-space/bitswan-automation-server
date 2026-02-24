@@ -83,6 +83,48 @@ def run_command_background(cmd, description):
         return None
 
 
+def wait_for_daemon_ready(max_wait_seconds=10):
+    """
+    Wait for the daemon to be ready by checking if the socket exists and pinging it.
+    Checks every second for up to max_wait_seconds.
+    
+    Args:
+        max_wait_seconds: Maximum time to wait in seconds (default: 10)
+    
+    Returns:
+        True if daemon is ready, False otherwise
+    """
+    socket_path = Path("/var/run/bitswan/automation-server.sock")
+    print(f"Waiting for daemon to be ready (socket: {socket_path})...")
+    print(f"Will check every second for up to {max_wait_seconds} seconds...")
+    
+    for attempt in range(max_wait_seconds):
+        # Check if socket file exists
+        if socket_path.exists():
+            # Try to ping the daemon
+            try:
+                result = subprocess.run(
+                    ["./bitswan", "automation-server-daemon", "status"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=1,
+                    text=True
+                )
+                if result.returncode == 0:
+                    print(f"✓ Daemon is ready! (checked {attempt + 1} time(s))")
+                    return True
+            except Exception as e:
+                # Continue waiting if ping fails
+                pass
+        
+        if attempt < max_wait_seconds - 1:  # Don't sleep on last attempt
+            time.sleep(1)
+            print(f"  Attempt {attempt + 1}/{max_wait_seconds}: Daemon not ready yet...")
+    
+    print(f"✗ Error: Daemon did not become ready within {max_wait_seconds} seconds")
+    return False
+
+
 def main():
     print("Starting nuke script...")
     print("This script will clean up Docker containers, networks, and local config.")
@@ -221,6 +263,7 @@ def main():
         print("✗ ./bitswan does not exist after build!")
     
     # Step 7: Run bitswan automation-server-daemon (if build succeeded)
+    daemon_ready = False
     if build_success:
         daemon_process = run_command_background(
             ["./bitswan", "automation-server-daemon", "init"],
@@ -228,7 +271,7 @@ def main():
         )
         if daemon_process:
             # Give it a moment to start up
-            time.sleep(1)
+            time.sleep(2)
             # Check if it's still running (if it exited immediately, there was an error)
             if daemon_process.poll() is not None:
                 # Process already exited, try to read any output
@@ -241,12 +284,15 @@ def main():
                     pass
                 print(f"⚠ Daemon process exited immediately with code {daemon_process.returncode}")
             else:
-                print("✓ Daemon is running in background")
+                print("Daemon process started, waiting for it to be ready...")
+                # Wait for daemon to be ready (socket created and responding)
+                # Check every second for 10 seconds
+                daemon_ready = wait_for_daemon_ready(max_wait_seconds=10)
         else:
             print("✗ Failed to start daemon")
     
-    # Step 8: Run bitswan workspace init (if build succeeded AND bitswan is newer)
-    if build_success and bitswan_is_newer:
+    # Step 8: Run bitswan workspace init (if build succeeded AND bitswan is newer AND daemon is ready)
+    if build_success and bitswan_is_newer and True:
         print(f"\n{'='*60}")
         print("STEP: Initializing workspace")
         print(f"{'='*60}")
@@ -255,6 +301,10 @@ def main():
             "Initializing workspace 'test1' with 'bitswan workspace init --local test1'",
             check_success=True
         )
+    elif build_success and bitswan_is_newer and not daemon_ready:
+        print(f"\n{'='*60}")
+        print("Skipping workspace init: Daemon is not ready")
+        print(f"{'='*60}")
     elif build_success and not bitswan_is_newer:
         print(f"\n{'='*60}")
         print("Skipping workspace init: ./bitswan was not updated by the build")
