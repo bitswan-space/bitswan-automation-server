@@ -64,27 +64,37 @@ func getWorkspaceCaddyBaseURL(workspaceName string) string {
 	return fmt.Sprintf("http://%s:2019", containerName)
 }
 
-// getCaddyBaseURL returns the base URL for the Caddy API, preferring
-// the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
-// to http://localhost:2019. It also normalizes the value by ensuring a scheme
-// and stripping any trailing slash.
-func getCaddyBaseURL() string {
-    host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
-    if host == "" {
-        return "http://localhost:2019"
-    }
+// GetWorkspaceCaddyBaseURL is the public version of getWorkspaceCaddyBaseURL
+func GetWorkspaceCaddyBaseURL(workspaceName string) string {
+	return getWorkspaceCaddyBaseURL(workspaceName)
+}
 
-    // Prepend default scheme if missing
-    if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
-        host = "http://" + host
-    }
+// getCaddyBaseURL returns the base URL for the Caddy API. If workspaceName is
+// provided and non-empty, it returns http://<workspaceName>__caddy:2019.
+// Otherwise it prefers the BITSWAN_CADDY_HOST environment variable if set,
+// defaulting to http://localhost:2019. It also normalizes the value by ensuring
+// a scheme and stripping any trailing slash.
+func getCaddyBaseURL(workspaceName ...string) string {
+	if len(workspaceName) > 0 && workspaceName[0] != "" {
+		return fmt.Sprintf("http://%s__caddy:2019", workspaceName[0])
+	}
 
-    // Strip trailing slash if present
-    if strings.HasSuffix(host, "/") {
-        host = strings.TrimRight(host, "/")
-    }
+	host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
+	if host == "" {
+		return "http://localhost:2019"
+	}
 
-    return host
+	// Prepend default scheme if missing
+	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+		host = "http://" + host
+	}
+
+	// Strip trailing slash if present
+	if strings.HasSuffix(host, "/") {
+		host = strings.TrimRight(host, "/")
+	}
+
+	return host
 }
 
 func RegisterServiceWithCaddy(serviceName, workspaceName, domain, upstream string) error {
@@ -119,7 +129,91 @@ func UnregisterCaddyService(serviceName, workspaceName, domain string) error {
 	return nil
 }
 
-func InstallTLSCerts(workspaceName, domain string) error {
+// InstallTLSCerts installs TLS certificates and policies
+// Parameters:
+//   - hostname: the hostname for the certificate (empty for wildcard)
+//   - local: if true, use mkcert to generate local certificates (default: false)
+//   - domain_dir: directory containing certificates to install (optional, default: empty)
+//
+// Logic:
+//   - If domain_dir is provided: install certificates from that directory
+//   - If local=true and domain_dir is empty and hostname is not empty: generate certs for hostname using mkcert
+//   - If hostname is empty, local=true, and domain_dir is empty: generate wildcard certs (extract domain from context if available)
+//   - Otherwise: return error "cannot use mkcert to generate non-local certificates"
+//
+// Note: For wildcard certificates (hostname empty), domain must be extractable from context.
+// workspaceName defaults to "default" if not provided via additional optional parameters.
+func InstallTLSCerts(hostname string, local bool, domain_dir string) error {
+	// Set defaults
+	workspaceName := "default"
+	var domain string
+	var certDir string
+	var err error
+	var targetHostname string
+	var useWildcard bool
+
+	// Determine which path to take
+	if domain_dir != "" {
+		// Install from directory
+		caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+		if hostname == "" {
+			return fmt.Errorf("hostname is required when installing from directory")
+		}
+		targetHostname = hostname
+		if err := InstallCertsFromDir(domain_dir, targetHostname, caddyConfig); err != nil {
+			return fmt.Errorf("failed to install certificates from directory: %w", err)
+		}
+		// Extract domain from hostname for TLS policy
+		parts := strings.Split(hostname, ".")
+		if len(parts) >= 2 {
+			domain = strings.Join(parts[1:], ".")
+		}
+	} else if local {
+		// Generate certificates using mkcert
+		if hostname == "" {
+			// Generate wildcard certificates - need domain
+			if domain == "" {
+				return fmt.Errorf("domain is required for wildcard certificate generation when hostname is empty")
+			}
+			useWildcard = true
+			certDir, err = generateWildcardCerts(domain)
+			if err != nil {
+				return fmt.Errorf("failed to generate wildcard certificates: %w", err)
+			}
+			targetHostname = domain
+			// Install to filesystem
+			caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+			if err := InstallCertsFromDir(certDir, targetHostname, caddyConfig); err != nil {
+				os.RemoveAll(certDir)
+				return fmt.Errorf("failed to install wildcard certificates: %w", err)
+			}
+			defer os.RemoveAll(certDir)
+		} else {
+			// Generate certificates for specific hostname
+			// Extract domain from hostname
+			parts := strings.Split(hostname, ".")
+			if len(parts) < 2 {
+				return fmt.Errorf("invalid hostname format: must contain at least one dot")
+			}
+			domain = strings.Join(parts[1:], ".")
+			certDir, err = generateCertsForHostname(hostname)
+			if err != nil {
+				return fmt.Errorf("failed to generate certificates for hostname: %w", err)
+			}
+			targetHostname = hostname
+			// Install to filesystem
+			caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
+			if err := InstallCertsFromDir(certDir, targetHostname, caddyConfig); err != nil {
+				os.RemoveAll(certDir)
+				return fmt.Errorf("failed to install certificates: %w", err)
+			}
+			defer os.RemoveAll(certDir)
+		}
+	} else {
+		return fmt.Errorf("cannot use mkcert to generate non-local certificates")
+	}
+
+	// Install TLS policies to Caddy
 	// Initialize TLS app structure first
 	tlsAppSet := getCaddyBaseURL() + "/config/apps/tls"
 	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
@@ -147,13 +241,18 @@ func InstallTLSCerts(workspaceName, domain string) error {
 	}
 
 	// Define TLS policies and certificates
+	var sniMatch []string
+	if useWildcard {
+		sniMatch = []string{fmt.Sprintf("*.%s", domain)}
+	} else {
+		sniMatch = []string{targetHostname}
+	}
+
 	tlsPolicy := []TLSPolicy{
 		{
-			ID: fmt.Sprintf("%s_tlspolicy", workspaceName),
+			ID: fmt.Sprintf("%s_%s_tlspolicy", workspaceName, strings.ReplaceAll(targetHostname, ".", "_")),
 			Match: TLSMatch{
-				SNI: []string{
-					fmt.Sprintf("*.%s", domain),
-				},
+				SNI: sniMatch,
 			},
 			CertificateSelection: TLSCertificateSelection{
 				AnyTag: []string{workspaceName},
@@ -163,9 +262,9 @@ func InstallTLSCerts(workspaceName, domain string) error {
 
 	tlsLoad := []TLSFileLoad{
 		{
-			ID:          fmt.Sprintf("%s_tlscerts", workspaceName),
-			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(domain)),
-			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(domain)),
+			ID:          fmt.Sprintf("%s_%s_tlscerts", workspaceName, strings.ReplaceAll(targetHostname, ".", "_")),
+			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(targetHostname)),
+			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(targetHostname)),
 			Tags:        []string{workspaceName},
 		},
 	}
@@ -229,6 +328,32 @@ func InitCaddy() error {
 	}
 
 	fmt.Println("Caddy initialized successfully!")
+	return nil
+}
+
+// InitWorkspaceCaddy initializes a workspace caddy to only listen on HTTP (port 80)
+// and disables automatic HTTPS
+func InitWorkspaceCaddy() error {
+	// Initialize routes
+	routesURL := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
+	if err := InitSet(routesURL, []byte(`[]`)); err != nil {
+		return fmt.Errorf("failed to initialize routes: %w", err)
+	}
+
+	// Only listen on port 80 (HTTP only, no HTTPS)
+	listenURL := getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen"
+	if err := InitSet(listenURL, []byte(`[":80"]`)); err != nil {
+		return fmt.Errorf("failed to initialize listen ports: %w", err)
+	}
+
+	// Disable automatic HTTPS
+	autoHTTPSURL := getCaddyBaseURL() + "/config/apps/http/servers/srv0/automatic_https"
+	if err := InitSet(autoHTTPSURL, []byte(`{"disable": true}`)); err != nil {
+		// Non-fatal - older Caddy versions might not support this
+		fmt.Printf("Warning: failed to disable automatic HTTPS (might not be supported): %v\n", err)
+	}
+
+	fmt.Println("Workspace Caddy initialized successfully (HTTP only)!")
 	return nil
 }
 
@@ -412,11 +537,21 @@ func RegisterWorkspaceRouting(workspaceName, domain string) error {
 }
 
 // AddRoute adds a generic route for any hostname to upstream mapping
+// Uses the default caddy base URL from getCaddyBaseURL()
 func AddRoute(hostname, upstream string) error {
-	caddyAPIRoutesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes/..."
+	return AddRouteWithCaddy(hostname, upstream, "")
+}
+
+// AddRouteWithCaddy adds a generic route for any hostname to upstream mapping
+// If caddyBaseURL is empty, uses getCaddyBaseURL()
+func AddRouteWithCaddy(hostname, upstream, caddyBaseURL string) error {
+	if caddyBaseURL == "" {
+		caddyBaseURL = getCaddyBaseURL()
+	}
+	caddyAPIRoutesBaseUrl := caddyBaseURL + "/config/apps/http/servers/srv0/routes/..."
 
 	// First, remove any existing routes with the same ID to avoid duplicates
-	if err := RemoveRoute(hostname); err != nil {
+	if err := RemoveRouteWithCaddy(hostname, caddyBaseURL); err != nil {
 		return fmt.Errorf("failed to remove existing route before adding new one for %s: %w", hostname, err)
 	}
 
@@ -467,7 +602,7 @@ func AddRoute(hostname, upstream string) error {
 	}
 
 	// Verify the route was added correctly by fetching it back
-	verifyRoutes, err := ListRoutes()
+	verifyRoutes, err := ListRoutesWithCaddy(caddyBaseURL)
 	if err == nil {
 		for _, r := range verifyRoutes {
 			if r.ID == routeID {
@@ -487,12 +622,22 @@ func AddRoute(hostname, upstream string) error {
 }
 
 // RemoveRoute removes a route by hostname, retrying until 404 is returned
+// Uses the default caddy base URL from getCaddyBaseURL()
 func RemoveRoute(hostname string) error {
+	return RemoveRouteWithCaddy(hostname, "")
+}
+
+// RemoveRouteWithCaddy removes a route by hostname
+// If caddyBaseURL is empty, uses getCaddyBaseURL()
+func RemoveRouteWithCaddy(hostname, caddyBaseURL string) error {
+	if caddyBaseURL == "" {
+		caddyBaseURL = getCaddyBaseURL()
+	}
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
 
 	// Construct the URL for the specific route
-	url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", routeID)
+	url := fmt.Sprintf(caddyBaseURL+"/id/%s", routeID)
 
 	// Try to delete once - if it fails with 404, the route doesn't exist (success)
 	// If it fails with other errors, return the error immediately
@@ -517,8 +662,18 @@ func RemoveRoute(hostname string) error {
 }
 
 // ListRoutes retrieves and lists all current routes from Caddy
+// Uses the default caddy base URL from getCaddyBaseURL()
 func ListRoutes() ([]Route, error) {
-	url := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
+	return ListRoutesWithCaddy("")
+}
+
+// ListRoutesWithCaddy retrieves and lists all current routes from Caddy
+// If caddyBaseURL is empty, uses getCaddyBaseURL()
+func ListRoutesWithCaddy(caddyBaseURL string) ([]Route, error) {
+	if caddyBaseURL == "" {
+		caddyBaseURL = getCaddyBaseURL()
+	}
+	url := caddyBaseURL + "/config/apps/http/servers/srv0/routes"
 
 	responseBody, err := sendRequest("GET", url, nil)
 	if err != nil {
@@ -692,26 +847,6 @@ func InstallCertsFromDir(inputCertsDir, hostname, caddyConfig string) error {
 	return nil
 }
 
-// GenerateAndInstallCerts generates wildcard certificates and installs them to Caddy
-func GenerateAndInstallCerts(domain string) error {
-	// Generate certificates
-	certDir, err := generateWildcardCerts(domain)
-	if err != nil {
-		return fmt.Errorf("error generating certificates: %w", err)
-	}
-
-	// Install certificates to the standard Caddy location
-	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-	if err := InstallCertsFromDir(certDir, domain, caddyConfig); err != nil {
-		return fmt.Errorf("error installing certificates: %w", err)
-	}
-
-	// Clean up temporary directory
-	defer os.RemoveAll(certDir)
-
-	return nil
-}
-
 // generateCertsForHostname generates certificates for a specific hostname using mkcert
 func generateCertsForHostname(hostname string) (string, error) {
 	// Create temporary directory
@@ -754,100 +889,4 @@ func generateCertsForHostname(hostname string) (string, error) {
 	}
 
 	return tempDir, nil
-}
-
-// GenerateAndInstallCertsForHostname generates certificates for a specific hostname and installs them to Caddy
-func GenerateAndInstallCertsForHostname(hostname, domain string) error {
-	// Generate certificates for the specific hostname
-	certDir, err := generateCertsForHostname(hostname)
-	if err != nil {
-		return fmt.Errorf("error generating certificates: %w", err)
-	}
-
-	// Install certificates to the standard Caddy location using hostname instead of domain
-	caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-	if err := InstallCertsFromDir(certDir, hostname, caddyConfig); err != nil {
-		return fmt.Errorf("error installing certificates: %w", err)
-	}
-
-	// Clean up temporary directory
-	defer os.RemoveAll(certDir)
-
-	return nil
-}
-
-// InstallTLSCertsForHostname installs TLS certificates and policies for a specific hostname
-func InstallTLSCertsForHostname(hostname, domain, workspaceName string) error {
-	// Initialize TLS app structure first
-	tlsAppSet := getCaddyBaseURL() + "/config/apps/tls"
-	if err := InitSet(tlsAppSet, []byte(`{}`)); err != nil {
-		return fmt.Errorf("failed to initialize TLS app: %w", err)
-	}
-
-	// Initialize certificates structure
-	certsSet := getCaddyBaseURL() + "/config/apps/tls/certificates"
-	if err := InitSet(certsSet, []byte(`{}`)); err != nil {
-		return fmt.Errorf("failed to initialize TLS certificates: %w", err)
-	}
-
-	// Initialize load_files array
-	loadFilesSet := getCaddyBaseURL() + "/config/apps/tls/certificates/load_files"
-	caddyAPITLSBaseUrl := loadFilesSet + "/..."
-	if err := InitSet(loadFilesSet, []byte(`[]`)); err != nil {
-		return fmt.Errorf("failed to initialize TLS load_files: %w", err)
-	}
-
-	// Initialize TLS connection policies
-	policiesSet := getCaddyBaseURL() + "/config/apps/http/servers/srv0/tls_connection_policies"
-	caddyAPITLSPoliciesBaseUrl := policiesSet + "/..."
-	if err := InitSet(policiesSet, []byte(`[]`)); err != nil {
-		return fmt.Errorf("failed to initialize TLS connection policies: %w", err)
-	}
-
-	// Define TLS policies and certificates for the specific hostname
-	tlsPolicy := []TLSPolicy{
-		{
-			ID: fmt.Sprintf("%s_%s_tlspolicy", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
-			Match: TLSMatch{
-				SNI: []string{hostname},
-			},
-			CertificateSelection: TLSCertificateSelection{
-				AnyTag: []string{workspaceName},
-			},
-		},
-	}
-
-	tlsLoad := []TLSFileLoad{
-		{
-			ID:          fmt.Sprintf("%s_%s_tlscerts", workspaceName, strings.ReplaceAll(hostname, ".", "_")),
-			Certificate: fmt.Sprintf("/tls/%s/full-chain.pem", sanitizeHostname(hostname)),
-			Key:         fmt.Sprintf("/tls/%s/private-key.pem", sanitizeHostname(hostname)),
-			Tags:        []string{workspaceName},
-		},
-	}
-
-	// Send TLS certificates to Caddy
-	jsonPayload, err := json.Marshal(tlsLoad)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TLS certificates payload: %w", err)
-	}
-
-	_, err = sendRequest("POST", caddyAPITLSBaseUrl, jsonPayload)
-	if err != nil {
-		return fmt.Errorf("failed to add TLS certificates to Caddy: %w", err)
-	}
-
-	// Send TLS policies to Caddy
-	jsonPayload, err = json.Marshal(tlsPolicy)
-	if err != nil {
-		return fmt.Errorf("failed to marshal TLS policies payload: %w", err)
-	}
-
-	_, err = sendRequest("POST", caddyAPITLSPoliciesBaseUrl, jsonPayload)
-	if err != nil {
-		return fmt.Errorf("failed to add TLS policies to Caddy: %w", err)
-	}
-
-	fmt.Println("TLS certificates and policies installed successfully!")
-	return nil
 }

@@ -802,6 +802,18 @@ func (s *Server) enableEditorService(req ServiceEnableRequest) error {
 		return err
 	}
 
+	if domain != "" {
+		editorHostname := fmt.Sprintf("%s-editor.%s", req.Workspace, domain)
+		editorUpstream := fmt.Sprintf("%s-editor:9999", req.Workspace)
+		if err := addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      editorHostname,
+			Upstream:      editorUpstream,
+			WorkspaceName: req.Workspace,
+		}, ""); err != nil {
+			return fmt.Errorf("failed to register editor service via ingress: %w", err)
+		}
+	}
+
 	if err := editorService.StartContainer(); err != nil {
 		return fmt.Errorf("failed to start editor container: %w", err)
 	}

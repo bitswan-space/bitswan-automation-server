@@ -83,7 +83,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		"image":    bitswanEditorImage,
 		"restart":  "always",
 		"hostname": workspaceName + "-editor",
-		"networks": []string{"bitswan_caddy", workspaceCommonNetwork},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork},
 		"environment": []string{
 			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
 			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
@@ -136,7 +136,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 			"bitswan-editor": bitswanEditor,
 		},
 		"networks": map[string]interface{}{
-			"bitswan_caddy": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{
@@ -245,11 +245,6 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 	// Save docker-compose file
 	if err := e.SaveDockerCompose(dockerComposeContent); err != nil {
 		return fmt.Errorf("failed to save docker-compose file: %w", err)
-	}
-
-	// Register Editor service with Caddy
-	if err := caddyapi.RegisterServiceWithCaddy("editor", e.WorkspaceName, domain, fmt.Sprintf("%s-editor:9999", e.WorkspaceName)); err != nil {
-		return fmt.Errorf("failed to register Editor service with caddy: %w", err)
 	}
 
 	fmt.Printf("Editor service enabled for workspace '%s'\n", e.WorkspaceName)
