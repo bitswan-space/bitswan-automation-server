@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/docker"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
@@ -77,35 +77,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	for _, networkName := range networksToCreate {
-		var exists bool
-		exists, err = checkNetworkExists(networkName)
-		if err != nil {
-			return fmt.Errorf("error checking network %s: %w", networkName, err)
-		}
-
-		if exists {
-			if *verbose {
-				fmt.Printf("Network '%s' exists\n", networkName)
-			}
-		} else {
-			createDockerNetworkCom := exec.Command("docker", "network", "create", networkName)
-			if *verbose {
-				fmt.Printf("Creating Docker network '%s'...\n", networkName)
-			}
-			if err = runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
-				if err.Error() == "exit status 1" {
-					if *verbose {
-						fmt.Printf("Docker network '%s' already exists!\n", networkName)
-					}
-				} else {
-					fmt.Printf("Failed to create Docker network '%s': %s\n", networkName, err.Error())
-				}
-			} else {
-				if *verbose {
-					fmt.Printf("Docker network '%s' created!\n", networkName)
-				}
-			}
-		}
+			docker.ensureDockerNetwork(networkName, *verbose)
 	}
 
 	var oauthConfig *oauth.Config
@@ -772,28 +744,6 @@ type RepositoryInfo struct {
 	IsSSH    bool
 }
 
-func checkNetworkExists(networkName string) (bool, error) {
-	cmd := exec.Command("docker", "network", "ls", "--format=json")
-	output, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("error running docker command: %v", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	for _, line := range lines {
-		var network DockerNetwork
-		if err := json.Unmarshal([]byte(line), &network); err != nil {
-			return false, fmt.Errorf("error parsing JSON: %v", err)
-		}
-
-		if network.Name == networkName {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
 
 func ensureExamples(bitswanConfig string, verbose bool) error {
 	repoURL := "https://github.com/bitswan-space/BitSwan.git"

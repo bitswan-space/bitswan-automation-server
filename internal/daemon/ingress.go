@@ -226,16 +226,26 @@ func initIngress(verbose bool) (bool, error) {
 	return true, nil
 }
 
-// initWorkspaceCaddy initializes the workspace sub-caddy
+// initCaddy initializes a caddy for parent or workspace development stages
+// Run with empty workspace name to init global caddy
+// right now workspaceName includes the production stage automatically
 // Returns (newlyInitialized, error) where newlyInitialized is true if initialization happened,
 // false if it was already initialized.
-func initWorkspaceCaddy(workspaceName string, verbose bool) (bool, error) {
+func initCaddy(workspaceName string, verbose bool) (bool, error) {
 	homeDir := os.Getenv("HOME")
 	workspaceConfig := fmt.Sprintf("%s/.config/bitswan/workspaces/%s", homeDir, workspaceName)
 	caddyConfig := workspaceConfig + "/caddy"
+	setup_tls := workspaceName == ""
 
-	caddyProjectName := fmt.Sprintf("bitswan-%s-caddy", workspaceName)
-	containerName := fmt.Sprintf("%s__caddy", workspaceName)
+	caddyProjectName := "bitswan-caddy"
+	if workspaceName != "" {
+			caddyProjectName = fmt.Sprintf("bitswan-%s-caddy", workspaceName)
+	}
+
+	containerName := "bitswan-caddy"
+	if workspaceName != "" {
+			containerName = fmt.Sprintf("%s__caddy", workspaceName)
+	}
 
 	// Check if workspace caddy container already exists
 	caddyContainerId, err := exec.Command("docker", "ps", "-q", "-f", fmt.Sprintf("name=%s", containerName)).Output()
@@ -365,7 +375,7 @@ func initWorkspaceCaddy(workspaceName string, verbose bool) (bool, error) {
 			}
 		}()
 
-		if err := caddyapi.InitCaddy(); err != nil {
+		if err := caddyapi.InitWorkspaceCaddy(); err != nil {
 			// Non-fatal - caddy might already be initialized
 			if verbose {
 				fmt.Printf("Warning: failed to init workspace caddy API (might already be initialized): %v\n", err)
