@@ -2,12 +2,19 @@ package docker
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 )
+
+type DockerNetwork struct {
+	Name string `json:"Name"`
+}
 
 // IsDockerAvailable checks if docker command is available in PATH
 func IsDockerAvailable() bool {
@@ -54,6 +61,62 @@ func IsUbuntuLTS() (bool, string, error) {
 
 	codename, isLTS := ltsVersions[versionID]
 	return isLTS, codename, nil
+}
+
+func checkNetworkExists(networkName string) (bool, error) {
+	cmd := exec.Command("docker", "network", "ls", "--format=json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("error running docker command: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+
+	for _, line := range lines {
+		var network DockerNetwork
+		if err := json.Unmarshal([]byte(line), &network); err != nil {
+			return false, fmt.Errorf("error parsing JSON: %v", err)
+		}
+
+		if network.Name == networkName {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// EnsureDockerNetwork ensures a Docker network exists, creating it if necessary
+func EnsureDockerNetwork(name string, verbose bool) (bool, error) {
+	exists, err := checkNetworkExists(name)
+	if err != nil {
+		return false, fmt.Errorf("error checking network %s: %w", name, err)
+	}
+	if exists {
+		if verbose {
+			fmt.Printf("Network called '%s' already exists...\n", name)
+		}
+		return true, nil
+	}
+	createDockerNetworkCom := exec.Command("docker", "network", "create", name)
+	if verbose {
+		fmt.Printf("Creating Docker network '%s'...\n", name)
+	}
+	if err = util.RunCommandVerbose(createDockerNetworkCom, verbose); err != nil {
+		if err.Error() == "exit status 1" {
+			if verbose {
+				fmt.Printf("Docker network '%s' already exists!\n", name)
+			}
+		} else {
+			fmt.Printf("Failed to create Docker network '%s': %s\n", name, err.Error())
+		}
+	} else {
+		if verbose {
+			fmt.Printf("Docker network '%s' created!\n", name)
+		}
+	}
+	return true, nil
+
 }
 
 // PromptUser prompts the user with a yes/no question
@@ -168,4 +231,3 @@ func InstallDocker() error {
 	fmt.Println("Docker Engine has been successfully installed!")
 	return nil
 }
-

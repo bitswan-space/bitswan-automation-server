@@ -64,10 +64,16 @@ func GetOauthConfig(workspaceName string) (*Config, error) {
 	return &config, nil
 }
 
-// SaveOauthConfig saves the OAuth config to the workspace directory
+// SaveOauthConfig saves the OAuth config to the workspace secrets directory
 func SaveOauthConfig(workspaceName string, config *Config) error {
 	workspacePath := os.Getenv("HOME") + "/.config/bitswan/workspaces/" + workspaceName
-	configPath := workspacePath + "/oauth-config.yaml"
+	secretsPath := workspacePath + "/secrets"
+	configPath := secretsPath + "/oauth-config.yaml"
+
+	// Ensure secrets directory exists
+	if err := os.MkdirAll(secretsPath, 0755); err != nil {
+		return fmt.Errorf("failed to create secrets directory: %w", err)
+	}
 
 	// Marshal config to YAML
 	data, err := yaml.Marshal(config)

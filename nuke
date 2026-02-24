@@ -1,0 +1,1 @@
+python -u nuke.py 2>&1 | tee output.log
