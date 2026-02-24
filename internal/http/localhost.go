@@ -56,7 +56,7 @@ func IsLocalhostConnectionError(err error) bool {
 
 // AddDockerNetworkAlias adds a network alias for the given hostname pointing to caddy
 func AddDockerNetworkAlias(hostname string) error {
-	networkName := "bitswan_caddy"
+	networkName := "bitswan_network"
 	containerName := "caddy"
 
 	// Check if caddy container exists and is running

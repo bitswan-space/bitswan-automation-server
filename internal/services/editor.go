@@ -83,7 +83,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		"image":    bitswanEditorImage,
 		"restart":  "always",
 		"hostname": workspaceName + "-editor",
-		"networks": []string{"bitswan_caddy", workspaceCommonNetwork},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork},
 		"environment": []string{
 			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
 			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
@@ -135,7 +135,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 			"bitswan-editor": bitswanEditor,
 		},
 		"networks": map[string]interface{}{
-			"bitswan_caddy": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
 				"external": true,
 			},
 			workspaceCommonNetwork: map[string]interface{}{

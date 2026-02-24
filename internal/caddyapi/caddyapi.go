@@ -64,27 +64,32 @@ func getWorkspaceCaddyBaseURL(workspaceName string) string {
 	return fmt.Sprintf("http://%s:2019", containerName)
 }
 
+// GetWorkspaceCaddyBaseURL is the public version of getWorkspaceCaddyBaseURL
+func GetWorkspaceCaddyBaseURL(workspaceName string) string {
+	return getWorkspaceCaddyBaseURL(workspaceName)
+}
+
 // getCaddyBaseURL returns the base URL for the Caddy API, preferring
 // the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
 // to http://localhost:2019. It also normalizes the value by ensuring a scheme
 // and stripping any trailing slash.
 func getCaddyBaseURL() string {
-    host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
-    if host == "" {
-        return "http://localhost:2019"
-    }
+	host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
+	if host == "" {
+		return "http://localhost:2019"
+	}
 
-    // Prepend default scheme if missing
-    if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
-        host = "http://" + host
-    }
+	// Prepend default scheme if missing
+	if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+		host = "http://" + host
+	}
 
-    // Strip trailing slash if present
-    if strings.HasSuffix(host, "/") {
-        host = strings.TrimRight(host, "/")
-    }
+	// Strip trailing slash if present
+	if strings.HasSuffix(host, "/") {
+		host = strings.TrimRight(host, "/")
+	}
 
-    return host
+	return host
 }
 
 func RegisterServiceWithCaddy(serviceName, workspaceName, domain, upstream string) error {
@@ -412,11 +417,21 @@ func RegisterWorkspaceRouting(workspaceName, domain string) error {
 }
 
 // AddRoute adds a generic route for any hostname to upstream mapping
+// Uses the default caddy base URL from getCaddyBaseURL()
 func AddRoute(hostname, upstream string) error {
-	caddyAPIRoutesBaseUrl := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes/..."
+	return AddRouteWithCaddy(hostname, upstream, "")
+}
+
+// AddRouteWithCaddy adds a generic route for any hostname to upstream mapping
+// If caddyBaseURL is empty, uses getCaddyBaseURL()
+func AddRouteWithCaddy(hostname, upstream, caddyBaseURL string) error {
+	if caddyBaseURL == "" {
+		caddyBaseURL = getCaddyBaseURL()
+	}
+	caddyAPIRoutesBaseUrl := caddyBaseURL + "/config/apps/http/servers/srv0/routes/..."
 
 	// First, remove any existing routes with the same ID to avoid duplicates
-	if err := RemoveRoute(hostname); err != nil {
+	if err := RemoveRouteWithCaddy(hostname, caddyBaseURL); err != nil {
 		return fmt.Errorf("failed to remove existing route before adding new one for %s: %w", hostname, err)
 	}
 
@@ -467,7 +482,7 @@ func AddRoute(hostname, upstream string) error {
 	}
 
 	// Verify the route was added correctly by fetching it back
-	verifyRoutes, err := ListRoutes()
+	verifyRoutes, err := ListRoutesWithCaddy(caddyBaseURL)
 	if err == nil {
 		for _, r := range verifyRoutes {
 			if r.ID == routeID {
@@ -487,12 +502,22 @@ func AddRoute(hostname, upstream string) error {
 }
 
 // RemoveRoute removes a route by hostname, retrying until 404 is returned
+// Uses the default caddy base URL from getCaddyBaseURL()
 func RemoveRoute(hostname string) error {
+	return RemoveRouteWithCaddy(hostname, "")
+}
+
+// RemoveRouteWithCaddy removes a route by hostname
+// If caddyBaseURL is empty, uses getCaddyBaseURL()
+func RemoveRouteWithCaddy(hostname, caddyBaseURL string) error {
+	if caddyBaseURL == "" {
+		caddyBaseURL = getCaddyBaseURL()
+	}
 	// Create a sanitized ID for the route based on hostname
 	routeID := sanitizeHostname(hostname)
 
 	// Construct the URL for the specific route
-	url := fmt.Sprintf(getCaddyBaseURL()+"/id/%s", routeID)
+	url := fmt.Sprintf(caddyBaseURL+"/id/%s", routeID)
 
 	// Try to delete once - if it fails with 404, the route doesn't exist (success)
 	// If it fails with other errors, return the error immediately
@@ -517,8 +542,18 @@ func RemoveRoute(hostname string) error {
 }
 
 // ListRoutes retrieves and lists all current routes from Caddy
+// Uses the default caddy base URL from getCaddyBaseURL()
 func ListRoutes() ([]Route, error) {
-	url := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
+	return ListRoutesWithCaddy("")
+}
+
+// ListRoutesWithCaddy retrieves and lists all current routes from Caddy
+// If caddyBaseURL is empty, uses getCaddyBaseURL()
+func ListRoutesWithCaddy(caddyBaseURL string) ([]Route, error) {
+	if caddyBaseURL == "" {
+		caddyBaseURL = getCaddyBaseURL()
+	}
+	url := caddyBaseURL + "/config/apps/http/servers/srv0/routes"
 
 	responseBody, err := sendRequest("GET", url, nil)
 	if err != nil {

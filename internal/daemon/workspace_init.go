@@ -15,7 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
@@ -159,14 +158,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("Workspace sub-caddy already running")
 	}
 
-	// Register workspace routing in global caddy
-	if *domain != "" {
-		fmt.Println("Registering workspace routing in global caddy...")
-		if err := caddyapi.RegisterWorkspaceRouting(workspaceName, *domain); err != nil {
-			return fmt.Errorf("failed to register workspace routing: %w", err)
-		}
-		fmt.Println("Workspace routing registered!")
-	}
+	// Register workspace routing will be done via ingress API when routes are added
 
 	// Handle --local flag
 	if *local && (*setHosts || *mkCerts) {
@@ -177,21 +169,11 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		*setHosts = true
 		*mkCerts = true
 		if *domain == "" {
-			*domain = fmt.Sprintf("bs-%s.localhost", workspaceName)
+			*domain = "bitswan.localhost"
 		}
 	}
 
-	// Handle certificate generation and installation
-	if *mkCerts {
-		if err := caddyapi.GenerateAndInstallCerts(*domain); err != nil {
-			return fmt.Errorf("error generating and installing certificates: %w", err)
-		}
-	} else if *certsDir != "" {
-		caddyConfig := bitswanConfig + "caddy"
-		if err := caddyapi.InstallCertsFromDir(*certsDir, *domain, caddyConfig); err != nil {
-			return fmt.Errorf("error installing certificates from directory: %w", err)
-		}
-	}
+	// Certificate generation and installation will be handled via ingress API when routes are added
 
 	// Create the workspace directory (we already checked it doesn't exist above)
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
@@ -579,28 +561,14 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	// Install TLS certificates and policies if certificates were provided
-	if *mkCerts || *certsDir != "" {
-		if err := caddyapi.InstallTLSCerts(workspaceName, *domain); err != nil {
-			return fmt.Errorf("failed to install caddy certs: %w", err)
+	// Register GitOps service via ingress API
+	if *domain != "" {
+		gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
+		gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
+		if err := addRouteToIngressWithWorkspace(gitopsHostname, gitopsUpstream, workspaceName, *mkCerts, *certsDir); err != nil {
+			return fmt.Errorf("failed to register GitOps service via ingress: %w", err)
 		}
-	}
-
-	// Set workspace caddy environment variable for service registration
-	workspaceCaddyURL := fmt.Sprintf("%s__caddy:2019", workspaceName)
-	originalWorkspaceCaddy := os.Getenv("BITSWAN_WORKSPACE_CADDY")
-	os.Setenv("BITSWAN_WORKSPACE_CADDY", workspaceCaddyURL)
-	defer func() {
-		if originalWorkspaceCaddy != "" {
-			os.Setenv("BITSWAN_WORKSPACE_CADDY", originalWorkspaceCaddy)
-		} else {
-			os.Unsetenv("BITSWAN_WORKSPACE_CADDY")
-		}
-	}()
-
-	// Register GitOps service with workspace sub-caddy
-	if err := caddyapi.RegisterServiceWithCaddy("gitops", workspaceName, *domain, fmt.Sprintf("%s-gitops:8079", workspaceName)); err != nil {
-		return fmt.Errorf("failed to register GitOps service: %w", err)
+		fmt.Println("GitOps service registered via ingress!")
 	}
 
 	err = ensureExamples(bitswanConfig, *verbose)
