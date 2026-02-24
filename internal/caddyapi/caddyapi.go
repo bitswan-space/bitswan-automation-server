@@ -237,6 +237,32 @@ func InitCaddy() error {
 	return nil
 }
 
+// InitWorkspaceCaddy initializes a workspace caddy to only listen on HTTP (port 80)
+// and disables automatic HTTPS
+func InitWorkspaceCaddy() error {
+	// Initialize routes
+	routesURL := getCaddyBaseURL() + "/config/apps/http/servers/srv0/routes"
+	if err := InitSet(routesURL, []byte(`[]`)); err != nil {
+		return fmt.Errorf("failed to initialize routes: %w", err)
+	}
+
+	// Only listen on port 80 (HTTP only, no HTTPS)
+	listenURL := getCaddyBaseURL() + "/config/apps/http/servers/srv0/listen"
+	if err := InitSet(listenURL, []byte(`[":80"]`)); err != nil {
+		return fmt.Errorf("failed to initialize listen ports: %w", err)
+	}
+
+	// Disable automatic HTTPS
+	autoHTTPSURL := getCaddyBaseURL() + "/config/apps/http/servers/srv0/automatic_https"
+	if err := InitSet(autoHTTPSURL, []byte(`{"disable": true}`)); err != nil {
+		// Non-fatal - older Caddy versions might not support this
+		fmt.Printf("Warning: failed to disable automatic HTTPS (might not be supported): %v\n", err)
+	}
+
+	fmt.Println("Workspace Caddy initialized successfully (HTTP only)!")
+	return nil
+}
+
 func DeleteCaddyRecords(workspaceName string) error {
 	return DeleteCaddyRecordsWithWriter(workspaceName, nil)
 }

@@ -265,15 +265,12 @@ func checkNetworkExists(networkName string) (bool, error) {
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
-	type DockerNetwork struct {
-		Name string `json:"Name"`
-	}
 
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		var network DockerNetwork
+		var network docker.DockerNetwork
 		if err := json.Unmarshal([]byte(line), &network); err != nil {
 			return false, fmt.Errorf("error parsing JSON: %v", err)
 		}
