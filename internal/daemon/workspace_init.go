@@ -21,6 +21,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 )
 
 // runWorkspaceInit runs the workspace init logic with stdout already redirected
@@ -77,7 +78,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 
 	for _, networkName := range networksToCreate {
-			docker.ensureDockerNetwork(networkName, *verbose)
+		docker.EnsureDockerNetwork(networkName, *verbose)
 	}
 
 	var oauthConfig *oauth.Config
@@ -120,7 +121,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 
 	// Initialize workspace sub-caddy
 	fmt.Println("Initializing workspace sub-caddy...")
-	workspaceCaddyInitialized, err := initWorkspaceCaddy(workspaceName, *verbose)
+	workspaceCaddyInitialized, err := initCaddy(workspaceName, *verbose)
 	if err != nil {
 		return fmt.Errorf("failed to initialize workspace sub-caddy: %w", err)
 	}
@@ -198,7 +199,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			// Use su to switch to user1000 for git operations
 			// Escape the paths for shell safety
 			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git clone %q %q", clonePath, gitopsWorkspace)) //nolint:gosec
-			if err := runCommandVerbose(com, *verbose); err != nil {
+			if err := util.RunCommandVerbose(com, *verbose); err != nil {
 				return fmt.Errorf("failed to clone local repository: %w", err)
 			}
 			fmt.Println("Local repository cloned!")
@@ -257,10 +258,10 @@ func (s *Server) runWorkspaceInit(args []string) error {
 				if checkBranchCmd.Run() == nil {
 					// Branch exists in remote, checkout it
 					checkoutCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout -b %s origin/%s", gitopsWorkspace, *workspaceBranch, *workspaceBranch)) //nolint:gosec
-					if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+					if err := util.RunCommandVerbose(checkoutCom, *verbose); err != nil {
 						// Try just checking out if branch already exists locally
 						checkoutCom = exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout %s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
-						if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+						if err := util.RunCommandVerbose(checkoutCom, *verbose); err != nil {
 							fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
 							fmt.Printf("Continuing with the default branch...\n")
 						} else {
@@ -332,7 +333,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
 
 			fmt.Println("Cloning remote repository...")
-			if err := runCommandVerbose(com, *verbose); err != nil {
+			if err := util.RunCommandVerbose(com, *verbose); err != nil {
 				return fmt.Errorf("failed to clone remote repository: %w", err)
 			}
 			fmt.Println("Remote repository cloned!")
@@ -345,7 +346,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			if *workspaceBranch != "" {
 				fmt.Printf("Checking out branch '%s'...\n", *workspaceBranch)
 				checkoutCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout %s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
-				if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+				if err := util.RunCommandVerbose(checkoutCom, *verbose); err != nil {
 					fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
 					fmt.Printf("Continuing with the default branch...\n")
 				} else {
@@ -367,7 +368,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s init", gitopsWorkspace)) //nolint:gosec
 		fmt.Println("Initializing git in workspace...")
 
-		if err := runCommandVerbose(com, *verbose); err != nil {
+		if err := util.RunCommandVerbose(com, *verbose); err != nil {
 			return fmt.Errorf("failed to init git in workspace: %w", err)
 		}
 
@@ -386,7 +387,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	worktreeAddCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s worktree add --orphan -b %s %s", gitopsWorkspace, workspaceName, gitopsWorktree)) //nolint:gosec
 
 	fmt.Println("Setting up GitOps worktree...")
-	if err := runCommandVerbose(worktreeAddCom, *verbose); err != nil {
+	if err := util.RunCommandVerbose(worktreeAddCom, *verbose); err != nil {
 		return fmt.Errorf("failed to create GitOps worktree: %w", err)
 	}
 
@@ -396,14 +397,14 @@ func (s *Server) runWorkspaceInit(args []string) error {
 
 		// Create empty commit as user1000
 		emptyCommitCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git commit --allow-empty -m 'Initial commit'", gitopsWorktree)) //nolint:gosec
-		if err := runCommandVerbose(emptyCommitCom, *verbose); err != nil {
+		if err := util.RunCommandVerbose(emptyCommitCom, *verbose); err != nil {
 			return fmt.Errorf("failed to create empty commit: %w", err)
 		}
 
 		if isLocalPath {
 			// For local paths, just push directly without SSH setup as user1000
 			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git push -u origin %s", gitopsWorktree, workspaceName)) //nolint:gosec
-			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
+			if err := util.RunCommandVerbose(setUpstreamCom, *verbose); err != nil {
 				return fmt.Errorf("failed to set upstream: %w", err)
 			}
 
@@ -418,12 +419,12 @@ func (s *Server) runWorkspaceInit(args []string) error {
 				// Update in both the main workspace repo and the gitops worktree (they share the same remote config)
 				// Update in main workspace repo
 				updateRemoteCmd := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git remote set-url origin %s", gitopsWorkspace, remoteURLForGitOps)) //nolint:gosec
-				if err := runCommandVerbose(updateRemoteCmd, *verbose); err != nil {
+				if err := util.RunCommandVerbose(updateRemoteCmd, *verbose); err != nil {
 					fmt.Printf("Warning: Failed to update remote URL to mount point in main repo: %v\n", err)
 				}
 				// Also update in gitops worktree explicitly (though they share .git, being explicit helps)
 				updateRemoteCmdWorktree := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git remote set-url origin %s", gitopsWorktree, remoteURLForGitOps)) //nolint:gosec
-				if err := runCommandVerbose(updateRemoteCmdWorktree, *verbose); err != nil {
+				if err := util.RunCommandVerbose(updateRemoteCmdWorktree, *verbose); err != nil {
 					fmt.Printf("Warning: Failed to update remote URL to mount point in worktree: %v\n", err)
 				} else {
 					fmt.Printf("Remote URL updated to mount point successfully\n")
@@ -454,7 +455,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			}
 
 			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
-			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
+			if err := util.RunCommandVerbose(setUpstreamCom, *verbose); err != nil {
 				return fmt.Errorf("failed to set upstream: %w", err)
 			}
 		}
@@ -469,7 +470,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	// Only the gitops worktree needs to be owned by user1000 for the GitOps container.
 	fmt.Println("Fixing ownership of gitops worktree...")
 	chownGitopsCmd := exec.Command("chown", "-R", "1000:1000", gitopsWorktree)
-	if err := runCommandVerbose(chownGitopsCmd, *verbose); err != nil {
+	if err := util.RunCommandVerbose(chownGitopsCmd, *verbose); err != nil {
 		return fmt.Errorf("failed to fix ownership of gitops directory: %w", err)
 	}
 	fmt.Println("Ownership fixed successfully!")
@@ -601,7 +602,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			if err != nil {
 				return fmt.Errorf("failed to get MQTT credentials: %w", err)
 			}
-			fmt.Println("EMQX JWT received successfully!")
+			fmt.Println("EMQX JWT recrived successfully!")
 
 			mqttEnvVars = aoc.GetMQTTEnvironmentVariables(mqttCreds)
 		}
@@ -662,7 +663,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--pull", "missing")
 
 	fmt.Println("Launching BitSwan Workspace services...")
-	if err := runCommandVerbose(dockerComposeCom, true); err != nil {
+	if err := util.RunCommandVerbose(dockerComposeCom, true); err != nil {
 		return fmt.Errorf("failed to start docker-compose: %w", err)
 	}
 
@@ -744,7 +745,6 @@ type RepositoryInfo struct {
 	IsSSH    bool
 }
 
-
 func ensureExamples(bitswanConfig string, verbose bool) error {
 	repoURL := "https://github.com/bitswan-space/BitSwan.git"
 	targetDir := filepath.Join(bitswanConfig, "bitswan-src")
@@ -759,7 +759,7 @@ func ensureExamples(bitswanConfig string, verbose bool) error {
 		}
 
 		cmd := exec.Command("git", "clone", repoURL, targetDir)
-		if err := runCommandVerbose(cmd, verbose); err != nil {
+		if err := util.RunCommandVerbose(cmd, verbose); err != nil {
 			return fmt.Errorf("failed to clone repository: %w", err)
 		}
 
@@ -784,7 +784,7 @@ func updateExamples(bitswanConfig string, verbose bool) error {
 	cmd := exec.Command("git", "-c", fmt.Sprintf("safe.directory=%s", repoPath), "pull")
 	cmd.Dir = repoPath
 
-	if err := runCommandVerbose(cmd, verbose); err != nil {
+	if err := util.RunCommandVerbose(cmd, verbose); err != nil {
 		return fmt.Errorf("failed to update repository: %w", err)
 	}
 
@@ -824,7 +824,7 @@ func setHostsFile(workspaceName, domain string, noIde bool) error {
 	for _, entry := range hostsEntries {
 		cmdStr := "echo '" + entry + "' | sudo tee -a /etc/hosts"
 		addHostsCom := exec.Command("sh", "-c", cmdStr)
-		if err := runCommandVerbose(addHostsCom, false); err != nil {
+		if err := util.RunCommandVerbose(addHostsCom, false); err != nil {
 			return fmt.Errorf("unable to write into '/etc/hosts'. \n Please add the records manually")
 		}
 	}
