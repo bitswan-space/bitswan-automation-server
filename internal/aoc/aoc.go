@@ -197,7 +197,7 @@ func (c *AOCClient) GetAutomationServerToken() (string, error) {
 }
 
 // RegisterWorkspace registers a workspace with AOC
-func (c *AOCClient) RegisterWorkspace(workspaceName string, editorURL *string) (string, error) {
+func (c *AOCClient) RegisterWorkspace(workspaceName string, editorURL *string, domain string) (string, error) {
 	payload := map[string]interface{}{
 		"name":                 workspaceName,
 		"automation_server_id": c.settings.AutomationServerId,
@@ -205,6 +205,10 @@ func (c *AOCClient) RegisterWorkspace(workspaceName string, editorURL *string) (
 
 	if editorURL != nil {
 		payload["editor_url"] = *editorURL
+	}
+
+	if domain != "" {
+		payload["domain"] = domain
 	}
 
 	jsonBytes, err := json.Marshal(payload)

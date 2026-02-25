@@ -104,7 +104,7 @@ func (s *Server) connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId
 	var workspaceId string
 	if metadata.WorkspaceId == nil || *metadata.WorkspaceId == "" {
 		fmt.Printf("  🆕 Registering workspace '%s' with AOC...\n", workspaceName)
-		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, metadata.EditorURL)
+		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, metadata.EditorURL, metadata.Domain)
 		if err != nil {
 			return fmt.Errorf("failed to register workspace with AOC: %w", err)
 		}
@@ -127,7 +127,7 @@ func (s *Server) connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId
 
 			// Re-register the workspace with AOC
 			fmt.Printf("  🆕 Re-registering workspace '%s' with AOC...\n", workspaceName)
-			newWorkspaceId, err := aocClient.RegisterWorkspace(workspaceName, metadata.EditorURL)
+			newWorkspaceId, err := aocClient.RegisterWorkspace(workspaceName, metadata.EditorURL, metadata.Domain)
 			if err != nil {
 				return fmt.Errorf("failed to re-register workspace with AOC: %w", err)
 			}

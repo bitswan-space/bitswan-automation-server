@@ -577,7 +577,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 				editorURL = &url
 			}
 
-			workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL)
+			workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL, *domain)
 			if err != nil {
 				return fmt.Errorf("failed to register workspace: %w", err)
 			}
