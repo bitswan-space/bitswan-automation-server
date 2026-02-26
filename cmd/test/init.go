@@ -247,15 +247,18 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 		return "", "", fmt.Errorf("FastAPI example directory not found at %s. Ensure workspace init has created bitswan-src", fastAPIDir)
 	}
 
-	// If we have a valid image hash, rewrite pipelines.conf so the image tag
-	// matches the actual image/ directory content. The upstream example may
-	// have a stale tag if someone updated the Dockerfile without regenerating
-	// the hash in pipelines.conf.
+	// If we have a valid image hash, build the patched pipelines.conf content
+	// so the image tag matches the actual image/ directory content. The upstream
+	// example may have a stale tag if someone updated the Dockerfile without
+	// regenerating the hash in pipelines.conf.
+	//
+	// We patch in a temp copy rather than in-place because the source tree may
+	// be read-only (e.g. cloned by a different user in CI).
+	var patchedPipelinesConf []byte // nil means no patching needed
 	if imageHash != "" {
 		pipelinesConf := filepath.Join(fastAPIDir, "pipelines.conf")
 		if data, err := os.ReadFile(pipelinesConf); err == nil {
 			correctTag := fmt.Sprintf("internal/fastapi:sha%s", imageHash)
-			// Replace any pre=internal/fastapi:sha... line with the correct tag
 			lines := strings.Split(string(data), "\n")
 			changed := false
 			for i, line := range lines {
@@ -266,16 +269,16 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 				}
 			}
 			if changed {
-				newData := strings.Join(lines, "\n")
-				fmt.Printf("Patching pipelines.conf: image tag set to %s\n", correctTag)
-				if err := os.WriteFile(pipelinesConf, []byte(newData), 0644); err != nil {
-					return "", "", fmt.Errorf("failed to patch pipelines.conf: %w", err)
-				}
+				patchedPipelinesConf = []byte(strings.Join(lines, "\n"))
+				fmt.Printf("Patching pipelines.conf in ZIP: image tag set to %s\n", correctTag)
 			}
 		}
 	}
 
-	// Calculate the git tree hash of the directory (after any patching)
+	// Calculate the git tree hash of the directory.
+	// Note: if we patched pipelines.conf, the checksum won't reflect the patch,
+	// but that's fine — the checksum is used as an asset identifier for upload,
+	// and gitops will rebuild its own hash from the uploaded content.
 	checksum, err := calculateGitTreeHash(fastAPIDir)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to calculate checksum: %w", err)
@@ -323,20 +326,25 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 			return nil
 		}
 
-		// Open file
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
 		// Create file in ZIP
 		zipEntry, err := zipWriter.Create(relPath)
 		if err != nil {
 			return err
 		}
 
-		// Copy file content
+		// Use patched content for pipelines.conf if available
+		if relPath == "pipelines.conf" && patchedPipelinesConf != nil {
+			_, err = zipEntry.Write(patchedPipelinesConf)
+			return err
+		}
+
+		// Open and copy file content
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
 		_, err = io.Copy(zipEntry, file)
 		return err
 	})
