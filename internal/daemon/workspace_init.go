@@ -538,7 +538,14 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	if *domain != "" {
 		gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
 		gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
-		if err := addRouteToIngressWithWorkspace(gitopsHostname, gitopsUpstream, workspaceName, *mkCerts, *certsDir); err != nil {
+		req := IngressAddRouteRequest{
+			Hostname:      gitopsHostname,
+			Upstream:      gitopsUpstream,
+			WorkspaceName: workspaceName,
+			Mkcert:        *mkCerts,
+			CertsDir:      *certsDir,
+		}
+		if err := addRouteToIngress(req, ""); err != nil {
 			return fmt.Errorf("failed to register GitOps service via ingress: %w", err)
 		}
 		fmt.Println("GitOps service registered via ingress!")

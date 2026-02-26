@@ -28,11 +28,12 @@ type IngressInitResponse struct {
 
 // IngressAddRouteRequest represents the request to add a route
 type IngressAddRouteRequest struct {
-	Hostname string `json:"hostname"`
-	Upstream string `json:"upstream"`
-	Mkcert   bool   `json:"mkcert"`
-	CertsDir string `json:"certs_dir,omitempty"`
-	Secret   string `json:"secret,omitempty"` // Optional JWT token containing workspace ID
+	Hostname      string `json:"hostname"`
+	Upstream      string `json:"upstream"`
+	Mkcert        bool   `json:"mkcert"`
+	CertsDir      string `json:"certs_dir,omitempty"`
+	Secret        string `json:"secret,omitempty"` // Optional JWT token containing workspace ID
+	WorkspaceName string `json:"workspace_name,omitempty"`
 }
 
 // IngressAddRouteResponse represents the response from adding a route
@@ -452,119 +453,85 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 		return fmt.Errorf("upstream is required")
 	}
 
-	// Check for JWT token in request body (secret parameter) or provided token
+	// Check for workspace name in request first (direct specification)
 	var workspaceName string
-	if jwtToken == "" {
-		jwtToken = req.Secret
-	}
+	if req.WorkspaceName != "" {
+		workspaceName = req.WorkspaceName
+	} else {
+		// Fall back to JWT token parsing for backward compatibility
+		if jwtToken == "" {
+			jwtToken = req.Secret
+		}
 
-	if jwtToken != "" {
-		workspaceID, workspaceNameFromToken, err := parseJWTToken(jwtToken)
-		if err != nil {
-			// Non-fatal - we can still add the route without workspace name
-			// Just continue without workspace name
-			_ = err // Acknowledge the error but don't fail
-		} else {
-			// If we got workspace name directly from token, use it
-			if workspaceNameFromToken != "" {
-				workspaceName = workspaceNameFromToken
-			} else if workspaceID != "" {
-				// Otherwise, look up workspace name from workspace ID
-				var lookupErr error
-				workspaceName, lookupErr = findWorkspaceNameByID(workspaceID)
-				if lookupErr != nil {
-					return fmt.Errorf("failed to find workspace by ID: %w", lookupErr)
+		if jwtToken != "" {
+			workspaceID, workspaceNameFromToken, err := parseJWTToken(jwtToken)
+			if err != nil {
+				// Non-fatal - we can still add the route without workspace name
+				// Just continue without workspace name
+				_ = err // Acknowledge the error but don't fail
+			} else {
+				// If we got workspace name directly from token, use it
+				if workspaceNameFromToken != "" {
+					workspaceName = workspaceNameFromToken
+				} else if workspaceID != "" {
+					// Otherwise, look up workspace name from workspace ID
+					var lookupErr error
+					workspaceName, lookupErr = findWorkspaceNameByID(workspaceID)
+					if lookupErr != nil {
+						return fmt.Errorf("failed to find workspace by ID: %w", lookupErr)
+					}
 				}
 			}
 		}
 	}
 
-	// Handle certificate generation and installation
-	if req.Mkcert {
-		// Generate and install certificates for the specific hostname
-		if err := caddyapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
-			return fmt.Errorf("failed to generate and install certificates: %w", err)
-		}
-	} else if req.CertsDir != "" {
-		// Install certificates from directory and set up TLS policies
-		if err := caddyapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
-			return fmt.Errorf("failed to install certificates from directory: %w", err)
-		}
-	}
-
-	// If secret/JWT token is present, register route in workspace sub-caddy
-	// Otherwise, register route in global caddy
+	// If workspace name is specified, set up routes in both platform caddy and workspace sub-caddy
 	if workspaceName != "" {
 		// Get workspace sub-caddy URL
 		workspaceCaddyURL := caddyapi.GetWorkspaceCaddyBaseURL(workspaceName)
 
-		// Register route in workspace sub-caddy (direct to upstream)
+		// Add plain HTTP reverse proxy route at workspace sub-caddy: hostname -> upstream
 		if err := caddyapi.AddRouteWithCaddy(req.Hostname, req.Upstream, workspaceCaddyURL); err != nil {
 			return fmt.Errorf("failed to add route to workspace sub-caddy: %w", err)
 		}
 
-		// Register route in global caddy (proxy to workspace sub-caddy)
-		// The global caddy should proxy to the workspace sub-caddy at port 80
-		workspaceCaddyUpstream := fmt.Sprintf("%s__caddy:80", workspaceName)
-		if err := caddyapi.AddRouteWithCaddy(req.Hostname, workspaceCaddyUpstream, ""); err != nil {
-			return fmt.Errorf("failed to add route to global caddy: %w", err)
-		}
-	} else {
-		// No secret/JWT token, add route to global caddy only
-		if err := caddyapi.AddRoute(req.Hostname, req.Upstream); err != nil {
-			return fmt.Errorf("failed to add route: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// addRouteToIngressWithWorkspace is a convenience function that adds a route with a known workspace name
-// This is used by workspace_init which already knows the workspace name
-func addRouteToIngressWithWorkspace(hostname, upstream string, workspaceName string, mkcert bool, certsDir string) error {
-	req := IngressAddRouteRequest{
-		Hostname: hostname,
-		Upstream: upstream,
-		Mkcert:   mkcert,
-		CertsDir: certsDir,
-	}
-
-	// Create a simple JWT-like token with workspace name (or we could modify addRouteToIngress to accept workspace name directly)
-	// For now, we'll create a minimal token payload with workspace-name
-	// Actually, let's modify the approach - if workspaceName is provided, use it directly
-	if workspaceName != "" {
-		// Get workspace sub-caddy URL
-		workspaceCaddyURL := caddyapi.GetWorkspaceCaddyBaseURL(workspaceName)
-
-		// Register route in workspace sub-caddy first (HTTP only, no TLS)
-		// Workspace caddy doesn't have TLS certificates - it only handles HTTP
-		if err := caddyapi.AddRouteWithCaddy(hostname, upstream, workspaceCaddyURL); err != nil {
-			return fmt.Errorf("failed to add route to workspace sub-caddy: %w", err)
-		}
-
-		// Handle certificate generation and installation for global caddy only
-		// Global caddy handles TLS termination and proxies to workspace caddy
-		if mkcert {
-			// Generate and install certificates for the specific hostname (installs to global caddy)
-			if err := caddyapi.InstallTLSCerts(hostname, true, ""); err != nil {
+		// Handle certificate generation and installation for platform caddy only
+		// Platform caddy handles TLS termination and proxies to workspace sub-caddy
+		if req.Mkcert {
+			// Generate and install certificates for the specific hostname (installs to platform caddy)
+			if err := caddyapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
 				return fmt.Errorf("failed to generate and install certificates: %w", err)
 			}
-		} else if certsDir != "" {
+		} else if req.CertsDir != "" {
 			// Install certificates from directory and set up TLS policies
-			if err := caddyapi.InstallTLSCerts(hostname, false, certsDir); err != nil {
+			if err := caddyapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
 				return fmt.Errorf("failed to install certificates from directory: %w", err)
 			}
 		}
 
-		// Register route in global caddy (proxy to workspace sub-caddy on port 80)
+		// Add plain HTTP reverse proxy route at platform caddy: https://hostname -> workspace subcaddy (with certificates)
+		// The platform caddy should proxy to the workspace sub-caddy at port 80
 		workspaceCaddyUpstream := fmt.Sprintf("%s__caddy:80", workspaceName)
-		if err := caddyapi.AddRouteWithCaddy(hostname, workspaceCaddyUpstream, ""); err != nil {
-			return fmt.Errorf("failed to add route to global caddy: %w", err)
+		if err := caddyapi.AddRouteWithCaddy(req.Hostname, workspaceCaddyUpstream, ""); err != nil {
+			return fmt.Errorf("failed to add route to platform caddy: %w", err)
 		}
 	} else {
-		// No workspace name, add route to global caddy only
-		if err := addRouteToIngress(req, ""); err != nil {
-			return err
+		// No workspace name, add route to global/platform caddy only
+		// Handle certificate generation and installation
+		if req.Mkcert {
+			// Generate and install certificates for the specific hostname
+			if err := caddyapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
+				return fmt.Errorf("failed to generate and install certificates: %w", err)
+			}
+		} else if req.CertsDir != "" {
+			// Install certificates from directory and set up TLS policies
+			if err := caddyapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
+				return fmt.Errorf("failed to install certificates from directory: %w", err)
+			}
+		}
+
+		if err := caddyapi.AddRoute(req.Hostname, req.Upstream); err != nil {
+			return fmt.Errorf("failed to add route: %w", err)
 		}
 	}
 
