@@ -119,8 +119,15 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	fmt.Println("✓ Gitops service ready")
 
 	// Step 2: Create ZIP from FastAPI example and calculate checksum
+	// First, compute the image directory hash so we can write a correct pipelines.conf
+	// into the ZIP. The upstream example may have a stale image tag in pipelines.conf
+	// if the image/ directory contents changed without updating the config.
 	fmt.Println("\n[2/8] Creating ZIP from FastAPI example...")
-	zipPath, checksum, err := createFastAPIZip()
+	imageHash, err := computeImageDirHash()
+	if err != nil {
+		fmt.Printf("Note: Could not compute image hash (image dir may not exist): %v\n", err)
+	}
+	zipPath, checksum, err := createFastAPIZip(imageHash)
 	if err != nil {
 		cleanupWorkspace(workspaceName)
 		return fmt.Errorf("failed to create ZIP: %w", err)
@@ -210,21 +217,65 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	return nil
 }
 
-func createFastAPIZip() (string, string, error) {
+// computeImageDirHash calculates the git tree hash of the FastAPI image/ directory.
+// This is used to ensure pipelines.conf references the correct image tag.
+func computeImageDirHash() (string, error) {
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		return "", fmt.Errorf("HOME environment variable not set")
+	}
+
+	imageDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPI", "image")
+	if _, err := os.Stat(imageDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("image directory not found: %w", err)
+	}
+
+	return calculateGitTreeHash(imageDir)
+}
+
+func createFastAPIZip(imageHash string) (string, string, error) {
 	// Find the FastAPI example directory in bitswan-src
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		return "", "", fmt.Errorf("HOME environment variable not set")
 	}
-	
+
 	fastAPIDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPI")
-	
+
 	// Check if directory exists
 	if _, err := os.Stat(fastAPIDir); os.IsNotExist(err) {
 		return "", "", fmt.Errorf("FastAPI example directory not found at %s. Ensure workspace init has created bitswan-src", fastAPIDir)
 	}
 
-	// First, calculate the git tree hash of the directory
+	// If we have a valid image hash, rewrite pipelines.conf so the image tag
+	// matches the actual image/ directory content. The upstream example may
+	// have a stale tag if someone updated the Dockerfile without regenerating
+	// the hash in pipelines.conf.
+	if imageHash != "" {
+		pipelinesConf := filepath.Join(fastAPIDir, "pipelines.conf")
+		if data, err := os.ReadFile(pipelinesConf); err == nil {
+			correctTag := fmt.Sprintf("internal/fastapi:sha%s", imageHash)
+			// Replace any pre=internal/fastapi:sha... line with the correct tag
+			lines := strings.Split(string(data), "\n")
+			changed := false
+			for i, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "pre=internal/") || strings.HasPrefix(trimmed, "pre = internal/") {
+					lines[i] = "pre=" + correctTag
+					changed = true
+				}
+			}
+			if changed {
+				newData := strings.Join(lines, "\n")
+				fmt.Printf("Patching pipelines.conf: image tag set to %s\n", correctTag)
+				if err := os.WriteFile(pipelinesConf, []byte(newData), 0644); err != nil {
+					return "", "", fmt.Errorf("failed to patch pipelines.conf: %w", err)
+				}
+			}
+		}
+	}
+
+	// Calculate the git tree hash of the directory (after any patching)
 	checksum, err := calculateGitTreeHash(fastAPIDir)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to calculate checksum: %w", err)
