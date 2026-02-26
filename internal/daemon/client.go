@@ -973,6 +973,58 @@ func (c *Client) WorkspaceRemove(workspaceName string) error {
 	return err
 }
 
+// WorkspaceStart starts all services in a workspace via the daemon with NDJSON streaming.
+func (c *Client) WorkspaceStart(workspaceName string, automationsOnly bool) error {
+	return c.workspaceStartStopRequest("start", workspaceName, automationsOnly)
+}
+
+// WorkspaceStop stops all services in a workspace via the daemon with NDJSON streaming.
+func (c *Client) WorkspaceStop(workspaceName string, automationsOnly bool) error {
+	return c.workspaceStartStopRequest("stop", workspaceName, automationsOnly)
+}
+
+// WorkspaceRestart restarts all services in a workspace via the daemon with NDJSON streaming.
+func (c *Client) WorkspaceRestart(workspaceName string, automationsOnly bool) error {
+	return c.workspaceStartStopRequest("restart", workspaceName, automationsOnly)
+}
+
+func (c *Client) workspaceStartStopRequest(action, workspaceName string, automationsOnly bool) error {
+	bodyBytes, err := json.Marshal(WorkspaceStartStopRequest{
+		Workspace:       workspaceName,
+		AutomationsOnly: automationsOnly,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/workspace/"+action, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	_, err = c.streamLogs(resp.Body, os.Stdout)
+	return err
+}
+
 // PullAndDeploy runs `bitswan pull-and-deploy ...` via the daemon with NDJSON streaming.
 func (c *Client) PullAndDeploy(workspaceName, branchName string) error {
 	bodyBytes, err := json.Marshal(PullAndDeployRequest{

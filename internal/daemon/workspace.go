@@ -62,6 +62,12 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkspaceSync(w, r)
 	case path == "connect-to-aoc":
 		s.handleWorkspaceConnectToAOC(w, r)
+	case path == "start":
+		s.handleWorkspaceStart(w, r)
+	case path == "stop":
+		s.handleWorkspaceStop(w, r)
+	case path == "restart":
+		s.handleWorkspaceRestart(w, r)
 	default:
 		writeJSONError(w, "not found", http.StatusNotFound)
 	}

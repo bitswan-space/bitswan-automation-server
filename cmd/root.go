@@ -91,6 +91,9 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(newOpenCmd())
 	cmd.AddCommand(newServiceCmd())
 	cmd.AddCommand(newPullAndDeployCmd())
+	cmd.AddCommand(newStartCmd())
+	cmd.AddCommand(newStopCmd())
+	cmd.AddCommand(newRestartCmd())
 
 	return cmd
 }
