@@ -70,18 +70,20 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 		fmt.Fprintln(writer, "No automations to remove.")
 	}
 
-	// 3. Remove docker container and volume
+	// 3. Remove GitOps and Editor docker containers and volumes
 	fmt.Fprintln(writer, "Removing docker containers and volumes...")
 	workspacesFolder := filepath.Join(bitswanPath, "workspaces")
 	dockerComposePath := filepath.Join(workspacesFolder, workspaceName, "deployment")
 	// Docker compose project names must be lowercase
-	projectName := strings.ToLower(workspaceName) + "-site"
-	cmd := exec.Command("docker", "compose", "-p", projectName, "down", "--volumes")
-	cmd.Dir = dockerComposePath
-	cmd.Stdout = writer
-	cmd.Stderr = writer
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove docker containers and volumes: %w", err)
+	projectName := strings.ToLower(workspaceName)
+	for _, project := range []string{projectName + "-site", projectName + "-editor"} {
+		cmd := exec.Command("docker", "compose", "-p", project, "down", "--volumes")
+		cmd.Dir = dockerComposePath
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to remove docker containers and volumes for %s: %w", project, err)
+		}
 	}
 	fmt.Fprintln(writer, "Docker containers and volumes removed successfully.")
 
@@ -137,7 +139,7 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 
 	// 6. Remove the gitops folder
 	fmt.Fprintln(writer, "Removing gitops folder...")
-	cmd = exec.Command("rm", "-rf", workspaceName)
+	cmd := exec.Command("rm", "-rf", workspaceName)
 	cmd.Dir = workspacesFolder
 	cmd.Stdout = writer
 	cmd.Stderr = writer
