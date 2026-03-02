@@ -96,44 +96,14 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 
 	// 4. Remove images used by docker-compose
 	fmt.Fprintln(writer, "Removing images used by docker-compose...")
-	dockerComposeFilePath := filepath.Join(dockerComposePath, "docker-compose.yml")
-	data, err := os.ReadFile(dockerComposeFilePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintln(writer, "Warning: docker-compose.yml not found, skipping image removal")
-		} else {
-			fmt.Fprintf(writer, "error reading docker-compose file: %v\n", err)
-		}
-	} else {
-		var compose Compose
-		err = yaml.Unmarshal(data, &compose)
-		if err != nil {
-			return fmt.Errorf("error unmarshalling docker-compose file: %w", err)
-		}
-
-		for _, service := range compose.Services {
-			if service.Image != "" {
-				exists, err := checkContainerExists(service.Image)
-				if err != nil {
-					fmt.Fprintf(writer, "Warning: Error checking if image exists: %v. Continuing with removal.\n", err)
-					continue
-				}
-
-				if !exists {
-					err = deleteDockerImage(service.Image, writer)
-					if err != nil {
-						// Don't fail the entire removal if image deletion fails (image might not exist)
-						fmt.Fprintf(writer, "Warning: Failed to delete docker image %s: %v. Continuing with removal.\n", service.Image, err)
-					} else {
-						fmt.Fprintf(writer, "Deleted image: %s\n", service.Image)
-					}
-				} else {
-					fmt.Fprintf(writer, "Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
-				}
-			}
-		}
-		fmt.Fprintln(writer, "Image removal process completed.")
+	composeFiles := []string{"docker-compose.yml"}
+	if _, err := os.Stat(editorComposePath); err == nil {
+		composeFiles = append(composeFiles, "docker-compose-editor.yml")
 	}
+	for _, composeFile := range composeFiles {
+		removeImagesFromComposeFile(filepath.Join(dockerComposePath, composeFile), writer)
+	}
+	fmt.Fprintln(writer, "Image removal process completed.")
 
 	// 5. Remove caddy files (before removing workspace folder so metadata is available)
 	// Run in background - don't wait for it to complete since it's not critical
@@ -168,6 +138,42 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 
 	fmt.Fprintln(writer, "Workspace removal completed.")
 	return nil
+}
+
+func removeImagesFromComposeFile(composeFilePath string, writer io.Writer) {
+	data, err := os.ReadFile(composeFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(writer, "Warning: %s not found, skipping image removal\n", composeFilePath)
+		} else {
+			fmt.Fprintf(writer, "Warning: error reading %s: %v\n", composeFilePath, err)
+		}
+		return
+	}
+	var compose Compose
+	if err := yaml.Unmarshal(data, &compose); err != nil {
+		fmt.Fprintf(writer, "Warning: error unmarshalling %s: %v\n", composeFilePath, err)
+		return
+	}
+	for _, service := range compose.Services {
+		if service.Image == "" {
+			continue
+		}
+		exists, err := checkContainerExists(service.Image)
+		if err != nil {
+			fmt.Fprintf(writer, "Warning: Error checking if image exists: %v. Continuing with removal.\n", err)
+			continue
+		}
+		if exists {
+			fmt.Fprintf(writer, "Image %s is still in use by a different container. Skipping deletion.\n", service.Image)
+			continue
+		}
+		if err := deleteDockerImage(service.Image, writer); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to delete docker image %s: %v. Continuing with removal.\n", service.Image, err)
+		} else {
+			fmt.Fprintf(writer, "Deleted image: %s\n", service.Image)
+		}
+	}
 }
 
 func checkContainerExists(imageName string) (bool, error) {
