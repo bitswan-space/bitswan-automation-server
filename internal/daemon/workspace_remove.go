@@ -76,10 +76,14 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	dockerComposePath := filepath.Join(workspacesFolder, workspaceName, "deployment")
 	// Docker compose project names must be lowercase
 	projectName := strings.ToLower(workspaceName)
-	for _, args := range [][]string{
+	composeArgs := [][]string{
 		{"-p", projectName + "-site", "down", "--volumes"},
-		{"-f", "docker-compose-editor.yml", "-p", projectName + "-editor", "down", "--volumes"},
-	} {
+	}
+	editorComposePath := filepath.Join(dockerComposePath, "docker-compose-editor.yml")
+	if _, err := os.Stat(editorComposePath); err == nil {
+		composeArgs = append(composeArgs, []string{"-f", "docker-compose-editor.yml", "-p", projectName + "-editor", "down", "--volumes"})
+	}
+	for _, args := range composeArgs {
 		cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
 		cmd.Dir = dockerComposePath
 		cmd.Stdout = writer
