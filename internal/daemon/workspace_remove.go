@@ -76,13 +76,16 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	dockerComposePath := filepath.Join(workspacesFolder, workspaceName, "deployment")
 	// Docker compose project names must be lowercase
 	projectName := strings.ToLower(workspaceName)
-	for _, project := range []string{projectName + "-site", projectName + "-editor"} {
-		cmd := exec.Command("docker", "compose", "-p", project, "down", "--volumes")
+	for _, args := range [][]string{
+		{"-p", projectName + "-site", "down", "--volumes"},
+		{"-f", "docker-compose-editor.yml", "-p", projectName + "-editor", "down", "--volumes"},
+	} {
+		cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
 		cmd.Dir = dockerComposePath
 		cmd.Stdout = writer
 		cmd.Stderr = writer
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to remove docker containers and volumes for %s: %w", project, err)
+			return fmt.Errorf("failed to remove docker containers and volumes (%v): %w", args, err)
 		}
 	}
 	fmt.Fprintln(writer, "Docker containers and volumes removed successfully.")
