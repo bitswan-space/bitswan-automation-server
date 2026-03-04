@@ -952,7 +952,7 @@ func deployAutomation(gitopsURL, secret, workspaceName, deploymentID, checksum s
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusAccepted {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		// Try to parse error details
 		var errorResp struct {
