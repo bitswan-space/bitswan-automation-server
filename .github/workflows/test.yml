@@ -125,7 +125,7 @@ jobs:
       - name: Run init test
         timeout-minutes: 20
         run: |
-          ./bitswan _test init --no-remove || exit 1
+          ./bitswan _test init --gitops-image bitswan/gitops-staging:sha256_d73677c490bffb72d47ded8726d19618d309794b2d2c43292b80c4ce1da2d236 --no-remove || exit 1
           # Cleanup after test
           ./bitswan _test cleanup || true
 
