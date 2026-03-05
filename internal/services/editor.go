@@ -246,11 +246,6 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		return fmt.Errorf("failed to save docker-compose file: %w", err)
 	}
 
-	// Register Editor service with Caddy
-	if err := caddyapi.RegisterServiceWithCaddy("editor", e.WorkspaceName, domain, fmt.Sprintf("%s-editor:9999", e.WorkspaceName)); err != nil {
-		return fmt.Errorf("failed to register Editor service with caddy: %w", err)
-	}
-
 	fmt.Printf("Editor service enabled for workspace '%s'\n", e.WorkspaceName)
 	return nil
 }

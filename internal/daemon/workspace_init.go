@@ -696,6 +696,20 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
 
+		if *domain != "" {
+			editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
+			editorUpstream := fmt.Sprintf("%s-editor:9999", workspaceName)
+			if err := addRouteToIngress(IngressAddRouteRequest{
+				Hostname:      editorHostname,
+				Upstream:      editorUpstream,
+				WorkspaceName: workspaceName,
+				Mkcert:        *mkCerts,
+				CertsDir:      *certsDir,
+			}, ""); err != nil {
+				return fmt.Errorf("failed to register editor service via ingress: %w", err)
+			}
+		}
+
 		// Start the editor container
 		if err := editorService.StartContainer(); err != nil {
 			return fmt.Errorf("failed to start editor container: %w", err)
