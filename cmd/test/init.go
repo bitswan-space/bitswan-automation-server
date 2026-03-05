@@ -119,8 +119,8 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	fmt.Println("✓ Gitops service ready")
 
 	// Step 2: Create ZIP from FastAPI example and calculate checksum
-	// First, compute the image directory hash so we can write a correct pipelines.conf
-	// into the ZIP. The upstream example may have a stale image tag in pipelines.conf
+	// First, compute the image directory hash so we can write a correct automation.toml
+	// into the ZIP. The upstream example may have a stale image tag in automation.toml
 	// if the image/ directory contents changed without updating the config.
 	fmt.Println("\n[2/8] Creating ZIP from FastAPI example...")
 	imageHash, err := computeImageDirHash()
@@ -146,7 +146,7 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	// Step 3.5: Build image if needed
 	fmt.Println("\n[3.5/8] Building automation image...")
 	deploymentID := "test-fastapi"
-	// Extract image name from pipelines.conf - it expects "fastapi" not "test-fastapi"
+	// Extract image name from automation.toml - it expects "fastapi" not "test-fastapi"
 	imageName := "fastapi"
 	imageTag, err := buildAutomationImage(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, imageName, checksum)
 	if err != nil {
@@ -218,7 +218,7 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 }
 
 // computeImageDirHash calculates the git tree hash of the FastAPI image/ directory.
-// This is used to ensure pipelines.conf references the correct image tag.
+// This is used to ensure automation.toml references the correct image tag.
 func computeImageDirHash() (string, error) {
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
@@ -247,36 +247,37 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 		return "", "", fmt.Errorf("FastAPI example directory not found at %s. Ensure workspace init has created bitswan-src", fastAPIDir)
 	}
 
-	// If we have a valid image hash, build the patched pipelines.conf content
+	// If we have a valid image hash, build the patched automation.toml content
 	// so the image tag matches the actual image/ directory content. The upstream
 	// example may have a stale tag if someone updated the Dockerfile without
-	// regenerating the hash in pipelines.conf.
+	// regenerating the hash in automation.toml.
 	//
 	// We patch in a temp copy rather than in-place because the source tree may
 	// be read-only (e.g. cloned by a different user in CI).
-	var patchedPipelinesConf []byte // nil means no patching needed
+	var patchedAutomationToml []byte // nil means no patching needed
 	if imageHash != "" {
-		pipelinesConf := filepath.Join(fastAPIDir, "pipelines.conf")
-		if data, err := os.ReadFile(pipelinesConf); err == nil {
+		automationToml := filepath.Join(fastAPIDir, "automation.toml")
+		if data, err := os.ReadFile(automationToml); err == nil {
 			correctTag := fmt.Sprintf("internal/fastapi:sha%s", imageHash)
 			lines := strings.Split(string(data), "\n")
 			changed := false
 			for i, line := range lines {
 				trimmed := strings.TrimSpace(line)
-				if strings.HasPrefix(trimmed, "pre=internal/") || strings.HasPrefix(trimmed, "pre = internal/") {
-					lines[i] = "pre=" + correctTag
+				if strings.HasPrefix(trimmed, "image=") || strings.HasPrefix(trimmed, "image = ") {
+					lines[i] = "image=" + correctTag
 					changed = true
 				}
 			}
-			if changed {
-				patchedPipelinesConf = []byte(strings.Join(lines, "\n"))
-				fmt.Printf("Patching pipelines.conf in ZIP: image tag set to %s\n", correctTag)
+			if !changed {
+				lines = append(lines, "image="+correctTag)
 			}
+			patchedAutomationToml = []byte(strings.Join(lines, "\n"))
+			fmt.Printf("Patching automation.toml in ZIP: image tag set to %s\n", correctTag)
 		}
 	}
 
 	// Calculate the git tree hash of the directory.
-	// Note: if we patched pipelines.conf, the checksum won't reflect the patch,
+	// Note: if we patched automation.toml, the checksum won't reflect the patch,
 	// but that's fine — the checksum is used as an asset identifier for upload,
 	// and gitops will rebuild its own hash from the uploaded content.
 	checksum, err := calculateGitTreeHash(fastAPIDir)
@@ -332,9 +333,9 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 			return err
 		}
 
-		// Use patched content for pipelines.conf if available
-		if relPath == "pipelines.conf" && patchedPipelinesConf != nil {
-			_, err = zipEntry.Write(patchedPipelinesConf)
+		// Use patched content for automation.toml if available
+		if relPath == "automation.toml" && patchedAutomationToml != nil {
+			_, err = zipEntry.Write(patchedAutomationToml)
 			return err
 		}
 
