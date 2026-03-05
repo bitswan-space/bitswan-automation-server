@@ -69,11 +69,16 @@ func GetWorkspaceCaddyBaseURL(workspaceName string) string {
 	return getWorkspaceCaddyBaseURL(workspaceName)
 }
 
-// getCaddyBaseURL returns the base URL for the Caddy API, preferring
-// the BITSWAN_CADDY_HOST environment variable if set, otherwise defaulting
-// to http://localhost:2019. It also normalizes the value by ensuring a scheme
-// and stripping any trailing slash.
-func getCaddyBaseURL() string {
+// getCaddyBaseURL returns the base URL for the Caddy API. If workspaceName is
+// provided and non-empty, it returns http://<workspaceName>__caddy:2019.
+// Otherwise it prefers the BITSWAN_CADDY_HOST environment variable if set,
+// defaulting to http://localhost:2019. It also normalizes the value by ensuring
+// a scheme and stripping any trailing slash.
+func getCaddyBaseURL(workspaceName ...string) string {
+	if len(workspaceName) > 0 && workspaceName[0] != "" {
+		return fmt.Sprintf("http://%s__caddy:2019", workspaceName[0])
+	}
+
 	host := strings.TrimSpace(os.Getenv("BITSWAN_CADDY_HOST"))
 	if host == "" {
 		return "http://localhost:2019"
