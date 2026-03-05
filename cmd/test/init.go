@@ -258,7 +258,7 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 	if imageHash != "" {
 		automationToml := filepath.Join(fastAPIDir, "automation.toml")
 		if data, err := os.ReadFile(automationToml); err == nil {
-			correctTag := fmt.Sprintf("internal/fastapi:sha%s", imageHash)
+			correctTag := fmt.Sprintf("\"internal/fastapi:sha%s\"", imageHash)
 			lines := strings.Split(string(data), "\n")
 			changed := false
 			for i, line := range lines {
