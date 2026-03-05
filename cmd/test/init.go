@@ -680,7 +680,7 @@ func uploadAsset(gitopsURL, secret, workspaceName, zipPath, checksum string) err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
