@@ -225,7 +225,7 @@ func computeImageDirHash() (string, error) {
 		return "", fmt.Errorf("HOME environment variable not set")
 	}
 
-	imageDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPI", "image")
+	imageDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPIApp", "image")
 	if _, err := os.Stat(imageDir); os.IsNotExist(err) {
 		return "", fmt.Errorf("image directory not found: %w", err)
 	}
@@ -240,7 +240,7 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 		return "", "", fmt.Errorf("HOME environment variable not set")
 	}
 
-	fastAPIDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPI")
+	fastAPIDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPIApp")
 
 	// Check if directory exists
 	if _, err := os.Stat(fastAPIDir); os.IsNotExist(err) {
@@ -695,7 +695,7 @@ func buildAutomationImage(gitopsURL, secret, workspaceName, imageName, checksum 
 		return "", fmt.Errorf("HOME environment variable not set")
 	}
 	
-	fastAPIDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPI")
+	fastAPIDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPIApp")
 	
 	// Check if directory exists
 	if _, err := os.Stat(fastAPIDir); os.IsNotExist(err) {
