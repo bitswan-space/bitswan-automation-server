@@ -118,12 +118,17 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	if devConfig != nil && devConfig.DevMode {
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), "BITSWAN_DEV_MODE=true")
 
-		// Mount editor extension source directory for live development
+		// Mount editor source for live development
 		if devConfig.EditorDevSourceDir != "" {
+			// EditorDevSourceDir points to the Extension/ directory;
+			// derive the full bitswan-editor repo root (parent dir) so that
+			// code-server-forked/, jupyter/, and Extension/ are all available.
+			editorRepoDir := filepath.Dir(devConfig.EditorDevSourceDir)
 			bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string),
-				devConfig.EditorDevSourceDir+":/opt/bitswan-extension-dev:z")
+				editorRepoDir+":/opt/bitswan-editor-dev:z")
 			bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string),
-				"BITSWAN_EXTENSION_DEV_DIR=/opt/bitswan-extension-dev")
+				"BITSWAN_EDITOR_DIR=/opt/bitswan-editor-dev",
+				"BITSWAN_EXTENSION_DEV_DIR=/opt/bitswan-editor-dev/Extension")
 		}
 	}
 

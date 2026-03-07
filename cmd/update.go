@@ -56,7 +56,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.devMode, "dev-mode", false, "Enable development mode with live-reloading for gitops and editor extension")
 	cmd.Flags().BoolVar(&o.disableDevMode, "disable-dev-mode", false, "Disable development mode")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
-	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
+	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Path to the Extension/ directory in bitswan-editor repo (the full repo will be mounted for dev mode)")
 
 	return cmd
 }
