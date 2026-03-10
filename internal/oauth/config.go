@@ -127,7 +127,7 @@ func CreateOAuthEnvVars(config *Config, serviceName, workspaceName, domain strin
 	}
 
 	// Use scope from config or default
-	scope := "openid email profile group_membership"
+	scope := "openid email profile"
 	if config.Scope != nil {
 		scope = *config.Scope
 	}

@@ -620,7 +620,7 @@ func (c *AOCClient) GetOAuthConfig(workspaceId string) (*oauth.Config, error) {
 
 	provider := "keycloak-oidc"
 	httpAddr := "0.0.0.0:9999"
-	scope := "openid email profile group_membership"
+	scope := "openid email profile"
 	groupsClaim := "group_membership"
 
 	oauthConfig := &oauth.Config{
