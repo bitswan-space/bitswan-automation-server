@@ -142,6 +142,12 @@ func getOpenAPISpec() string {
 		"**QoS:** 1\n\n" +
 		"**Request Format:**\n```json\n{\n  \"request-id\": \"unique-request-id\",\n  \"name\": \"workspace-name\",\n  \"remote\": \"git-repo-url\",\n  \"branch\": \"branch-name\",\n  \"domain\": \"example.com\",\n  \"certs-dir\": \"/path/to/certs\",\n  \"verbose\": false,\n  \"mkcerts\": false,\n  \"no-ide\": false,\n  \"set-hosts\": false,\n  \"local\": false,\n  \"gitops-image\": \"image:tag\",\n  \"editor-image\": \"image:tag\",\n  \"gitops-dev-source-dir\": \"/path/to/source\",\n  \"oauth-config\": \"/path/to/oauth.json\",\n  \"no-oauth\": false,\n  \"ssh-port\": \"2222\"\n}\n```\n\n" +
 		"**Response:** Logs and results are published to the `logs` topic (see below).\n\n" +
+		"### Workspace Create Confirm Command\n\n" +
+		"**Topic:** `workspace/create/{request-id}/confirm` (publish to confirm SSH key prompt)\n\n" +
+		"**QoS:** 1\n\n" +
+		"During workspace creation with an SSH remote, the daemon generates an SSH deploy key and publishes a log message with level `prompt`. " +
+		"The frontend should display the SSH key to the user and wait for them to confirm they have added the deploy key to the repository. " +
+		"Once confirmed, publish any message to this topic to unblock the daemon and continue with the git clone.\n\n" +
 		"### Workspace Delete Command\n\n" +
 		"**Topic:** `workspace/delete` (subscribe to send commands)\n\n" +
 		"**QoS:** 1\n\n" +
@@ -154,6 +160,9 @@ func getOpenAPISpec() string {
 		"**QoS:** 1\n\n" +
 		"**Message Types:**\n\n" +
 		"1. **Log Message** (Docker NDJSON format with request-id):\n```json\n{\n  \"request-id\": \"unique-request-id\",\n  \"time\": \"2024-01-15T10:30:00Z\",\n  \"level\": \"info\",\n  \"message\": \"Log message content\"\n}\n```\n\n" +
+		"Log levels: `info`, `error`, `warning`, `prompt`. " +
+		"A `prompt` level message indicates the daemon is waiting for user confirmation (e.g., after displaying an SSH deploy key). " +
+		"To unblock the daemon, publish to `workspace/create/{request-id}/confirm` (MQTT) or POST to `/workspace/init/confirm` (HTTP).\n\n" +
 		"2. **Result Message** (final status):\n```json\n{\n  \"request-id\": \"unique-request-id\",\n  \"success\": true,\n  \"message\": \"Workspace created successfully\",\n  \"error\": \"\"\n}\n```\n\n" +
 		"Or on failure:\n```json\n{\n  \"request-id\": \"unique-request-id\",\n  \"success\": false,\n  \"message\": \"\",\n  \"error\": \"Error description\"\n}\n```\n\n" +
 		"### Authentication\n\n" +
@@ -395,6 +404,20 @@ func getOpenAPISpec() string {
 					"responses": {
 						"200": {
 							"description": "List of workspaces"
+						}
+					}
+				}
+			},
+			"/workspace/init/confirm": {
+				"post": {
+					"summary": "Confirm SSH key prompt during workspace init",
+					"description": "Unblocks the workspace init process after the user has added the SSH deploy key to their repository. This should be called when the client receives a log entry with level 'prompt' during workspace init.",
+					"responses": {
+						"200": {
+							"description": "Confirmation accepted, init continues"
+						},
+						"409": {
+							"description": "No pending init prompt or already confirmed"
 						}
 					}
 				}

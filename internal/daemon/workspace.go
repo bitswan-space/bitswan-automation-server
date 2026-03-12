@@ -165,7 +165,7 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Parse args and run init logic
-	err = s.runWorkspaceInit(req.Args[2:], w, confirmCh)
+	err = s.runWorkspaceInit(req.Args[2:], confirmCh)
 	wPipe.Close()
 	wg.Wait()
 

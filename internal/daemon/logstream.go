@@ -9,10 +9,15 @@ import (
 	"time"
 )
 
+// PromptPrefix is a special line prefix that LogStreamWriter converts to a "prompt" level entry.
+// This allows code writing to stdout (via a pipe) to signal the client without directly
+// writing to the HTTP response writer, avoiding concurrent write corruption.
+const PromptPrefix = "\x00PROMPT:"
+
 // LogEntry represents a single log entry in NDJSON format
 type LogEntry struct {
 	Time    string `json:"time"`
-	Level   string `json:"level"` // "info", "error", "warning"
+	Level   string `json:"level"` // "info", "error", "warning", "prompt"
 	Message string `json:"message"`
 }
 
@@ -38,10 +43,16 @@ func (l *LogStreamWriter) Write(p []byte) (n int, err error) {
 		if line == "" {
 			continue
 		}
+		level := l.level
+		msg := line
+		if strings.HasPrefix(line, PromptPrefix) {
+			level = "prompt"
+			msg = strings.TrimPrefix(line, PromptPrefix)
+		}
 		entry := LogEntry{
 			Time:    time.Now().UTC().Format(time.RFC3339),
-			Level:   l.level,
-			Message: line,
+			Level:   level,
+			Message: msg,
 		}
 
 		jsonData, err := json.Marshal(entry)

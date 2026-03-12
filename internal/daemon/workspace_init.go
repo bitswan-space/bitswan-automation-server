@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,9 +25,8 @@ import (
 )
 
 // runWorkspaceInit runs the workspace init logic with stdout already redirected.
-// logWriter is the HTTP response writer for sending structured log entries directly.
 // confirmCh is used to block until the client confirms the SSH key prompt.
-func (s *Server) runWorkspaceInit(args []string, logWriter io.Writer, confirmCh <-chan struct{}) error {
+func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) error {
 	// Parse flags
 	fs := flag.NewFlagSet("workspace-init", flag.ContinueOnError)
 	remoteRepo := fs.String("remote", "", "")
@@ -312,8 +310,8 @@ func (s *Server) runWorkspaceInit(args []string, logWriter io.Writer, confirmCh 
 			fmt.Println("6. Make sure to check 'Allow write access' if you plan to push changes")
 			fmt.Println("\nPress ENTER to continue once you've added the deploy key...")
 
-			// Send a "prompt" log entry so the client knows to wait for user input
-			WriteLogEntry(logWriter, "prompt", "Press ENTER to continue once you've added the deploy key...")
+			// Send a "prompt" log entry via the stdout pipe so the client knows to wait for user input
+			fmt.Printf("%sPress ENTER to continue once you've added the deploy key...\n", PromptPrefix)
 
 			// Block until the client confirms via /workspace/init/confirm
 			<-confirmCh
