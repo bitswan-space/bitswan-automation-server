@@ -24,6 +24,7 @@ type initOptions struct {
 	oauthConfigFile    string
 	noOauth            bool
 	sshPort            string
+	staging            bool
 }
 
 func defaultInitOptions() *initOptions {
@@ -69,5 +70,6 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
 	cmd.Flags().BoolVar(&o.noOauth, "no-oauth", false, "Disable automatically fetching OAuth configuration from AOC")
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
+	cmd.Flags().BoolVar(&o.staging, "staging", false, "Use staging images for editor and gitops")
 	return cmd
 }
