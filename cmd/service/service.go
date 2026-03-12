@@ -18,6 +18,7 @@ func NewServiceCmd() *cobra.Command {
 	cmd.AddCommand(NewCouchDBCmd())
 	cmd.AddCommand(NewKafkaCmd())
 	cmd.AddCommand(NewPostgresCmd())
+	cmd.AddCommand(NewMinioCmd())
 	cmd.AddCommand(NewEditorCmd())
 
 	return cmd

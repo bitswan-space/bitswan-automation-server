@@ -21,7 +21,7 @@ var stdoutMutex sync.Mutex
 
 // ServiceEnableRequest represents the request to enable a service
 type ServiceEnableRequest struct {
-	ServiceType    string                 `json:"service_type"` // "editor", "kafka", "couchdb", "postgres"
+	ServiceType    string                 `json:"service_type"` // "editor", "kafka", "couchdb", "postgres", "minio"
 	Workspace      string                 `json:"workspace"`
 	Stage          string                 `json:"stage,omitempty"`
 	EditorImage    string                 `json:"editor_image,omitempty"`
@@ -33,6 +33,7 @@ type ServiceEnableRequest struct {
 	CouchDBImage   string                 `json:"couchdb_image,omitempty"`
 	PostgresImage  string                 `json:"postgres_image,omitempty"`
 	PgAdminImage   string                 `json:"pgadmin_image,omitempty"`
+	MinioImage     string                 `json:"minio_image,omitempty"`
 }
 
 // ServiceDisableRequest represents the request to disable a service
@@ -76,6 +77,7 @@ type ServiceUpdateRequest struct {
 	CouchDBImage   string `json:"couchdb_image,omitempty"`
 	PostgresImage  string `json:"postgres_image,omitempty"`
 	PgAdminImage   string `json:"pgadmin_image,omitempty"`
+	MinioImage     string `json:"minio_image,omitempty"`
 }
 
 // ServiceBackupRequest represents the request to backup CouchDB
@@ -108,6 +110,7 @@ type gitopsServiceRequest struct {
 	UIImage       string `json:"ui_image,omitempty"`
 	PostgresImage string `json:"postgres_image,omitempty"`
 	PgAdminImage  string `json:"pgadmin_image,omitempty"`
+	MinioImage    string `json:"minio_image,omitempty"`
 	BackupPath    string `json:"backup_path,omitempty"`
 	Force         bool   `json:"force,omitempty"`
 }
@@ -230,16 +233,16 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 	case "update":
 		s.handleServiceUpdate(w, r, serviceType)
 	case "backup":
-		if serviceType == "couchdb" || serviceType == "postgres" {
+		if serviceType == "couchdb" || serviceType == "postgres" || serviceType == "minio" {
 			s.handleServiceBackup(w, r, serviceType)
 		} else {
-			writeJSONError(w, "backup only available for couchdb and postgres", http.StatusBadRequest)
+			writeJSONError(w, "backup only available for couchdb, postgres, and minio", http.StatusBadRequest)
 		}
 	case "restore":
-		if serviceType == "couchdb" || serviceType == "postgres" {
+		if serviceType == "couchdb" || serviceType == "postgres" || serviceType == "minio" {
 			s.handleServiceRestore(w, r, serviceType)
 		} else {
-			writeJSONError(w, "restore only available for couchdb and postgres", http.StatusBadRequest)
+			writeJSONError(w, "restore only available for couchdb, postgres, and minio", http.StatusBadRequest)
 		}
 	default:
 		writeJSONError(w, "unknown action: "+action, http.StatusNotFound)
@@ -268,7 +271,7 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 	case "editor":
 		// Editor stays managed locally by the automation server
 		s.handleEditorEnableLocal(w, req)
-	case "kafka", "couchdb", "postgres":
+	case "kafka", "couchdb", "postgres", "minio":
 		// Proxy to gitops
 		gitopsBody := gitopsServiceRequest{
 			Stage:         req.Stage,
@@ -277,6 +280,7 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 			UIImage:       req.UIImage,
 			PostgresImage: req.PostgresImage,
 			PgAdminImage:  req.PgAdminImage,
+			MinioImage:    req.MinioImage,
 		}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/enable", serviceType), gitopsBody)
 	default:
@@ -315,7 +319,7 @@ func (s *Server) handleServiceDisable(w http.ResponseWriter, r *http.Request, se
 			Success: true,
 			Message: "editor service disabled successfully",
 		})
-	case "kafka", "couchdb", "postgres":
+	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/disable", serviceType), gitopsBody)
 	default:
@@ -352,7 +356,7 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request, ser
 			Success: true,
 			Data:    statusData,
 		})
-	case "kafka", "couchdb", "postgres":
+	case "kafka", "couchdb", "postgres", "minio":
 		// Build query string for gitops
 		gitopsPath := fmt.Sprintf("/services/%s/status?stage=%s&show_passwords=%v", serviceType, stage, showPasswords)
 		proxyToGitops(w, "GET", workspace, gitopsPath, nil)
@@ -392,7 +396,7 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request, serv
 			Success: true,
 			Message: "editor service started successfully",
 		})
-	case "kafka", "couchdb", "postgres":
+	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/start", serviceType), gitopsBody)
 	default:
@@ -431,7 +435,7 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request, servi
 			Success: true,
 			Message: "editor service stopped successfully",
 		})
-	case "kafka", "couchdb", "postgres":
+	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/stop", serviceType), gitopsBody)
 	default:
@@ -470,13 +474,14 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request, ser
 			Success: true,
 			Message: "editor service updated successfully",
 		})
-	case "kafka", "couchdb", "postgres":
+	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{
 			Stage:         req.Stage,
 			Image:         req.CouchDBImage,
 			KafkaImage:    req.KafkaImage,
 			PostgresImage: req.PostgresImage,
 			PgAdminImage:  req.PgAdminImage,
+			MinioImage:    req.MinioImage,
 		}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/update", serviceType), gitopsBody)
 	default:
@@ -545,6 +550,12 @@ func (s *Server) proxyCouchDBRestore(workspace, stage, backupPath string) error 
 // Used by the interactive job runner in jobs.go.
 func (s *Server) proxyPostgresRestore(workspace, stage, backupPath string) error {
 	return s.proxyServiceRestore(workspace, "postgres", stage, backupPath)
+}
+
+// proxyMinioRestore sends a MinIO restore request to gitops and returns any error.
+// Used by the interactive job runner in jobs.go.
+func (s *Server) proxyMinioRestore(workspace, stage, backupPath string) error {
+	return s.proxyServiceRestore(workspace, "minio", stage, backupPath)
 }
 
 // proxyServiceRestore sends a service restore request to gitops and returns any error.
