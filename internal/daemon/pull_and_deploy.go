@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -63,29 +64,28 @@ func RunPullAndDeploy(workspaceName, branchName string, writer io.Writer) error 
 		body, _ := io.ReadAll(resp.Body)
 		bodyStr := string(body)
 		// "Push failed" is not a fatal error - it's just a warning
-		// The GitOps service may return 500 with "Push failed" but the pull-and-deploy operation can still succeed
 		if resp.StatusCode == http.StatusInternalServerError && strings.Contains(bodyStr, "Push failed") {
-			fmt.Fprintf(writer, "⚠️  Warning: Push failed (non-fatal), continuing with pull-and-deploy...\n")
-			fmt.Fprintf(writer, "✅ Successfully pulled branch '%s' for '%s' (push warning ignored).\n", branchName, workspaceName)
+			fmt.Fprintf(writer, "Warning: Push failed (non-fatal), continuing with pull-and-deploy...\n")
+			fmt.Fprintf(writer, "Successfully pulled branch '%s' for '%s' (push warning ignored).\n", branchName, workspaceName)
 
 			// Build any missing images, then deploy
 			imageTags, err := buildMissingImages(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, writer)
 			if err != nil {
-				fmt.Fprintf(writer, "⚠️  Warning: error building images: %v\n", err)
+				return fmt.Errorf("failed to build images: %w", err)
 			}
 			if len(imageTags) > 0 {
-				fmt.Fprintln(writer, "\n🔨 Monitoring build progress...")
+				fmt.Fprintln(writer, "\nMonitoring build progress...")
 				if err := monitorImageBuilds(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, imageTags, writer); err != nil {
 					return fmt.Errorf("error monitoring image builds: %w", err)
 				}
-				fmt.Fprintln(writer, "\n✅ All automation images built successfully!")
+				fmt.Fprintln(writer, "\nAll automation images built successfully!")
 			}
 
-			fmt.Fprintln(writer, "\n🚀 Deploying automations...")
+			fmt.Fprintln(writer, "\nDeploying automations...")
 			if err := deployAutomations(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, writer); err != nil {
 				return fmt.Errorf("failed to deploy automations after pull: %w", err)
 			}
-			fmt.Fprintln(writer, "✅ Automations deployed successfully!")
+			fmt.Fprintln(writer, "Automations deployed successfully!")
 			return nil
 		}
 		return fmt.Errorf("failed to pull branch and deploy automations, status code: %d, response: %s", resp.StatusCode, bodyStr)
@@ -102,48 +102,41 @@ func RunPullAndDeploy(workspaceName, branchName string, writer io.Writer) error 
 		return fmt.Errorf("failed to parse response JSON: %w", err)
 	}
 
-	// Display success message
-	fmt.Fprintf(writer, "✅ Successfully pulled branch '%s' for '%s'.\n", branchName, workspaceName)
+	fmt.Fprintf(writer, "Successfully pulled branch '%s' for '%s'.\n", branchName, workspaceName)
 
 	// Combine image tags from gitops response with any we need to build ourselves
 	imageTags := response.ImageTags
-	var imageBuildFailed bool
 
 	// Scan the gitops worktree for images that need building
 	missingTags, err := buildMissingImages(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, writer)
 	if err != nil {
-		fmt.Fprintf(writer, "⚠️  Warning: error building images from worktree: %v\n", err)
-		imageBuildFailed = true
+		return fmt.Errorf("failed to build images: %w", err)
 	}
 	imageTags = append(imageTags, missingTags...)
 
 	// Monitor builds if any images are being built
 	if len(imageTags) > 0 {
-		fmt.Fprintln(writer, "\n📦 Building automation images:")
+		fmt.Fprintln(writer, "\nBuilding automation images:")
 		for _, tag := range imageTags {
-			fmt.Fprintf(writer, "   • %s\n", tag)
+			fmt.Fprintf(writer, "   - %s\n", tag)
 		}
 
-		fmt.Fprintln(writer, "\n🔨 Monitoring build progress...")
+		fmt.Fprintln(writer, "\nMonitoring build progress...")
 		if err := monitorImageBuilds(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, imageTags, writer); err != nil {
 			return fmt.Errorf("error monitoring image builds: %w", err)
 		}
 
-		fmt.Fprintln(writer, "\n✅ All automation images built successfully!")
-	} else if !imageBuildFailed {
-		fmt.Fprintln(writer, "\nℹ️  No new automation images to build.")
-	}
-
-	if imageBuildFailed {
-		return fmt.Errorf("cannot deploy: some required images failed to build")
+		fmt.Fprintln(writer, "\nAll automation images built successfully!")
+	} else {
+		fmt.Fprintln(writer, "\nNo new automation images to build.")
 	}
 
 	// Deploy automations
-	fmt.Fprintln(writer, "\n🚀 Deploying automations...")
+	fmt.Fprintln(writer, "\nDeploying automations...")
 	if err := deployAutomations(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, writer); err != nil {
 		return fmt.Errorf("error deploying automations: %w", err)
 	}
-	fmt.Fprintln(writer, "✅ Automations deployed successfully!")
+	fmt.Fprintln(writer, "Automations deployed successfully!")
 
 	return nil
 }
@@ -160,7 +153,6 @@ func monitorImageBuilds(gitopsURL, gitopsSecret, workspaceName string, imageTags
 	for len(buildingImages) > 0 {
 		time.Sleep(pollInterval)
 
-		// Get all images to check their building status
 		imagesURL := fmt.Sprintf("%s/images/", gitopsURL)
 		imagesURL = automations.TransformURLForDaemon(imagesURL, workspaceName)
 		resp, err := automations.SendAutomationRequest("GET", imagesURL, gitopsSecret)
@@ -180,22 +172,20 @@ func monitorImageBuilds(gitopsURL, gitopsSecret, workspaceName string, imageTags
 				return fmt.Errorf("failed to parse response JSON: %w", err)
 			}
 
-			// Create a map of tag -> building status for quick lookup
 			imageStatus := make(map[string]bool)
 			for _, img := range images {
 				imageStatus[img.Tag] = img.Building
 			}
 
-			// Check each building image
 			for tag := range buildingImages {
-				// Check if this image is no longer building
 				if building, exists := imageStatus[tag]; exists && !building {
-					fmt.Fprintf(writer, "  ✅ [%s] Build completed\n", tag)
+					fmt.Fprintf(writer, "  [%s] Build completed\n", tag)
 					delete(buildingImages, tag)
 				}
 			}
 		} else {
-			return fmt.Errorf("failed to get images: %w", err)
+			resp.Body.Close()
+			return fmt.Errorf("failed to get images status: HTTP %d", resp.StatusCode)
 		}
 	}
 
@@ -218,7 +208,6 @@ type imageRef struct {
 
 // parseImageRef parses an image string like "internal/mitchell-backend:sha203384..." into components
 func parseImageRef(image string) (imageRef, bool) {
-	// Format: "internal/{name}:sha{hash}"
 	if !strings.HasPrefix(image, "internal/") {
 		return imageRef{}, false
 	}
@@ -228,15 +217,15 @@ func parseImageRef(image string) (imageRef, bool) {
 		return imageRef{}, false
 	}
 
-	nameWithPrefix := image[:colonIdx]                   // "internal/mitchell-backend"
-	name := strings.TrimPrefix(nameWithPrefix, "internal/") // "mitchell-backend"
-	tag := image[colonIdx+1:]                             // "sha203384..."
+	nameWithPrefix := image[:colonIdx]
+	name := strings.TrimPrefix(nameWithPrefix, "internal/")
+	tag := image[colonIdx+1:]
 
 	if !strings.HasPrefix(tag, "sha") {
 		return imageRef{}, false
 	}
 
-	hash := strings.TrimPrefix(tag, "sha") // "203384..."
+	hash := strings.TrimPrefix(tag, "sha")
 
 	return imageRef{
 		Name: name,
@@ -247,8 +236,9 @@ func parseImageRef(image string) (imageRef, bool) {
 
 // buildMissingImages scans the gitops worktree for automations with image references,
 // checks which images are not yet built, and uploads them for building.
+// If the server rejects a checksum, the image directory and automation.toml references
+// are updated to match the server's computed checksum.
 func buildMissingImages(gitopsURL, gitopsSecret, workspaceName string, writer io.Writer) ([]string, error) {
-	// Get the gitops worktree path
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		return nil, fmt.Errorf("HOME environment variable not set")
@@ -256,7 +246,7 @@ func buildMissingImages(gitopsURL, gitopsSecret, workspaceName string, writer io
 	gitopsPath := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName, "gitops")
 
 	// Scan for automation.toml files and collect unique image references
-	imageRefs := make(map[string]imageRef) // keyed by tag to deduplicate
+	imageRefs := make(map[string]imageRef) // keyed by hash to deduplicate
 	entries, err := os.ReadDir(gitopsPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read gitops directory: %w", err)
@@ -269,7 +259,7 @@ func buildMissingImages(gitopsURL, gitopsSecret, workspaceName string, writer io
 		automationTomlPath := filepath.Join(gitopsPath, entry.Name(), "automation.toml")
 		data, err := os.ReadFile(automationTomlPath)
 		if err != nil {
-			continue // not an automation directory
+			continue
 		}
 
 		var cfg automationConfig
@@ -286,7 +276,7 @@ func buildMissingImages(gitopsURL, gitopsSecret, workspaceName string, writer io
 			continue
 		}
 
-		imageRefs[ref.Tag] = ref
+		imageRefs[ref.Hash] = ref
 	}
 
 	if len(imageRefs) == 0 {
@@ -296,42 +286,44 @@ func buildMissingImages(gitopsURL, gitopsSecret, workspaceName string, writer io
 	// Check which images already exist on the gitops service
 	existingImages, err := getExistingImageTags(gitopsURL, gitopsSecret, workspaceName)
 	if err != nil {
-		fmt.Fprintf(writer, "⚠️  Warning: could not check existing images: %v\n", err)
+		fmt.Fprintf(writer, "Warning: could not check existing images: %v\n", err)
 		existingImages = make(map[string]bool)
 	}
 
-	// Build missing images
 	var builtTags []string
-	var failedImages []string
 	for _, ref := range imageRefs {
 		if existingImages[ref.Tag] {
-			fmt.Fprintf(writer, "   ✓ Image %s already exists, skipping.\n", ref.Tag)
+			fmt.Fprintf(writer, "   Image %s already exists, skipping.\n", ref.Tag)
 			continue
 		}
 
-		// Check if the image source directory exists in the worktree
+		// Check if the image source directory exists
 		imageSrcDir := filepath.Join(gitopsPath, "images", ref.Hash)
 		if _, err := os.Stat(imageSrcDir); os.IsNotExist(err) {
-			fmt.Fprintf(writer, "⚠️  Warning: image source directory not found for %s (expected at images/%s), skipping.\n", ref.Tag, ref.Hash)
-			failedImages = append(failedImages, ref.Tag)
-			continue
+			return nil, fmt.Errorf("image source for hash %s was not found (expected at images/%s)", ref.Hash, ref.Hash)
 		}
 
-		fmt.Fprintf(writer, "📦 Uploading image %s for building...\n", ref.Tag)
-		tag, err := uploadImageForBuild(gitopsURL, gitopsSecret, workspaceName, ref.Name, ref.Hash, imageSrcDir, writer)
+		fmt.Fprintf(writer, "Uploading image %s for building...\n", ref.Name)
+		tag, serverChecksum, err := uploadImageForBuild(gitopsURL, gitopsSecret, workspaceName, ref.Name, imageSrcDir, writer)
 		if err != nil {
-			fmt.Fprintf(writer, "⚠️  Warning: failed to build image %s: %v\n", ref.Tag, err)
-			failedImages = append(failedImages, ref.Tag)
-			continue
+			return nil, fmt.Errorf("failed to build image %s: %w", ref.Name, err)
+		}
+
+		// If the server returned a different checksum, update the worktree
+		if serverChecksum != "" && serverChecksum != ref.Hash {
+			fmt.Fprintf(writer, "\n*** WARNING: Checksum mismatch for image %s! ***\n", ref.Name)
+			fmt.Fprintf(writer, "    Directory hash:  %s\n", ref.Hash)
+			fmt.Fprintf(writer, "    Server checksum: %s\n", serverChecksum)
+			fmt.Fprintf(writer, "    Updating image directory and automation.toml references to match server checksum.\n\n")
+
+			if err := updateWorktreeChecksums(gitopsPath, ref, serverChecksum); err != nil {
+				fmt.Fprintf(writer, "Warning: failed to update worktree checksums: %v\n", err)
+			}
 		}
 
 		if tag != "" {
 			builtTags = append(builtTags, tag)
 		}
-	}
-
-	if len(failedImages) > 0 {
-		return builtTags, fmt.Errorf("failed to build %d image(s): %s", len(failedImages), strings.Join(failedImages, ", "))
 	}
 
 	return builtTags, nil
@@ -372,21 +364,12 @@ func getExistingImageTags(gitopsURL, gitopsSecret, workspaceName string) (map[st
 	return tags, nil
 }
 
-// uploadImageForBuild creates a ZIP of the image directory and uploads it to the gitops service.
-// It computes the git tree hash of the directory contents as the checksum.
-func uploadImageForBuild(gitopsURL, gitopsSecret, workspaceName, imageName, dirHash, imageSrcDir string, writer io.Writer) (string, error) {
-	// Compute the actual git tree hash of the image directory contents
-	checksum, err := calculateGitTreeHash(imageSrcDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to calculate image checksum: %w", err)
-	}
-	fmt.Fprintf(writer, "   Computed checksum for %s: %s\n", imageName, checksum)
-
-	// Create ZIP in memory
+// createImageZip creates a ZIP archive of the image directory in memory
+func createImageZip(imageSrcDir string) (*bytes.Buffer, error) {
 	var zipBuf bytes.Buffer
 	zipWriter := zip.NewWriter(&zipBuf)
 
-	err = filepath.Walk(imageSrcDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(imageSrcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -407,37 +390,39 @@ func uploadImageForBuild(gitopsURL, gitopsSecret, workspaceName, imageName, dirH
 		return err
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to create image ZIP: %w", err)
+		return nil, err
 	}
 	zipWriter.Close()
+	return &zipBuf, nil
+}
 
-	// Create multipart form request
+// doImageUpload performs the actual HTTP upload of an image ZIP with a given checksum.
+// Returns (response body, status code, error).
+func doImageUpload(gitopsURL, gitopsSecret, workspaceName, imageName string, zipData []byte, checksum string) ([]byte, int, error) {
 	var body bytes.Buffer
 	formWriter := multipart.NewWriter(&body)
 	part, err := formWriter.CreateFormFile("file", "image.zip")
 	if err != nil {
-		return "", fmt.Errorf("failed to create form file: %w", err)
+		return nil, 0, fmt.Errorf("failed to create form file: %w", err)
 	}
-	if _, err := io.Copy(part, &zipBuf); err != nil {
-		return "", fmt.Errorf("failed to write ZIP to form: %w", err)
+	if _, err := io.Copy(part, bytes.NewReader(zipData)); err != nil {
+		return nil, 0, fmt.Errorf("failed to write ZIP to form: %w", err)
 	}
 	if err := formWriter.WriteField("checksum", checksum); err != nil {
-		return "", fmt.Errorf("failed to write checksum field: %w", err)
+		return nil, 0, fmt.Errorf("failed to write checksum field: %w", err)
 	}
 	formWriter.Close()
 
-	// Upload to gitops service
 	uploadURL := fmt.Sprintf("%s/images/%s", gitopsURL, imageName)
 	uploadURL = automations.TransformURLForDaemon(uploadURL, workspaceName)
 
 	req, err := httpReq.NewRequest("POST", uploadURL, &body)
 	if err != nil {
-		return "", fmt.Errorf("failed to create upload request: %w", err)
+		return nil, 0, fmt.Errorf("failed to create upload request: %w", err)
 	}
 	req.Header.Set("Content-Type", formWriter.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+gitopsSecret)
 
-	// Use appropriate HTTP client based on environment
 	var resp *http.Response
 	if os.Getenv("BITSWAN_CADDY_HOST") != "" && !strings.Contains(uploadURL, ".localhost") {
 		resp, err = http.DefaultClient.Do(req)
@@ -445,33 +430,133 @@ func uploadImageForBuild(gitopsURL, gitopsSecret, workspaceName, imageName, dirH
 		resp, err = httpReq.ExecuteRequestWithLocalhostResolution(req)
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to upload image: %w", err)
+		return nil, 0, fmt.Errorf("failed to upload image: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("image upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Parse response to get the image tag
+	return respBody, resp.StatusCode, nil
+}
+
+// checksumMismatchRegex matches "Expected <hex>, got <hex>" in server error messages
+var checksumMismatchRegex = regexp.MustCompile(`Expected\s+([0-9a-f]+),\s+got\s+([0-9a-f]+)`)
+
+// uploadImageForBuild creates a ZIP of the image directory and uploads it to the gitops service.
+// On checksum mismatch, it retries with the server's checksum and returns it.
+// Returns (imageTag, serverChecksum, error) where serverChecksum is non-empty only if it differed.
+func uploadImageForBuild(gitopsURL, gitopsSecret, workspaceName, imageName, imageSrcDir string, writer io.Writer) (string, string, error) {
+	checksum, err := calculateGitTreeHash(imageSrcDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to calculate image checksum: %w", err)
+	}
+
+	zipBuf, err := createImageZip(imageSrcDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create image ZIP: %w", err)
+	}
+	zipData := zipBuf.Bytes()
+
+	// First attempt with our computed checksum
+	respBody, statusCode, err := doImageUpload(gitopsURL, gitopsSecret, workspaceName, imageName, zipData, checksum)
+	if err != nil {
+		return "", "", err
+	}
+
+	// If checksum mismatch, parse server's checksum and retry
+	if statusCode == http.StatusBadRequest {
+		respStr := string(respBody)
+		if strings.Contains(respStr, "Checksum verification failed") {
+			matches := checksumMismatchRegex.FindStringSubmatch(respStr)
+			if len(matches) == 3 {
+				serverChecksum := matches[2]
+				fmt.Fprintf(writer, "   Checksum mismatch (ours: %s, server: %s), retrying with server checksum...\n", checksum, serverChecksum)
+
+				// Retry with the server's checksum
+				respBody, statusCode, err = doImageUpload(gitopsURL, gitopsSecret, workspaceName, imageName, zipData, serverChecksum)
+				if err != nil {
+					return "", "", err
+				}
+				if statusCode == http.StatusOK {
+					tag := parseUploadResponse(respBody, imageName, writer)
+					return tag, serverChecksum, nil
+				}
+				return "", "", fmt.Errorf("image upload failed on retry with status %d: %s", statusCode, string(respBody))
+			}
+		}
+		return "", "", fmt.Errorf("image upload failed with status %d: %s", statusCode, string(respBody))
+	}
+
+	if statusCode != http.StatusOK {
+		return "", "", fmt.Errorf("image upload failed with status %d: %s", statusCode, string(respBody))
+	}
+
+	tag := parseUploadResponse(respBody, imageName, writer)
+	return tag, "", nil
+}
+
+// parseUploadResponse extracts the image tag from the upload response
+func parseUploadResponse(respBody []byte, imageName string, writer io.Writer) string {
 	var buildResponse struct {
 		Tag string `json:"tag"`
 	}
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read upload response: %w", err)
+	if err := json.Unmarshal(respBody, &buildResponse); err == nil && buildResponse.Tag != "" {
+		fmt.Fprintf(writer, "   Image %s queued for building (tag: %s)\n", imageName, buildResponse.Tag)
+		return buildResponse.Tag
 	}
-	if err := json.Unmarshal(bodyBytes, &buildResponse); err == nil && buildResponse.Tag != "" {
-		fmt.Fprintf(writer, "   ✓ Image %s queued for building (tag: %s)\n", imageName, buildResponse.Tag)
-		return buildResponse.Tag, nil
-	}
-
-	return "", nil
+	return ""
 }
 
-// calculateGitTreeHash computes the git tree hash of a directory,
-// matching the algorithm used by the gitops service for checksum verification.
+// updateWorktreeChecksums renames the image directory and updates all automation.toml
+// files that reference the old hash to use the new (server) checksum.
+func updateWorktreeChecksums(gitopsPath string, ref imageRef, newChecksum string) error {
+	oldDirPath := filepath.Join(gitopsPath, "images", ref.Hash)
+	newDirPath := filepath.Join(gitopsPath, "images", newChecksum)
+
+	// Rename image directory
+	if _, err := os.Stat(oldDirPath); err == nil {
+		if err := os.Rename(oldDirPath, newDirPath); err != nil {
+			return fmt.Errorf("failed to rename image directory from %s to %s: %w", ref.Hash, newChecksum, err)
+		}
+	}
+
+	// Update all automation.toml files that reference the old hash
+	oldTag := fmt.Sprintf("sha%s", ref.Hash)
+	newTag := fmt.Sprintf("sha%s", newChecksum)
+
+	entries, err := os.ReadDir(gitopsPath)
+	if err != nil {
+		return fmt.Errorf("failed to read gitops directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		tomlPath := filepath.Join(gitopsPath, entry.Name(), "automation.toml")
+		data, err := os.ReadFile(tomlPath)
+		if err != nil {
+			continue
+		}
+
+		if !strings.Contains(string(data), oldTag) {
+			continue
+		}
+
+		newData := strings.ReplaceAll(string(data), oldTag, newTag)
+		if err := os.WriteFile(tomlPath, []byte(newData), 0644); err != nil {
+			return fmt.Errorf("failed to update %s: %w", tomlPath, err)
+		}
+	}
+
+	return nil
+}
+
+// calculateGitTreeHash calculates the git tree hash of a directory.
+// This implements the same algorithm as the gitops service uses for checksum verification.
 func calculateGitTreeHash(dirPath string) (string, error) {
 	return calculateGitTreeHashRecursive(dirPath)
 }
@@ -492,7 +577,6 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 	}
 
 	for _, file := range files {
-		// Skip hidden files (like .git)
 		if strings.HasPrefix(file.Name(), ".") {
 			continue
 		}
@@ -534,7 +618,7 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 		}
 	}
 
-	// Sort entries: directories first, then alphabetically by name
+	// Sort entries: directories first, then alphabetically
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].isDir != entries[j].isDir {
 			return entries[i].isDir
@@ -542,13 +626,13 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 		return entries[i].name < entries[j].name
 	})
 
-	// Build git tree object
 	var treeContent []byte
 	for _, e := range entries {
 		hashBytes, err := hex.DecodeString(e.hash)
 		if err != nil {
 			return "", fmt.Errorf("invalid hash: %w", err)
 		}
+
 		entryStr := fmt.Sprintf("%s %s\000", e.mode, e.name)
 		treeContent = append(treeContent, []byte(entryStr)...)
 		treeContent = append(treeContent, hashBytes...)
@@ -594,4 +678,3 @@ func deployAutomations(gitopsURL, gitopsSecret, workspaceName string, writer io.
 
 	return nil
 }
-
