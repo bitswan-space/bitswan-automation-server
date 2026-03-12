@@ -1750,6 +1750,51 @@ func (c *Client) RestorePostgresInteractive(workspace, stage, backupPath string)
 	return c.StreamJobOutput(jobID, os.Stdout, os.Stdin)
 }
 
+// ClearPostgres deletes all data from PostgreSQL databases
+func (c *Client) ClearPostgres(workspace, stage string) (*ServiceResponse, error) {
+	reqBody := ServiceClearRequest{
+		Workspace: workspace,
+		Stage:     stage,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/service/postgres/clear", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("%s", errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result ServiceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
 // BackupMinio creates a backup of MinIO data
 func (c *Client) BackupMinio(workspace, stage, backupPath string) (*ServiceResponse, error) {
 	reqBody := ServiceBackupRequest{

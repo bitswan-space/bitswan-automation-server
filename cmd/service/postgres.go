@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
@@ -29,6 +31,7 @@ func NewPostgresCmd() *cobra.Command {
 	cmd.AddCommand(newPostgresUpdateCmd())
 	cmd.AddCommand(newPostgresBackupCmd())
 	cmd.AddCommand(newPostgresRestoreCmd())
+	cmd.AddCommand(newPostgresClearCmd())
 
 	return cmd
 }
@@ -426,6 +429,66 @@ func newPostgresRestoreCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
 	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 	cmd.MarkFlagRequired("path")
+
+	return cmd
+}
+
+func newPostgresClearCmd() *cobra.Command {
+	var workspace string
+	var stage string
+
+	cmd := &cobra.Command{
+		Use:   "clear",
+		Short: "Delete all data from PostgreSQL databases",
+		Long:  "Permanently deletes all data from all PostgreSQL databases. This operation cannot be undone. You will be prompted to type 'delete all data' to confirm.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := daemon.NewClient()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Run 'bitswan automation-server-daemon init' to start it.")
+				os.Exit(1)
+			}
+
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			fmt.Println("WARNING: This will permanently delete ALL data from PostgreSQL.")
+			fmt.Println("This action cannot be undone.")
+			fmt.Println()
+			fmt.Print("To confirm, type 'delete all data': ")
+
+			reader := bufio.NewReader(os.Stdin)
+			confirmation, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+				os.Exit(1)
+			}
+
+			confirmation = strings.TrimSpace(confirmation)
+			if confirmation != "delete all data" {
+				fmt.Println("Aborted. No data was deleted.")
+				return nil
+			}
+
+			result, err := client.ClearPostgres(workspace, stage)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Println(result.Message)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().StringVar(&stage, "stage", "production", "Service realm stage (dev, staging, production)")
 
 	return cmd
 }
