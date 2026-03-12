@@ -859,7 +859,7 @@ func (c *Client) WorkspaceInit(args []string) error {
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	_, err = c.streamLogs(resp.Body, os.Stdout)
+	_, err = c.streamLogsInteractive(resp.Body, os.Stdout)
 	return err
 }
 
@@ -1121,6 +1121,91 @@ func (c *Client) streamLogs(body io.Reader, output io.Writer) (*ServiceResponse,
 		// The stream already printed everything; keep Message empty to avoid CLI re-printing
 		Message: "",
 	}, nil
+}
+
+// streamLogsInteractive is like streamLogs but handles "prompt" level entries
+// by waiting for the user to press ENTER and then confirming with the daemon.
+func (c *Client) streamLogsInteractive(body io.Reader, output io.Writer) (*ServiceResponse, error) {
+	scanner := bufio.NewScanner(body)
+	var lastEntry LogEntry
+	var hasError bool
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var entry LogEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			s := string(line)
+			if strings.HasSuffix(s, "\n") {
+				fmt.Fprint(output, s)
+			} else {
+				fmt.Fprintln(output, s)
+			}
+			continue
+		}
+
+		lastEntry = entry
+
+		if entry.Level == "prompt" {
+			// Wait for the user to press ENTER
+			fmt.Scanln()
+			// Signal the daemon to continue
+			if err := c.confirmInit(); err != nil {
+				return nil, fmt.Errorf("failed to confirm init: %w", err)
+			}
+			continue
+		}
+
+		if strings.HasSuffix(entry.Message, "\n") {
+			fmt.Fprint(output, entry.Message)
+		} else {
+			fmt.Fprintln(output, entry.Message)
+		}
+
+		if entry.Level == "error" {
+			hasError = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading stream: %w", err)
+	}
+
+	if hasError {
+		msg := strings.TrimSpace(lastEntry.Message)
+		if msg == "" {
+			msg = "operation failed"
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+
+	return &ServiceResponse{
+		Success: true,
+		Message: "",
+	}, nil
+}
+
+// confirmInit sends a POST to /workspace/init/confirm to unblock the daemon's SSH key prompt.
+func (c *Client) confirmInit() error {
+	req, err := http.NewRequest("POST", "http://unix/workspace/init/confirm", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create confirm request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to send confirm request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("confirm request failed: %s", string(body))
+	}
+	return nil
 }
 
 // DisableService disables a service

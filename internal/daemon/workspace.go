@@ -54,6 +54,8 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkspaceSelect(w, r)
 	case path == "init":
 		s.handleWorkspaceInit(w, r)
+	case path == "init/confirm":
+		s.handleWorkspaceInitConfirm(w, r)
 	case path == "update":
 		s.handleWorkspaceUpdate(w, r)
 	case path == "remove":
@@ -150,13 +152,49 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Set up confirmation channel for SSH key prompt
+	s.initConfirmMu.Lock()
+	s.initConfirmCh = make(chan struct{}, 1)
+	confirmCh := s.initConfirmCh
+	s.initConfirmMu.Unlock()
+
+	defer func() {
+		s.initConfirmMu.Lock()
+		s.initConfirmCh = nil
+		s.initConfirmMu.Unlock()
+	}()
+
 	// Parse args and run init logic
-	err = s.runWorkspaceInit(req.Args[2:])
+	err = s.runWorkspaceInit(req.Args[2:], w, confirmCh)
 	wPipe.Close()
 	wg.Wait()
 
 	if err != nil {
 		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", err))
+	}
+}
+
+// handleWorkspaceInitConfirm unblocks the workspace init SSH key prompt
+func (s *Server) handleWorkspaceInitConfirm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.initConfirmMu.Lock()
+	ch := s.initConfirmCh
+	s.initConfirmMu.Unlock()
+
+	if ch == nil {
+		writeJSONError(w, "no pending init prompt", http.StatusConflict)
+		return
+	}
+
+	select {
+	case ch <- struct{}{}:
+		w.WriteHeader(http.StatusOK)
+	default:
+		writeJSONError(w, "already confirmed", http.StatusConflict)
 	}
 }
 
