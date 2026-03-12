@@ -216,7 +216,10 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 		}()
 
 		// Run workspace init
-		err = server.runWorkspaceInit(args)
+		// MQTT-initiated inits have no interactive user, so auto-confirm the SSH key prompt
+		autoConfirmCh := make(chan struct{}, 1)
+		autoConfirmCh <- struct{}{}
+		err = server.runWorkspaceInit(args, wPipe, autoConfirmCh)
 		wPipe.Close()
 		wg.Wait()
 

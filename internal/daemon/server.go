@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,11 @@ type Server struct {
 	docsServer   *http.Server
 	docsListener net.Listener
 	token        string
+
+	// initConfirmCh is used to signal that the user has confirmed the SSH key prompt
+	// during workspace init. The daemon blocks until a value is sent on this channel.
+	initConfirmMu sync.Mutex
+	initConfirmCh chan struct{}
 }
 
 // LoadToken reads the token from the config file

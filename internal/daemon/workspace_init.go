@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,8 +25,10 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
 )
 
-// runWorkspaceInit runs the workspace init logic with stdout already redirected
-func (s *Server) runWorkspaceInit(args []string) error {
+// runWorkspaceInit runs the workspace init logic with stdout already redirected.
+// logWriter is the HTTP response writer for sending structured log entries directly.
+// confirmCh is used to block until the client confirms the SSH key prompt.
+func (s *Server) runWorkspaceInit(args []string, logWriter io.Writer, confirmCh <-chan struct{}) error {
 	// Parse flags
 	fs := flag.NewFlagSet("workspace-init", flag.ContinueOnError)
 	remoteRepo := fs.String("remote", "", "")
@@ -309,9 +312,11 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			fmt.Println("6. Make sure to check 'Allow write access' if you plan to push changes")
 			fmt.Println("\nPress ENTER to continue once you've added the deploy key...")
 
-			// Wait for user input
-			var input string
-			fmt.Scanln(&input)
+			// Send a "prompt" log entry so the client knows to wait for user input
+			WriteLogEntry(logWriter, "prompt", "Press ENTER to continue once you've added the deploy key...")
+
+			// Block until the client confirms via /workspace/init/confirm
+			<-confirmCh
 
 			var cloneURL string
 			// Clone using SSH key as user1000
