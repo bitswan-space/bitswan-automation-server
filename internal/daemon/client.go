@@ -1749,3 +1749,70 @@ func (c *Client) RestorePostgresInteractive(workspace, stage, backupPath string)
 
 	return c.StreamJobOutput(jobID, os.Stdout, os.Stdin)
 }
+
+// BackupMinio creates a backup of MinIO data
+func (c *Client) BackupMinio(workspace, stage, backupPath string) (*ServiceResponse, error) {
+	reqBody := ServiceBackupRequest{
+		Workspace:  workspace,
+		BackupPath: backupPath,
+		Stage:      stage,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/service/minio/backup", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doStreamingRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("authentication failed: invalid or missing token")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("%s", errResp.Error)
+		}
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/x-ndjson") {
+		return c.streamLogs(resp.Body, os.Stdout)
+	}
+
+	var result ServiceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// RestoreMinioInteractive restores MinIO using the interactive job API
+func (c *Client) RestoreMinioInteractive(workspace, stage, backupPath string) error {
+	params := map[string]interface{}{
+		"backup_path": backupPath,
+	}
+	if stage != "" {
+		params["stage"] = stage
+	}
+	jobID, err := c.CreateJob("minio_restore", workspace, params)
+	if err != nil {
+		return err
+	}
+
+	return c.StreamJobOutput(jobID, os.Stdout, os.Stdin)
+}
