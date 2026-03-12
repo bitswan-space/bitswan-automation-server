@@ -95,6 +95,12 @@ type ServiceRestoreRequest struct {
 	Stage string `json:"stage,omitempty"`
 }
 
+// ServiceClearRequest represents the request to clear all data from a service
+type ServiceClearRequest struct {
+	Workspace string `json:"workspace"`
+	Stage     string `json:"stage,omitempty"`
+}
+
 // ServiceResponse represents a generic service response
 type ServiceResponse struct {
 	Success bool        `json:"success"`
@@ -243,6 +249,12 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 			s.handleServiceRestore(w, r, serviceType)
 		} else {
 			writeJSONError(w, "restore only available for couchdb, postgres, and minio", http.StatusBadRequest)
+		}
+	case "clear":
+		if serviceType == "postgres" {
+			s.handleServiceClear(w, r, serviceType)
+		} else {
+			writeJSONError(w, "clear only available for postgres", http.StatusBadRequest)
 		}
 	default:
 		writeJSONError(w, "unknown action: "+action, http.StatusNotFound)
@@ -538,6 +550,30 @@ func (s *Server) handleServiceRestore(w http.ResponseWriter, r *http.Request, se
 		Force:      req.Force,
 	}
 	proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/restore", serviceType), gitopsBody)
+}
+
+// handleServiceClear handles POST /service/{serviceType}/clear
+func (s *Server) handleServiceClear(w http.ResponseWriter, r *http.Request, serviceType string) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ServiceClearRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Workspace == "" {
+		writeJSONError(w, "workspace is required", http.StatusBadRequest)
+		return
+	}
+
+	gitopsBody := gitopsServiceRequest{
+		Stage: req.Stage,
+	}
+	proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/clear", serviceType), gitopsBody)
 }
 
 // proxyCouchDBRestore sends a CouchDB restore request to gitops and returns any error.
