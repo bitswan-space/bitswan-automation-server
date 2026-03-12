@@ -300,6 +300,11 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		backupPath, _ := req.Params["backup_path"].(string)
 		stage, _ := req.Params["stage"].(string)
 		go s.runCouchDBRestoreJob(job, workspace, stage, backupPath)
+	case "postgres_restore":
+		workspace := req.Workspace
+		backupPath, _ := req.Params["backup_path"].(string)
+		stage, _ := req.Params["stage"].(string)
+		go s.runPostgresRestoreJob(job, workspace, stage, backupPath)
 	default:
 		job.Complete(fmt.Errorf("unknown job type: %s", req.Type))
 	}
@@ -564,6 +569,113 @@ func (s *Server) runCouchDBRestoreJob(job *Job, workspace, stage, backupPath str
 
 	// Proxy the restore to gitops
 	err := s.proxyCouchDBRestore(workspace, stage, backupPath)
+
+	// Close write end first to signal EOF to reader
+	stdoutW.Close()
+	stdinW.Close()
+
+	// Signal reader to stop and wait a bit for it to finish
+	close(stopReader)
+	time.Sleep(200 * time.Millisecond)
+
+	// Restore stdout/stdin
+	os.Stdout = oldStdout
+	os.Stdin = oldStdin
+
+	job.Complete(err)
+}
+
+// runPostgresRestoreJob runs the PostgreSQL restore as an interactive job
+func (s *Server) runPostgresRestoreJob(job *Job, workspace, stage, backupPath string) {
+	defer func() {
+		if r := recover(); r != nil {
+			job.Complete(fmt.Errorf("panic: %v", r))
+		}
+	}()
+
+	// Capture stdout for the job
+	oldStdout := os.Stdout
+	oldStdin := os.Stdin
+
+	// Create pipes
+	stdoutR, stdoutW, _ := os.Pipe()
+	stdinR, stdinW, _ := os.Pipe()
+
+	os.Stdout = stdoutW
+	os.Stdin = stdinR
+
+	// Channel to signal stdout reader to stop
+	stopReader := make(chan struct{})
+
+	// Goroutine to read stdout and send to job
+	go func() {
+		var buffer strings.Builder
+		readByte := make([]byte, 1)
+
+		for {
+			stdoutR.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			n, err := stdoutR.Read(readByte)
+
+			if n > 0 {
+				buffer.Write(readByte[:n])
+
+				if readByte[0] == '\n' {
+					line := strings.TrimRight(buffer.String(), "\n\r")
+					buffer.Reset()
+					if line != "" {
+						job.Log("info", line)
+					}
+				}
+			}
+
+			if err != nil {
+				if os.IsTimeout(err) {
+					partial := buffer.String()
+					if partial != "" && strings.Contains(partial, "(yes/no)") {
+						job.SetState(JobStateWaitingInput)
+						job.outputChan <- JobLogEntry{
+							Time:   time.Now().Format(time.RFC3339),
+							Level:  "prompt",
+							Prompt: partial,
+						}
+						buffer.Reset()
+					}
+					continue
+				}
+
+				select {
+				case <-stopReader:
+					if buffer.Len() > 0 {
+						job.Log("info", buffer.String())
+					}
+					return
+				default:
+					if err == io.EOF {
+						if buffer.Len() > 0 {
+							job.Log("info", buffer.String())
+						}
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	// Goroutine to handle input
+	go func() {
+		for {
+			select {
+			case input := <-job.inputChan:
+				job.SetState(JobStateRunning)
+				stdinW.WriteString(input + "\n")
+			case <-job.doneChan:
+				return
+			}
+		}
+	}()
+
+	// Proxy the restore to gitops
+	err := s.proxyPostgresRestore(workspace, stage, backupPath)
 
 	// Close write end first to signal EOF to reader
 	stdoutW.Close()

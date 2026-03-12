@@ -21,7 +21,7 @@ var stdoutMutex sync.Mutex
 
 // ServiceEnableRequest represents the request to enable a service
 type ServiceEnableRequest struct {
-	ServiceType    string                 `json:"service_type"` // "editor", "kafka", "couchdb"
+	ServiceType    string                 `json:"service_type"` // "editor", "kafka", "couchdb", "postgres"
 	Workspace      string                 `json:"workspace"`
 	Stage          string                 `json:"stage,omitempty"`
 	EditorImage    string                 `json:"editor_image,omitempty"`
@@ -31,6 +31,8 @@ type ServiceEnableRequest struct {
 	UIImage        string                 `json:"ui_image,omitempty"`
 	ZookeeperImage string                 `json:"zookeeper_image,omitempty"`
 	CouchDBImage   string                 `json:"couchdb_image,omitempty"`
+	PostgresImage  string                 `json:"postgres_image,omitempty"`
+	PgAdminImage   string                 `json:"pgadmin_image,omitempty"`
 }
 
 // ServiceDisableRequest represents the request to disable a service
@@ -72,6 +74,8 @@ type ServiceUpdateRequest struct {
 	KafkaImage     string `json:"kafka_image,omitempty"`
 	ZookeeperImage string `json:"zookeeper_image,omitempty"`
 	CouchDBImage   string `json:"couchdb_image,omitempty"`
+	PostgresImage  string `json:"postgres_image,omitempty"`
+	PgAdminImage   string `json:"pgadmin_image,omitempty"`
 }
 
 // ServiceBackupRequest represents the request to backup CouchDB
@@ -98,12 +102,14 @@ type ServiceResponse struct {
 
 // gitopsServiceRequest is the JSON body sent to the gitops /services/ endpoints
 type gitopsServiceRequest struct {
-	Stage string `json:"stage,omitempty"`
-	Image        string `json:"image,omitempty"`
-	KafkaImage   string `json:"kafka_image,omitempty"`
-	UIImage      string `json:"ui_image,omitempty"`
-	BackupPath   string `json:"backup_path,omitempty"`
-	Force        bool   `json:"force,omitempty"`
+	Stage         string `json:"stage,omitempty"`
+	Image         string `json:"image,omitempty"`
+	KafkaImage    string `json:"kafka_image,omitempty"`
+	UIImage       string `json:"ui_image,omitempty"`
+	PostgresImage string `json:"postgres_image,omitempty"`
+	PgAdminImage  string `json:"pgadmin_image,omitempty"`
+	BackupPath    string `json:"backup_path,omitempty"`
+	Force         bool   `json:"force,omitempty"`
 }
 
 // proxyToGitops forwards a service request to the gitops API and relays the response.
@@ -224,16 +230,16 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 	case "update":
 		s.handleServiceUpdate(w, r, serviceType)
 	case "backup":
-		if serviceType == "couchdb" {
-			s.handleServiceBackup(w, r)
+		if serviceType == "couchdb" || serviceType == "postgres" {
+			s.handleServiceBackup(w, r, serviceType)
 		} else {
-			writeJSONError(w, "backup only available for couchdb", http.StatusBadRequest)
+			writeJSONError(w, "backup only available for couchdb and postgres", http.StatusBadRequest)
 		}
 	case "restore":
-		if serviceType == "couchdb" {
-			s.handleServiceRestore(w, r)
+		if serviceType == "couchdb" || serviceType == "postgres" {
+			s.handleServiceRestore(w, r, serviceType)
 		} else {
-			writeJSONError(w, "restore only available for couchdb", http.StatusBadRequest)
+			writeJSONError(w, "restore only available for couchdb and postgres", http.StatusBadRequest)
 		}
 	default:
 		writeJSONError(w, "unknown action: "+action, http.StatusNotFound)
@@ -262,13 +268,15 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 	case "editor":
 		// Editor stays managed locally by the automation server
 		s.handleEditorEnableLocal(w, req)
-	case "kafka", "couchdb":
+	case "kafka", "couchdb", "postgres":
 		// Proxy to gitops
 		gitopsBody := gitopsServiceRequest{
-			Stage: req.Stage,
-			Image:        req.CouchDBImage,
-			KafkaImage:   req.KafkaImage,
-			UIImage:      req.UIImage,
+			Stage:         req.Stage,
+			Image:         req.CouchDBImage,
+			KafkaImage:    req.KafkaImage,
+			UIImage:       req.UIImage,
+			PostgresImage: req.PostgresImage,
+			PgAdminImage:  req.PgAdminImage,
 		}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/enable", serviceType), gitopsBody)
 	default:
@@ -307,7 +315,7 @@ func (s *Server) handleServiceDisable(w http.ResponseWriter, r *http.Request, se
 			Success: true,
 			Message: "editor service disabled successfully",
 		})
-	case "kafka", "couchdb":
+	case "kafka", "couchdb", "postgres":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/disable", serviceType), gitopsBody)
 	default:
@@ -344,7 +352,7 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request, ser
 			Success: true,
 			Data:    statusData,
 		})
-	case "kafka", "couchdb":
+	case "kafka", "couchdb", "postgres":
 		// Build query string for gitops
 		gitopsPath := fmt.Sprintf("/services/%s/status?stage=%s&show_passwords=%v", serviceType, stage, showPasswords)
 		proxyToGitops(w, "GET", workspace, gitopsPath, nil)
@@ -384,7 +392,7 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request, serv
 			Success: true,
 			Message: "editor service started successfully",
 		})
-	case "kafka", "couchdb":
+	case "kafka", "couchdb", "postgres":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/start", serviceType), gitopsBody)
 	default:
@@ -423,7 +431,7 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request, servi
 			Success: true,
 			Message: "editor service stopped successfully",
 		})
-	case "kafka", "couchdb":
+	case "kafka", "couchdb", "postgres":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/stop", serviceType), gitopsBody)
 	default:
@@ -462,11 +470,13 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request, ser
 			Success: true,
 			Message: "editor service updated successfully",
 		})
-	case "kafka", "couchdb":
+	case "kafka", "couchdb", "postgres":
 		gitopsBody := gitopsServiceRequest{
-			Stage: req.Stage,
-			Image:        req.CouchDBImage,
-			KafkaImage:   req.KafkaImage,
+			Stage:         req.Stage,
+			Image:         req.CouchDBImage,
+			KafkaImage:    req.KafkaImage,
+			PostgresImage: req.PostgresImage,
+			PgAdminImage:  req.PgAdminImage,
 		}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/update", serviceType), gitopsBody)
 	default:
@@ -474,8 +484,8 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request, ser
 	}
 }
 
-// handleServiceBackup handles POST /service/couchdb/backup
-func (s *Server) handleServiceBackup(w http.ResponseWriter, r *http.Request) {
+// handleServiceBackup handles POST /service/{serviceType}/backup
+func (s *Server) handleServiceBackup(w http.ResponseWriter, r *http.Request, serviceType string) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -493,14 +503,14 @@ func (s *Server) handleServiceBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gitopsBody := gitopsServiceRequest{
-		Stage: req.Stage,
-		BackupPath:   req.BackupPath,
+		Stage:      req.Stage,
+		BackupPath: req.BackupPath,
 	}
-	proxyToGitops(w, "POST", req.Workspace, "/services/couchdb/backup", gitopsBody)
+	proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/backup", serviceType), gitopsBody)
 }
 
-// handleServiceRestore handles POST /service/couchdb/restore
-func (s *Server) handleServiceRestore(w http.ResponseWriter, r *http.Request) {
+// handleServiceRestore handles POST /service/{serviceType}/restore
+func (s *Server) handleServiceRestore(w http.ResponseWriter, r *http.Request, serviceType string) {
 	if r.Method != http.MethodPost {
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -518,22 +528,33 @@ func (s *Server) handleServiceRestore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gitopsBody := gitopsServiceRequest{
-		Stage: req.Stage,
-		BackupPath:   req.BackupPath,
-		Force:        req.Force,
+		Stage:      req.Stage,
+		BackupPath: req.BackupPath,
+		Force:      req.Force,
 	}
-	proxyToGitops(w, "POST", req.Workspace, "/services/couchdb/restore", gitopsBody)
+	proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/restore", serviceType), gitopsBody)
 }
 
 // proxyCouchDBRestore sends a CouchDB restore request to gitops and returns any error.
 // Used by the interactive job runner in jobs.go.
 func (s *Server) proxyCouchDBRestore(workspace, stage, backupPath string) error {
+	return s.proxyServiceRestore(workspace, "couchdb", stage, backupPath)
+}
+
+// proxyPostgresRestore sends a PostgreSQL restore request to gitops and returns any error.
+// Used by the interactive job runner in jobs.go.
+func (s *Server) proxyPostgresRestore(workspace, stage, backupPath string) error {
+	return s.proxyServiceRestore(workspace, "postgres", stage, backupPath)
+}
+
+// proxyServiceRestore sends a service restore request to gitops and returns any error.
+func (s *Server) proxyServiceRestore(workspace, serviceType, stage, backupPath string) error {
 	metadata, err := config.GetWorkspaceMetadata(workspace)
 	if err != nil {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
 
-	reqURL := fmt.Sprintf("%s/services/couchdb/restore", metadata.GitopsURL)
+	reqURL := fmt.Sprintf("%s/services/%s/restore", metadata.GitopsURL, serviceType)
 	reqURL = automations.TransformURLForDaemon(reqURL, workspace)
 
 	body := gitopsServiceRequest{
