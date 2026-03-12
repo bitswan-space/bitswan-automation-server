@@ -288,6 +288,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			}
 			fmt.Printf("SSH key pair generated: %s\n", sshKeyPair.PublicKeyPath)
 
+			// Ensure SSH keys are accessible by user1000 (ssh-keygen runs as root)
+			chownSSHCmd := exec.Command("chown", "-R", "1000:1000", filepath.Join(gitopsConfig, "ssh"))
+			chownSSHCmd.Run() // Ignore errors
+
 			// Parse repository URL to get hostname, org, and repo
 			repoInfo, err := parseRepositoryURL(*remoteRepo)
 			if err != nil {
