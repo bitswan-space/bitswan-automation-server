@@ -164,6 +164,24 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 			wPipe.Close()
 		}()
 
+		// Set up confirmation channel for SSH key prompt
+		confirmCh := make(chan struct{}, 1)
+
+		// Subscribe to confirmation topic for this request
+		confirmTopic := fmt.Sprintf("workspace/create/%s/confirm", req.RequestID)
+		p.mu.RLock()
+		mqttClient := p.client
+		p.mu.RUnlock()
+		if mqttClient != nil {
+			mqttClient.Subscribe(confirmTopic, 1, func(_ mqtt.Client, _ mqtt.Message) {
+				select {
+				case confirmCh <- struct{}{}:
+				default:
+				}
+			})
+			defer mqttClient.Unsubscribe(confirmTopic)
+		}
+
 		// Read from pipe and publish logs
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -192,9 +210,15 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 					for i := 0; i < len(lines)-1; i++ {
 						line := strings.TrimSpace(lines[i])
 						if line != "" {
-							// Write to log writer which publishes to MQTT
-							if _, writeErr := logWriter.Write([]byte(line + "\n")); writeErr != nil {
-								fmt.Printf("Error writing to MQTT log writer: %v\n", writeErr)
+							// Detect prompt prefix and publish as "prompt" level
+							if strings.HasPrefix(line, PromptPrefix) {
+								msg := strings.TrimPrefix(line, PromptPrefix)
+								p.publishLog(req.RequestID, "prompt", msg)
+							} else {
+								// Write to log writer which publishes to MQTT
+								if _, writeErr := logWriter.Write([]byte(line + "\n")); writeErr != nil {
+									fmt.Printf("Error writing to MQTT log writer: %v\n", writeErr)
+								}
 							}
 						}
 					}
@@ -216,10 +240,7 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 		}()
 
 		// Run workspace init
-		// MQTT-initiated inits have no interactive user, so auto-confirm the SSH key prompt
-		autoConfirmCh := make(chan struct{}, 1)
-		autoConfirmCh <- struct{}{}
-		err = server.runWorkspaceInit(args, wPipe, autoConfirmCh)
+		err = server.runWorkspaceInit(args, confirmCh)
 		wPipe.Close()
 		wg.Wait()
 
