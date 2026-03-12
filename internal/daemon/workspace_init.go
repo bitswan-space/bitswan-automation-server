@@ -457,11 +457,11 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 				}
 
 				// Set up SSH to use the config file
-				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -F %s -o StrictHostKeyChecking=no' cd %s && git push -u origin %s", sshConfigPath, gitopsWorktree, workspaceName)
+				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -F %s -o StrictHostKeyChecking=no' git -C %s push -u origin %s", sshConfigPath, gitopsWorktree, workspaceName)
 			} else {
 				// Set up SSH to use the generated key for push operations
 				sshKeyPath := filepath.Join(gitopsConfig, "ssh", "id_ed25519")
-				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s -o StrictHostKeyChecking=no' cd %s && git push -u origin %s", sshKeyPath, gitopsWorktree, workspaceName)
+				sshCmd = fmt.Sprintf("GIT_SSH_COMMAND='ssh -i %s -o StrictHostKeyChecking=no' git -C %s push -u origin %s", sshKeyPath, gitopsWorktree, workspaceName)
 			}
 
 			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
