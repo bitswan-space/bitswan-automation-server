@@ -938,6 +938,27 @@ func (c *Client) WorkspaceConnectToAOC(aocUrl, automationServerId, accessToken s
 	return err
 }
 
+// ReconnectMQTT tells the daemon to reinitialize its MQTT connection using the current config.
+func (c *Client) ReconnectMQTT() error {
+	req, err := http.NewRequest("POST", "http://unix/mqtt/reinitialize", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("MQTT reinitialization failed: %s", string(body))
+	}
+
+	return nil
+}
+
 // WorkspaceRemove runs `bitswan workspace remove ...` via the daemon with NDJSON streaming.
 func (c *Client) WorkspaceRemove(workspaceName string) error {
 	bodyBytes, err := json.Marshal(WorkspaceRemoveRequest{Workspace: workspaceName})

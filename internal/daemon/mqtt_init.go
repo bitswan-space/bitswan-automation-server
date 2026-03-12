@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -113,6 +115,53 @@ func tryInitializeMQTTPublisher(server *Server) (bool, error) {
 
 	fmt.Println("MQTT publisher initialized successfully")
 	return true, nil
+}
+
+// handleMQTTReinitialize handles POST /mqtt/reinitialize
+// Disconnects any existing MQTT connection and reinitializes from the current config.
+// Called after registration to pick up new AOC credentials without restarting the daemon.
+func (s *Server) handleMQTTReinitialize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error": "method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	fmt.Println("MQTT reinitialization requested via API")
+
+	// Disconnect existing MQTT connection if any
+	publisher := GetMQTTPublisher()
+	publisher.Disconnect()
+
+	// Try to initialize with the (potentially new) config
+	initialized, err := tryInitializeMQTTPublisher(s)
+	if initialized {
+		// Start a new health monitor
+		go monitorMQTTConnection(s)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "ok",
+			"message": "MQTT publisher reinitialized successfully",
+		})
+		return
+	}
+
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": fmt.Sprintf("MQTT reinitialization failed: %v", err),
+		})
+		return
+	}
+
+	// AOC not configured
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "error",
+		"message": "AOC is not configured, cannot initialize MQTT",
+	})
 }
 
 // monitorMQTTConnection continuously monitors the MQTT connection and attempts to reconnect if it fails

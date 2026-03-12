@@ -62,7 +62,20 @@ func newRegisterCmd() *cobra.Command {
 				return fmt.Errorf("failed to create daemon client (daemon may not be running): %w", err)
 			}
 
-			return client.WorkspaceConnectToAOC(aocUrl, serverInfo.AutomationServerId, aocClient.GetAccessToken())
+			if err := client.WorkspaceConnectToAOC(aocUrl, serverInfo.AutomationServerId, aocClient.GetAccessToken()); err != nil {
+				return err
+			}
+
+			// Reinitialize MQTT connection so the daemon picks up the new AOC credentials
+			fmt.Println("\n📡 Initializing MQTT connection...")
+			if err := client.ReconnectMQTT(); err != nil {
+				fmt.Printf("Warning: Failed to initialize MQTT connection: %v\n", err)
+				fmt.Println("You may need to restart the daemon to connect to MQTT.")
+			} else {
+				fmt.Println("MQTT connection established successfully.")
+			}
+
+			return nil
 		},
 	}
 
