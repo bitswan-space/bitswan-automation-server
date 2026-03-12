@@ -76,20 +76,34 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	dockerComposePath := filepath.Join(workspacesFolder, workspaceName, "deployment")
 	// Docker compose project names must be lowercase
 	projectName := strings.ToLower(workspaceName)
-	composeArgs := [][]string{
-		{"-p", projectName + "-site", "down", "--volumes"},
-	}
-	editorComposePath := filepath.Join(dockerComposePath, "docker-compose-editor.yml")
-	if _, err := os.Stat(editorComposePath); err == nil {
-		composeArgs = append(composeArgs, []string{"-f", "docker-compose-editor.yml", "-p", projectName + "-editor", "down", "--volumes"})
-	}
-	for _, args := range composeArgs {
-		cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
-		cmd.Dir = dockerComposePath
-		cmd.Stdout = writer
-		cmd.Stderr = writer
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to remove docker containers and volumes (%v): %w", args, err)
+
+	if _, err := os.Stat(dockerComposePath); os.IsNotExist(err) {
+		fmt.Fprintf(writer, "Warning: Deployment directory %s does not exist, skipping docker compose down.\n", dockerComposePath)
+		// Still try to remove containers by project name in case they exist
+		for _, projSuffix := range []string{"-site", "-editor"} {
+			cmd := exec.Command("docker", "compose", "-p", projectName+projSuffix, "down", "--volumes")
+			cmd.Stdout = writer
+			cmd.Stderr = writer
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(writer, "Warning: Failed to remove containers for project %s%s: %v\n", projectName, projSuffix, err)
+			}
+		}
+	} else {
+		composeArgs := [][]string{
+			{"-p", projectName + "-site", "down", "--volumes"},
+		}
+		editorComposePath := filepath.Join(dockerComposePath, "docker-compose-editor.yml")
+		if _, err := os.Stat(editorComposePath); err == nil {
+			composeArgs = append(composeArgs, []string{"-f", "docker-compose-editor.yml", "-p", projectName + "-editor", "down", "--volumes"})
+		}
+		for _, args := range composeArgs {
+			cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
+			cmd.Dir = dockerComposePath
+			cmd.Stdout = writer
+			cmd.Stderr = writer
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(writer, "Warning: Failed to remove docker containers and volumes (%v): %v\n", args, err)
+			}
 		}
 	}
 	fmt.Fprintln(writer, "Docker containers and volumes removed successfully.")
@@ -97,6 +111,7 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	// 4. Remove images used by docker-compose
 	fmt.Fprintln(writer, "Removing images used by docker-compose...")
 	composeFiles := []string{"docker-compose.yml"}
+	editorComposePath := filepath.Join(dockerComposePath, "docker-compose-editor.yml")
 	if _, err := os.Stat(editorComposePath); err == nil {
 		composeFiles = append(composeFiles, "docker-compose-editor.yml")
 	}
@@ -115,15 +130,21 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	// Continue immediately - don't wait for Caddy cleanup
 
 	// 6. Remove the gitops folder
-	fmt.Fprintln(writer, "Removing gitops folder...")
-	cmd := exec.Command("rm", "-rf", workspaceName)
-	cmd.Dir = workspacesFolder
-	cmd.Stdout = writer
-	cmd.Stderr = writer
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove gitops folder: %w", err)
+	workspaceDir := filepath.Join(workspacesFolder, workspaceName)
+	if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
+		fmt.Fprintf(writer, "Warning: Workspace directory %s does not exist, nothing to remove.\n", workspaceDir)
+	} else {
+		fmt.Fprintln(writer, "Removing gitops folder...")
+		cmd := exec.Command("rm", "-rf", workspaceName)
+		cmd.Dir = workspacesFolder
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to remove gitops folder: %v\n", err)
+		} else {
+			fmt.Fprintln(writer, "GitOps folder removed successfully.")
+		}
 	}
-	fmt.Fprintln(writer, "GitOps folder removed successfully.")
 
 	// 7. Remove entries from /etc/hosts
 	fmt.Fprintln(writer, "Removing entries from /etc/hosts...")
