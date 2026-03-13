@@ -959,25 +959,33 @@ func (c *Client) ReconnectMQTT() error {
 	return nil
 }
 
-// DisconnectMQTT disconnects the MQTT connection without reinitializing.
-func (c *Client) DisconnectMQTT() error {
-	req, err := http.NewRequest("POST", "http://unix/mqtt/disconnect", nil)
+// DisconnectFromAOC tells the daemon to disconnect from AOC, cleaning up MQTT, OAuth, and workspace metadata.
+func (c *Client) DisconnectFromAOC() error {
+	req, err := http.NewRequest("POST", "http://unix/workspace/disconnect-from-aoc", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := c.doRequest(req)
+	resp, err := c.doStreamingRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("authentication failed: invalid or missing token")
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("MQTT disconnect failed: %s", string(body))
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	return nil
+	_, err = c.streamLogs(resp.Body, os.Stdout)
+	return err
 }
 
 // WorkspaceRemove runs `bitswan workspace remove ...` via the daemon with NDJSON streaming.
