@@ -34,9 +34,17 @@ func (s *Server) runDisconnectFromAOC() error {
 			fmt.Printf("  Restarting '%s'...\n", name)
 			if err := s.runWorkspaceUpdate([]string{name}); err != nil {
 				fmt.Printf("  Warning: Failed to restart workspace '%s': %v\n", name, err)
-				continue
 			}
 		}
+	}
+
+	// 5. Fix file ownership — the daemon runs as root so files we wrote
+	//    (metadata.yaml, docker-compose files) end up root-owned.
+	//    Restore ownership to user 1000 for the entire workspaces directory.
+	homeDir := os.Getenv("HOME")
+	workspacesDir := filepath.Join(homeDir, ".config", "bitswan", "workspaces")
+	if err := chownRecursive(workspacesDir); err != nil {
+		fmt.Printf("Warning: Failed to fix file ownership: %v\n", err)
 	}
 
 	fmt.Println("\nDisconnected from AOC.")
