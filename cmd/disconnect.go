@@ -15,7 +15,7 @@ func newDisconnectFromAOCCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "disconnect-from-aoc",
 		Short:        "Disconnect automation server from AOC",
-		Long:         "Disconnect this automation server from its current AOC instance. This removes AOC credentials, OAuth config, and MQTT settings from workspace metadata. Workspaces and their data are preserved.",
+		Long:         "Disconnect this automation server from its current AOC instance. This removes AOC credentials and restarts workspace services. Workspaces and their data are preserved.",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -26,14 +26,8 @@ func newDisconnectFromAOCCmd() *cobra.Command {
 				return fmt.Errorf("this automation server is not registered to any AOC instance")
 			}
 
-			fmt.Printf("This automation server is registered to AOC at %s (server ID: %s).\n\n", settings.AOCUrl, settings.AutomationServerId)
-			fmt.Println("Disconnecting will:")
-			fmt.Println("  - Remove AOC credentials from the server config")
-			fmt.Println("  - Remove OAuth config files from all workspaces")
-			fmt.Println("  - Clear MQTT connection settings from workspace metadata")
-			fmt.Println("  - Disconnect the MQTT connection")
-			fmt.Println("  - Regenerate docker-compose files and restart workspace services")
-			fmt.Println()
+			fmt.Printf("This automation server is registered to AOC at %s.\n\n", settings.AOCUrl)
+			fmt.Println("Disconnecting will remove the AOC connection and restart workspace services.")
 			fmt.Println("Your workspaces and their data will NOT be deleted.")
 			fmt.Println()
 			fmt.Print("Type 'yes' to confirm: ")
