@@ -21,6 +21,7 @@ type MQTTPublisher struct {
 	topic                string
 	connected            bool
 	workspaceListConnected bool
+	commandsSubscribed   bool // tracks whether command topic handlers have been registered
 	mu                   sync.RWMutex
 	serverInfo           *aoc.AutomationServerInfo
 	server               *Server // Reference to the server for calling internal functions
@@ -246,14 +247,25 @@ func (p *MQTTPublisher) onConnect(client mqtt.Client) {
 
 	fmt.Printf("MQTT publisher connected, ready to publish workspace lists\n")
 
-	// Subscribe to command topics
-	// Use mountpoint-relative topics - EMQX will automatically prepend the mountpoint
+	// Subscribe to command topics.
+	// On first connect, register handlers. On reconnect, re-subscribe without
+	// handlers to avoid duplicate callback invocations (Paho stacks callbacks
+	// when Subscribe is called multiple times with a non-nil handler).
 	createTopic := "workspace/create"
 	deleteTopic := "workspace/delete"
 
-	// Set up message handler
-	client.Subscribe(createTopic, 1, p.handleWorkspaceCreate)
-	client.Subscribe(deleteTopic, 1, p.handleWorkspaceDelete)
+	p.mu.Lock()
+	alreadySubscribed := p.commandsSubscribed
+	p.commandsSubscribed = true
+	p.mu.Unlock()
+
+	if !alreadySubscribed {
+		client.Subscribe(createTopic, 1, p.handleWorkspaceCreate)
+		client.Subscribe(deleteTopic, 1, p.handleWorkspaceDelete)
+	} else {
+		client.Subscribe(createTopic, 1, nil)
+		client.Subscribe(deleteTopic, 1, nil)
+	}
 
 	fmt.Printf("Subscribed to workspace command topics: %s, %s\n", createTopic, deleteTopic)
 
