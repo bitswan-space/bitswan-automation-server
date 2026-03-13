@@ -164,6 +164,26 @@ func (s *Server) handleMQTTReinitialize(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleMQTTDisconnect handles POST /mqtt/disconnect
+// Disconnects the MQTT connection without reinitializing. Used when disconnecting from AOC.
+func (s *Server) handleMQTTDisconnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error": "method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	fmt.Println("MQTT disconnect requested via API")
+
+	publisher := GetMQTTPublisher()
+	publisher.Disconnect()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "ok",
+		"message": "MQTT publisher disconnected",
+	})
+}
+
 // monitorMQTTConnection continuously monitors the MQTT connection and attempts to reconnect if it fails
 // This provides automatic self-healing for the MQTT connection
 func monitorMQTTConnection(server *Server) {

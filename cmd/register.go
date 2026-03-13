@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,17 @@ func newRegisterCmd() *cobra.Command {
 
 			if automationServerId == "" {
 				return fmt.Errorf("automation server ID is required. Use --server-id flag to provide the automation server ID from the web interface")
+			}
+
+			// Check if already registered to an AOC instance
+			cfg := config.NewAutomationServerConfig()
+			if settings, err := cfg.GetAutomationOperationsCenterSettings(); err == nil && settings.AccessToken != "" {
+				return fmt.Errorf(
+					"this automation server is already registered to an AOC instance at %s (server ID: %s).\n"+
+						"To register with a different AOC instance, first disconnect using:\n\n"+
+						"  bitswan disconnect-from-aoc",
+					settings.AOCUrl, settings.AutomationServerId,
+				)
 			}
 
 			// Create AOC client with OTP
