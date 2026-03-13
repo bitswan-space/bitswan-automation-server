@@ -3,13 +3,11 @@ package daemon
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -99,43 +97,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
 	}
 
-	// Init shared Caddy if not exists - call initIngress directly to avoid recursion
-	client := &http.Client{
-		Timeout: 2 * time.Second,
+	// Ensure the global Traefik ingress is running with REST provider support.
+	// initIngress is idempotent: it returns early if Traefik is already working correctly,
+	// and restarts the container if it exists but lacks REST provider support.
+	if _, err = initIngress(*verbose); err != nil {
+		return fmt.Errorf("failed to initialize Traefik: %w", err)
 	}
-	resp, err := client.Get("http://localhost:2019")
-	caddy_running := true
-	if err != nil {
-		caddy_running = false
-	} else {
-		defer resp.Body.Close()
-	}
+	fmt.Println("Ingress proxy is ready!")
 
-	if !caddy_running {
-		_, err := initIngress(*verbose)
-		if err != nil {
-			return fmt.Errorf("failed to initialize Caddy: %w", err)
-		}
-		fmt.Println("Ingress proxy is ready!")
-	} else {
-		fmt.Println("A running instance of Caddy with admin found")
-	}
-
-	// Initialize workspace sub-caddy
-	fmt.Println("Initializing workspace sub-caddy...")
-	workspaceCaddyInitialized, err := initCaddy(workspaceName, *verbose)
-	if err != nil {
-		return fmt.Errorf("failed to initialize workspace sub-caddy: %w", err)
-	}
-	if workspaceCaddyInitialized {
-		fmt.Println("Workspace sub-caddy initialized!")
-	} else {
-		fmt.Println("Workspace sub-caddy already running")
-	}
-
-	// Register workspace routing will be done via ingress API when routes are added
-
-	// Handle --local flag
+	// Handle --local flag (must be before initTraefik so domain is fully resolved)
 	if *local && (*setHosts || *mkCerts) {
 		return fmt.Errorf("cannot use --local flag with --set-hosts or --mkcerts")
 	}
@@ -148,7 +118,19 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
-	// Certificate generation and installation will be handled via ingress API when routes are added
+	// Initialize workspace sub-traefik.
+	// Domain is passed so the sub-traefik container gets Docker labels that tell
+	// the global Traefik to route {workspace}-*.{domain} traffic to it automatically.
+	fmt.Println("Initializing workspace sub-traefik...")
+	workspaceTraefikInitialized, err := initTraefik(workspaceName, *domain, *verbose)
+	if err != nil {
+		return fmt.Errorf("failed to initialize workspace sub-traefik: %w", err)
+	}
+	if workspaceTraefikInitialized {
+		fmt.Println("Workspace sub-traefik initialized!")
+	} else {
+		fmt.Println("Workspace sub-traefik already running")
+	}
 
 	// Create the workspace directory (we already checked it doesn't exist above)
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {

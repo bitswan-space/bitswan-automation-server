@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/dchest/uniuri"
@@ -311,12 +310,7 @@ func (k *KafkaService) Enable() error {
 	if err := k.StartContainer(); err != nil {
 		return fmt.Errorf("failed to start Kafka containers: %w", err)
 	}
-	
-	// Register Kafka UI with Caddy
-	if err := k.RegisterWithCaddy(); err != nil {
-		return fmt.Errorf("failed to register with Caddy: %w", err)
-	}
-	
+
 	fmt.Println("Kafka service enabled successfully!")
 
 	// Print connection info in a single, logically-grouped block:
@@ -356,12 +350,7 @@ func (k *KafkaService) Disable() error {
 	if err := k.StopContainer(); err != nil {
 		fmt.Printf("Warning: failed to stop Kafka containers: %v\n", err)
 	}
-	
-	// Unregister from Caddy
-	if err := k.UnregisterFromCaddy(); err != nil {
-		fmt.Printf("Warning: failed to unregister from Caddy: %v\n", err)
-	}
-	
+
 	// Remove secrets file
 	secretsFile := filepath.Join(k.WorkspacePath, "secrets", "kafka")
 	if err := os.Remove(secretsFile); err != nil && !os.IsNotExist(err) {
@@ -396,55 +385,6 @@ func (k *KafkaService) IsEnabled() bool {
 	_, composeExists := os.Stat(composeFile)
 	
 	return secretsExists == nil && composeExists == nil
-}
-
-// RegisterWithCaddy registers the Kafka UI service with Caddy
-func (k *KafkaService) RegisterWithCaddy() error {
-	// Get workspace metadata to get the domain
-	metadata, err := k.getWorkspaceMetadata()
-	if err != nil {
-		return fmt.Errorf("failed to get workspace metadata: %w", err)
-	}
-	
-	if metadata.Domain == "" {
-		return fmt.Errorf("no domain configured for workspace '%s'", k.WorkspaceName)
-	}
-	
-	// Create hostname in the format: workspacename--kafka.domain
-	hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
-	
-	// Register with Caddy using the Kafka UI container name as upstream
-	upstream := fmt.Sprintf("%s__kafka-ui:8080", k.WorkspaceName)
-	
-	if err := caddyapi.AddRoute(hostname, upstream); err != nil {
-		return fmt.Errorf("failed to register Kafka UI route: %w", err)
-	}
-	
-	fmt.Printf("Registered Kafka UI with Caddy: %s -> %s\n", hostname, upstream)
-	return nil
-}
-
-// UnregisterFromCaddy removes the Kafka UI service from Caddy
-func (k *KafkaService) UnregisterFromCaddy() error {
-	// Get workspace metadata to get the domain
-	metadata, err := k.getWorkspaceMetadata()
-	if err != nil {
-		return fmt.Errorf("failed to get workspace metadata: %w", err)
-	}
-	
-	if metadata.Domain == "" {
-		return fmt.Errorf("no domain configured for workspace '%s'", k.WorkspaceName)
-	}
-	
-	// Create hostname in the format: workspacename--kafka.domain
-	hostname := fmt.Sprintf("%s--kafka.%s", k.WorkspaceName, metadata.Domain)
-	
-	if err := caddyapi.RemoveRoute(hostname); err != nil {
-		return fmt.Errorf("failed to unregister Kafka UI route: %w", err)
-	}
-	
-	fmt.Printf("Unregistered Kafka UI from Caddy: %s\n", hostname)
-	return nil
 }
 
 // getWorkspaceMetadata retrieves workspace metadata

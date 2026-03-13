@@ -245,6 +245,136 @@ func CreateCaddyDockerComposeFile(caddyPath string, networks ...string) (string,
 	return buf.String(), nil
 }
 
+// CreateTraefikDockerComposeFile creates a docker-compose file for global Traefik.
+// networks parameter is optional - if provided, adds those networks along with bitswan_network.
+func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		traefikPath + "/certs:/tls:z",
+		traefikPath + "/acme:/acme:z",
+		"/var/run/docker.sock:/var/run/docker.sock:ro",
+	}
+
+	traefikNetworks := []string{"bitswan_network"}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": map[string]interface{}{
+				"image":          "traefik:v3.3",
+				"restart":        "always",
+				"container_name": "traefik",
+				"ports":          []string{"80:80", "443:443", "8080:8080"},
+				"networks":       traefikNetworks,
+				"volumes":        traefikVolumes,
+			},
+		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateWorkspaceTraefikDockerComposeFile creates a docker-compose file for workspace sub-traefik.
+// workspaceName: name of the workspace (used for container name)
+// traefikPath: path to traefik config directory
+// domain: the public domain (e.g. "jankotrc.bswn.io" or "bitswan.localhost") — used to generate
+//
+//	Docker labels so the global Traefik auto-discovers this sub-traefik.
+//
+// networks: list of additional networks (bitswan_network and bitswan_{workspace}_common are always included)
+func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain string, networks []string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+	}
+
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	traefikNetworks := []string{"bitswan_network", workspaceCommonNetwork}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+		workspaceCommonNetwork: map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	containerName := fmt.Sprintf("%s__traefik", workspaceName)
+
+	// Build Docker labels so the global Traefik auto-discovers this sub-traefik
+	// and creates a HostRegexp routing rule for all {workspace}-*.{domain} hostnames.
+	serviceMap := map[string]interface{}{
+		"image":          "traefik:v3.3",
+		"restart":        "always",
+		"container_name": containerName,
+		"networks":       traefikNetworks,
+		"volumes":        traefikVolumes,
+	}
+
+	if domain != "" {
+		routerName := fmt.Sprintf("%s-routing", workspaceName)
+		escapedDomain := strings.ReplaceAll(domain, ".", `\.`)
+		pattern1 := fmt.Sprintf(`%s-[^.]+\.%s`, workspaceName, escapedDomain)
+		pattern2 := fmt.Sprintf(`[^.]+\.%s-[^.]+\.%s`, workspaceName, escapedDomain)
+		rule := fmt.Sprintf("HostRegexp(`%s`) || HostRegexp(`%s`)", pattern1, pattern2)
+
+		labels := map[string]string{
+			"traefik.enable": "true",
+			fmt.Sprintf("traefik.http.routers.%s.rule", routerName):                      rule,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints", routerName):               "websecure",
+			fmt.Sprintf("traefik.http.routers.%s.tls", routerName):                       "true",
+			fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", routerName): "80",
+		}
+		if !strings.HasSuffix(domain, ".localhost") {
+			labels[fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", routerName)] = "letsencrypt"
+		}
+		serviceMap["labels"] = labels
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": serviceMap,
+		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
 // CreateWorkspaceCaddyDockerComposeFile creates a docker-compose file for workspace sub-caddy
 // workspaceName: name of the workspace (used for container name)
 // caddyPath: path to caddy config directory

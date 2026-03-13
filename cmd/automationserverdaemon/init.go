@@ -164,9 +164,10 @@ func startDaemonContainer(startMessage, successMessage string) error {
 
 	// Launch the daemon container
 	// Mount the binary, config directory, docker socket, and mkcert directory
-	// Use bitswan_network to allow resolving Docker service names like caddy
+	// Use bitswan_network to allow resolving Docker service names like traefik
 	// Use pre-built image with all tools (git, ssh-keygen, docker-cli, mkcert) pre-installed
-	// Set BITSWAN_CADDY_HOST to use 'caddy' hostname instead of 'localhost' when on bitswan_network
+	// Set BITSWAN_TRAEFIK_HOST so the daemon uses the 'traefik' container name instead of localhost
+	// Set BITSWAN_CADDY_HOST (legacy - used by isRunningInDaemon() to detect container context)
 	// Mount the bitswan automation server socket directory for IPC
 	daemonImage := "bitswan/automation-server-runtime:latest"
 
@@ -235,6 +236,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"--name", "bitswan-automation-server-daemon",
 		"--restart", "unless-stopped",
 		"--add-host", "host.docker.internal:host-gateway", // Allow container to reach host services
+		"-e", "BITSWAN_TRAEFIK_HOST=http://traefik:8080",
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
 		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", binaryPath),

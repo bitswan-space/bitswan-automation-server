@@ -7,8 +7,17 @@ Rewritten from bash to Python for better error handling and logging.
 import subprocess
 import sys
 import os
+import pwd
 from pathlib import Path
 import time
+
+
+def get_real_home():
+    """Get the real user's home directory, handling sudo correctly."""
+    sudo_user = os.environ.get('SUDO_USER')
+    if sudo_user:
+        return Path(pwd.getpwnam(sudo_user).pw_dir)
+    return Path.home()
 
 
 def run_command(cmd, description, check_success=True):
@@ -163,7 +172,20 @@ def main():
         check_success=False
     )
     
-    # Step 3: Remove Docker networks matching "bitswan_*"
+    # Step 3: Remove caddy and traefik containers (before networks, so networks can be removed)
+    run_command(
+        ["docker", "rm", "-f", "caddy"],
+        "Removing caddy container",
+        check_success=False
+    )
+
+    run_command(
+        ["docker", "rm", "-f", "traefik"],
+        "Removing traefik container",
+        check_success=False
+    )
+
+    # Step 4: Remove Docker networks matching "bitswan_*"
     print(f"\n{'='*60}")
     print("STEP: Finding and removing Docker networks matching 'bitswan_*'")
     print(f"{'='*60}")
@@ -176,7 +198,7 @@ def main():
             text=True,
             check=False
         )
-        
+
         if list_result.stdout.strip():
             network_ids = [nid.strip() for nid in list_result.stdout.strip().split('\n') if nid.strip()]
             print(f"Found {len(network_ids)} network(s) to remove: {', '.join(network_ids)}")
@@ -190,15 +212,8 @@ def main():
     except Exception as e:
         print(f"Error finding networks: {e}")
     
-    # Step 4: Remove caddy container
-    run_command(
-        ["docker", "rm", "-f", "caddy"],
-        "Removing caddy container",
-        check_success=False
-    )
-    
     # Step 5: Remove local config directory
-    config_dir = Path.home() / ".config" / "bitswan"
+    config_dir = get_real_home() / ".config" / "bitswan"
     print(f"\n{'='*60}")
     print(f"STEP: Removing local config directory: {config_dir}")
     print(f"{'='*60}")
@@ -297,7 +312,7 @@ def main():
         print("STEP: Initializing workspace")
         print(f"{'='*60}")
         run_command(
-            ["./bitswan", "workspace", "init", "--local", "test1"],
+            ["./bitswan", "workspace", "init", "--domain", "jankotrc.bswn.io", "test1"],
             "Initializing workspace 'test1' with 'bitswan workspace init --local test1'",
             check_success=True
         )

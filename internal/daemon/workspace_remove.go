@@ -5,18 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
 )
 
 // Compose represents docker-compose structure for parsing
@@ -122,54 +120,47 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "Image removal process completed.")
 
-	// 5. Remove workspace sub-caddy container and config
-	fmt.Fprintln(writer, "Removing workspace sub-caddy...")
-	caddyProjectName := fmt.Sprintf("bitswan-%s-caddy", workspaceName)
+	// 5. Remove workspace sub-traefik container and config
+	fmt.Fprintln(writer, "Removing workspace sub-traefik...")
+	traefikProjectName := fmt.Sprintf("bitswan-%s-traefik", workspaceName)
 
-	// Stop and remove workspace sub-caddy container
-	workspaceCaddyConfig := filepath.Join(workspacesFolder, workspaceName, "caddy")
-	if _, err := os.Stat(workspaceCaddyConfig); err == nil {
-		// Change to caddy config directory and run docker compose down
-		cmd := exec.Command("docker", "compose", "-p", caddyProjectName, "down", "--volumes")
-		cmd.Dir = workspaceCaddyConfig
+	// Stop and remove workspace sub-traefik container
+	workspaceTraefikConfig := filepath.Join(workspacesFolder, workspaceName, "traefik")
+	if _, err := os.Stat(workspaceTraefikConfig); err == nil {
+		// Change to traefik config directory and run docker compose down
+		cmd := exec.Command("docker", "compose", "-p", traefikProjectName, "down", "--volumes")
+		cmd.Dir = workspaceTraefikConfig
 		cmd.Stdout = writer
 		cmd.Stderr = writer
 		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(writer, "Warning: Failed to stop workspace sub-caddy: %v. Continuing with removal.\n", err)
+			fmt.Fprintf(writer, "Warning: Failed to stop workspace sub-traefik: %v. Continuing with removal.\n", err)
 		} else {
-			fmt.Fprintln(writer, "Workspace sub-caddy stopped and removed.")
+			fmt.Fprintln(writer, "Workspace sub-traefik stopped and removed.")
 		}
 
-		// Remove workspace caddy config directory
-		if err := os.RemoveAll(workspaceCaddyConfig); err != nil {
-			fmt.Fprintf(writer, "Warning: Failed to remove workspace caddy config directory: %v. Continuing with removal.\n", err)
+		// Remove workspace traefik config directory
+		if err := os.RemoveAll(workspaceTraefikConfig); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to remove workspace traefik config directory: %v. Continuing with removal.\n", err)
 		}
 	}
 
-	// Remove workspace routing from global caddy
-	fmt.Fprintln(writer, "Removing workspace routing from global caddy...")
+	// Remove workspace routing from global traefik
+	fmt.Fprintln(writer, "Removing workspace routing from global traefik...")
 	routeID := fmt.Sprintf("workspace_%s_routing", strings.ReplaceAll(strings.ReplaceAll(workspaceName, ".", "_"), "-", "_"))
-	removeURL := "http://localhost:2019/id/" + routeID
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-	}
-	req, _ := http.NewRequest("DELETE", removeURL, nil)
-	resp, err := client.Do(req)
-	if err == nil {
-		resp.Body.Close()
-		fmt.Fprintln(writer, "Workspace routing removed from global caddy.")
+	if err := removeRouteFromIngress(routeID); err != nil {
+		fmt.Fprintf(writer, "Warning: Failed to remove workspace routing from global traefik: %v. Continuing with removal.\n", err)
 	} else {
-		fmt.Fprintf(writer, "Warning: Failed to remove workspace routing from global caddy: %v. Continuing with removal.\n", err)
+		fmt.Fprintln(writer, "Workspace routing removed from global traefik.")
 	}
 
-	// 6. Remove caddy files (before removing workspace folder so metadata is available)
+	// 6. Remove traefik files (before removing workspace folder so metadata is available)
 	// Run in background - don't wait for it to complete since it's not critical
-	fmt.Fprintln(writer, "Removing caddy files (running in background)...")
+	fmt.Fprintln(writer, "Removing traefik files (running in background)...")
 	go func() {
-		// Run Caddy deletion in background - don't block main deletion process
-		caddyapi.DeleteCaddyRecordsWithWriter(workspaceName, writer)
+		// Run Traefik deletion in background - don't block main deletion process
+		traefikapi.DeleteTraefikRecordsWithWriter(workspaceName, writer)
 	}()
-	// Continue immediately - don't wait for Caddy cleanup
+	// Continue immediately - don't wait for Traefik cleanup
 
 	// 6. Remove the gitops folder
 	workspaceDir := filepath.Join(workspacesFolder, workspaceName)

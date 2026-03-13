@@ -123,16 +123,15 @@ type gitopsServiceRequest struct {
 	Force         bool   `json:"force,omitempty"`
 }
 
-// proxyToGitops forwards a service request to the gitops API and relays the response.
+// doGitopsRequest sends a request to the gitops API and returns the status code and response body.
 // method: HTTP method (GET, POST)
 // workspace: workspace name for metadata lookup
 // gitopsPath: path after the gitops base URL (e.g., "/services/couchdb/enable")
 // body: JSON body to send (nil for GET requests)
-func proxyToGitops(w http.ResponseWriter, method, workspace, gitopsPath string, body interface{}) {
+func doGitopsRequest(method, workspace, gitopsPath string, body interface{}) (int, []byte, error) {
 	metadata, err := config.GetWorkspaceMetadata(workspace)
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("failed to get workspace metadata: %v", err), http.StatusInternalServerError)
-		return
+		return 0, nil, fmt.Errorf("failed to get workspace metadata: %v", err)
 	}
 
 	reqURL := fmt.Sprintf("%s%s", metadata.GitopsURL, gitopsPath)
@@ -142,55 +141,56 @@ func proxyToGitops(w http.ResponseWriter, method, workspace, gitopsPath string, 
 	if body != nil {
 		bodyBytes, err := json.Marshal(body)
 		if err != nil {
-			writeJSONError(w, fmt.Sprintf("failed to marshal request body: %v", err), http.StatusInternalServerError)
-			return
+			return 0, nil, fmt.Errorf("failed to marshal request body: %v", err)
 		}
 		req, err := http.NewRequest(method, reqURL, bytes.NewReader(bodyBytes))
 		if err != nil {
-			writeJSONError(w, fmt.Sprintf("failed to create request: %v", err), http.StatusInternalServerError)
-			return
+			return 0, nil, fmt.Errorf("failed to create request: %v", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Authorization", "Bearer "+metadata.GitopsSecret)
 		resp, err = http.DefaultClient.Do(req)
 		if err != nil {
-			writeJSONError(w, fmt.Sprintf("failed to send request to gitops: %v", err), http.StatusBadGateway)
-			return
+			return 0, nil, fmt.Errorf("failed to send request to gitops: %v", err)
 		}
 	} else {
 		resp, err = automations.SendAutomationRequest(method, reqURL, metadata.GitopsSecret)
 		if err != nil {
-			writeJSONError(w, fmt.Sprintf("failed to send request to gitops: %v", err), http.StatusBadGateway)
-			return
+			return 0, nil, fmt.Errorf("failed to send request to gitops: %v", err)
 		}
 	}
 	defer resp.Body.Close()
 
-	// Relay the response from gitops back to the client
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		writeJSONError(w, fmt.Sprintf("failed to read gitops response: %v", err), http.StatusBadGateway)
+		return 0, nil, fmt.Errorf("failed to read gitops response: %v", err)
+	}
+
+	return resp.StatusCode, respBody, nil
+}
+
+// proxyToGitops forwards a service request to the gitops API and relays the response.
+func proxyToGitops(w http.ResponseWriter, method, workspace, gitopsPath string, body interface{}) {
+	statusCode, respBody, err := doGitopsRequest(method, workspace, gitopsPath, body)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	writeGitopsResponse(w, statusCode, respBody)
+}
 
-	// Copy content-type from gitops response
-	contentType := resp.Header.Get("Content-Type")
-	if contentType != "" {
-		w.Header().Set("Content-Type", contentType)
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-	}
-
-	if resp.StatusCode >= 400 {
+// writeGitopsResponse writes a gitops API response to the http.ResponseWriter.
+func writeGitopsResponse(w http.ResponseWriter, statusCode int, respBody []byte) {
+	if statusCode >= 400 {
 		// Extract detail message from FastAPI error response
 		var detail struct {
 			Detail string `json:"detail"`
 		}
 		if json.Unmarshal(respBody, &detail) == nil && detail.Detail != "" {
-			writeJSONError(w, detail.Detail, resp.StatusCode)
+			writeJSONError(w, detail.Detail, statusCode)
 		} else {
-			writeJSONError(w, string(respBody), resp.StatusCode)
+			writeJSONError(w, string(respBody), statusCode)
 		}
 		return
 	}
@@ -199,7 +199,7 @@ func proxyToGitops(w http.ResponseWriter, method, workspace, gitopsPath string, 
 	var gitopsData interface{}
 	if err := json.Unmarshal(respBody, &gitopsData); err != nil {
 		// If not valid JSON, return raw
-		w.WriteHeader(resp.StatusCode)
+		w.WriteHeader(statusCode)
 		w.Write(respBody)
 		return
 	}
@@ -287,18 +287,48 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 		s.handleEditorEnableLocal(w, req)
 	case "coding-agent":
 		s.handleCodingAgentEnableLocal(w, req)
-	case "kafka", "couchdb", "postgres", "minio":
-		// Proxy to gitops
+	case "postgres", "minio":
+		// Proxy to gitops (no ingress route needed for these services)
 		gitopsBody := gitopsServiceRequest{
 			Stage:         req.Stage,
-			Image:         req.CouchDBImage,
-			KafkaImage:    req.KafkaImage,
-			UIImage:       req.UIImage,
 			PostgresImage: req.PostgresImage,
 			PgAdminImage:  req.PgAdminImage,
 			MinioImage:    req.MinioImage,
 		}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/enable", serviceType), gitopsBody)
+	case "kafka", "couchdb":
+		// Proxy to gitops, then register route via ingress on success
+		gitopsBody := gitopsServiceRequest{
+			Stage:      req.Stage,
+			Image:      req.CouchDBImage,
+			KafkaImage: req.KafkaImage,
+			UIImage:    req.UIImage,
+		}
+		statusCode, respBody, err := doGitopsRequest("POST", req.Workspace, fmt.Sprintf("/services/%s/enable", serviceType), gitopsBody)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if statusCode/100 == 2 {
+			if metadata, merr := config.GetWorkspaceMetadata(req.Workspace); merr == nil && metadata.Domain != "" {
+				var hostname, upstream string
+				if serviceType == "kafka" {
+					hostname = fmt.Sprintf("%s--kafka.%s", req.Workspace, metadata.Domain)
+					upstream = fmt.Sprintf("%s__kafka-ui:8080", req.Workspace)
+				} else {
+					hostname = fmt.Sprintf("%s--couchdb.%s", req.Workspace, metadata.Domain)
+					upstream = fmt.Sprintf("%s__couchdb:5984", req.Workspace)
+				}
+				if rerr := addRouteToIngress(IngressAddRouteRequest{
+					Hostname:      hostname,
+					Upstream:      upstream,
+					WorkspaceName: req.Workspace,
+				}, ""); rerr != nil {
+					fmt.Printf("Warning: failed to register %s route via ingress: %v\n", serviceType, rerr)
+				}
+			}
+		}
+		writeGitopsResponse(w, statusCode, respBody)
 	default:
 		writeJSONError(w, "unknown service type: "+serviceType, http.StatusBadRequest)
 	}
@@ -347,9 +377,32 @@ func (s *Server) handleServiceDisable(w http.ResponseWriter, r *http.Request, se
 			Success: true,
 			Message: "coding-agent service disabled successfully",
 		})
-	case "kafka", "couchdb", "postgres", "minio":
+	case "postgres", "minio":
+		// Proxy to gitops (no ingress route needed for these services)
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/disable", serviceType), gitopsBody)
+	case "kafka", "couchdb":
+		// Proxy to gitops, then remove route via ingress on success
+		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
+		statusCode, respBody, err := doGitopsRequest("POST", req.Workspace, fmt.Sprintf("/services/%s/disable", serviceType), gitopsBody)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		if statusCode/100 == 2 {
+			if metadata, merr := config.GetWorkspaceMetadata(req.Workspace); merr == nil && metadata.Domain != "" {
+				var hostname string
+				if serviceType == "kafka" {
+					hostname = fmt.Sprintf("%s--kafka.%s", req.Workspace, metadata.Domain)
+				} else {
+					hostname = fmt.Sprintf("%s--couchdb.%s", req.Workspace, metadata.Domain)
+				}
+				if rerr := removeRouteFromIngress(hostname); rerr != nil {
+					fmt.Printf("Warning: failed to remove %s route from ingress: %v\n", serviceType, rerr)
+				}
+			}
+		}
+		writeGitopsResponse(w, statusCode, respBody)
 	default:
 		writeJSONError(w, "unknown service type: "+serviceType, http.StatusBadRequest)
 	}
@@ -835,7 +888,17 @@ func (s *Server) disableEditorService(workspace string) error {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'", workspace)
 	}
 
-	return editorService.Disable()
+	if err := editorService.Disable(); err != nil {
+		return err
+	}
+
+	if metadata, merr := config.GetWorkspaceMetadata(workspace); merr == nil && metadata.Domain != "" {
+		if rerr := removeRouteFromIngress(fmt.Sprintf("%s-editor.%s", workspace, metadata.Domain)); rerr != nil {
+			fmt.Printf("Warning: failed to remove editor route from ingress: %v\n", rerr)
+		}
+	}
+
+	return nil
 }
 
 func (s *Server) getEditorStatus(workspace string, showPasswords bool) (map[string]interface{}, error) {

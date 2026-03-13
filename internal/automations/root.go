@@ -17,7 +17,7 @@ import (
 
 // isRunningInDaemon returns true if we're running inside the automation server daemon container
 func isRunningInDaemon() bool {
-	return os.Getenv("BITSWAN_CADDY_HOST") != ""
+	return os.Getenv("BITSWAN_TRAEFIK_HOST") != "" || os.Getenv("BITSWAN_CADDY_HOST") != ""
 }
 
 // TransformURLForDaemon converts a public gitops URL to an internal Docker network URL
