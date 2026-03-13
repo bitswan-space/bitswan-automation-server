@@ -447,6 +447,13 @@ func removeRouteFromIngress(hostname string) error {
 	return caddyapi.RemoveRoute(hostname)
 }
 
+// registerWorkspaceRoutingToIngress registers the wildcard routing patterns for a workspace
+// in the global Caddy so all workspace-scoped hostnames are proxied to the workspace sub-caddy.
+// This must be called once at workspace init time, before individual service routes are added.
+func registerWorkspaceRoutingToIngress(workspaceName, domain string) error {
+	return caddyapi.RegisterWorkspaceRouting(workspaceName, domain)
+}
+
 // addRouteToIngress is a helper function that adds a route to the ingress proxy
 // It can be called directly from workspace_init or from the HTTP handler
 func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {

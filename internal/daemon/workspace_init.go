@@ -131,7 +131,14 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("Workspace sub-caddy already running")
 	}
 
-	// Register workspace routing will be done via ingress API when routes are added
+	// Register workspace routing in global caddy
+	if *domain != "" {
+		fmt.Println("Registering workspace routing in global caddy...")
+		if err := registerWorkspaceRoutingToIngress(workspaceName, *domain); err != nil {
+			return fmt.Errorf("failed to register workspace routing: %w", err)
+		}
+		fmt.Println("Workspace routing registered!")
+	}
 
 	// Handle --local flag
 	if *local && (*setHosts || *mkCerts) {
@@ -145,8 +152,6 @@ func (s *Server) runWorkspaceInit(args []string) error {
 			*domain = "bitswan.localhost"
 		}
 	}
-
-	// Certificate generation and installation will be handled via ingress API when routes are added
 
 	// Create the workspace directory (we already checked it doesn't exist above)
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
