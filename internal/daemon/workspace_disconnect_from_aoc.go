@@ -17,9 +17,10 @@ func (s *Server) runDisconnectFromAOC() error {
 	publisher.Disconnect()
 	fmt.Println("MQTT connection disconnected.")
 
-	// 2. Clean up workspace metadata and OAuth configs
+	// 2. Clean up workspace metadata and OAuth configs, collect workspace names
 	fmt.Println("Cleaning up workspace configurations...")
-	if err := cleanupWorkspaceAOCConfig(); err != nil {
+	workspaceNames, err := cleanupWorkspaceAOCConfig()
+	if err != nil {
 		fmt.Printf("Warning: Failed to clean up some workspace configs: %v\n", err)
 	}
 
@@ -30,23 +31,39 @@ func (s *Server) runDisconnectFromAOC() error {
 		return fmt.Errorf("failed to clear AOC settings: %w", err)
 	}
 
+	// 4. Regenerate docker-compose files and restart services for each workspace
+	// This removes OAuth/MQTT env vars from docker-compose and restarts editor/gitops
+	if len(workspaceNames) > 0 {
+		fmt.Println("\nUpdating workspace deployments...")
+		for _, name := range workspaceNames {
+			fmt.Printf("\n🔄 Updating workspace '%s'...\n", name)
+			if err := s.runWorkspaceUpdate([]string{name}); err != nil {
+				fmt.Printf("  Warning: Failed to update workspace '%s': %v\n", name, err)
+				continue
+			}
+			fmt.Printf("  ✅ Workspace '%s' updated and services restarted.\n", name)
+		}
+	}
+
 	fmt.Println("\nSuccessfully disconnected from AOC.")
 	return nil
 }
 
-// cleanupWorkspaceAOCConfig removes OAuth config files and clears MQTT metadata from all workspaces
-func cleanupWorkspaceAOCConfig() error {
+// cleanupWorkspaceAOCConfig removes OAuth config files and clears MQTT metadata from all workspaces.
+// Returns the list of workspace names that were cleaned up.
+func cleanupWorkspaceAOCConfig() ([]string, error) {
 	homeDir := os.Getenv("HOME")
 	workspacesDir := filepath.Join(homeDir, ".config", "bitswan", "workspaces")
 
 	entries, err := os.ReadDir(workspacesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("failed to read workspaces directory: %w", err)
+		return nil, fmt.Errorf("failed to read workspaces directory: %w", err)
 	}
 
+	var workspaceNames []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -54,6 +71,7 @@ func cleanupWorkspaceAOCConfig() error {
 
 		workspaceName := entry.Name()
 		workspacePath := filepath.Join(workspacesDir, workspaceName)
+		workspaceNames = append(workspaceNames, workspaceName)
 
 		// Remove oauth-config.yaml
 		oauthConfigPath := filepath.Join(workspacePath, "oauth-config.yaml")
@@ -72,7 +90,7 @@ func cleanupWorkspaceAOCConfig() error {
 		}
 	}
 
-	return nil
+	return workspaceNames, nil
 }
 
 // clearWorkspaceAOCMetadata clears AOC-related fields from a workspace's metadata.yaml

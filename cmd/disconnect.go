@@ -32,6 +32,7 @@ func newDisconnectFromAOCCmd() *cobra.Command {
 			fmt.Println("  - Remove OAuth config files from all workspaces")
 			fmt.Println("  - Clear MQTT connection settings from workspace metadata")
 			fmt.Println("  - Disconnect the MQTT connection")
+			fmt.Println("  - Regenerate docker-compose files and restart workspace services")
 			fmt.Println()
 			fmt.Println("Your workspaces and their data will NOT be deleted.")
 			fmt.Println()
