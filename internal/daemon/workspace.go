@@ -64,6 +64,8 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkspaceSync(w, r)
 	case path == "connect-to-aoc":
 		s.handleWorkspaceConnectToAOC(w, r)
+	case path == "disconnect-from-aoc":
+		s.handleWorkspaceDisconnectFromAOC(w, r)
 	case path == "start":
 		s.handleWorkspaceStart(w, r)
 	case path == "stop":
@@ -519,6 +521,72 @@ func (s *Server) handleWorkspaceConnectToAOC(w http.ResponseWriter, r *http.Requ
 
 	if err != nil {
 		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", err))
+	}
+}
+
+// handleWorkspaceDisconnectFromAOC handles POST /workspace/disconnect-from-aoc
+func (s *Server) handleWorkspaceDisconnectFromAOC(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Stream logs (NDJSON)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	// Redirect stdout to stream logs
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", pipeErr))
+		return
+	}
+
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	logWriter := NewLogStreamWriter(w, "info")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := rPipe.Read(buf)
+			if n > 0 {
+				logWriter.Write(buf[:n])
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", readErr))
+				break
+			}
+		}
+	}()
+
+	// Run the disconnect logic
+	disconnectErr := s.runDisconnectFromAOC()
+	wPipe.Close()
+	wg.Wait()
+
+	if disconnectErr != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", disconnectErr))
 	}
 }
 
