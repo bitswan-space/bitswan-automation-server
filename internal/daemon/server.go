@@ -144,6 +144,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// MQTT endpoints (authenticated)
 	mux.HandleFunc("/mqtt/reinitialize", s.authMiddleware(s.handleMQTTReinitialize))
+	mux.HandleFunc("/mqtt/disconnect", s.authMiddleware(s.handleMQTTDisconnect))
 
 	// Job endpoints for interactive operations (authenticated)
 	mux.HandleFunc("/jobs", s.authMiddleware(s.handleJobs))
