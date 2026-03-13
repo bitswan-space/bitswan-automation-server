@@ -229,10 +229,8 @@ func fixEditorPermissions(workspaceName string) error {
 		}
 
 		// Chown the directory and all its contents to 1000:1000
-		chownCom := exec.Command("chown", "-R", "1000:1000", dir.path)
-		output, err := chownCom.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("failed to chown %s dir (%s): %w, output: %s", dir.name, dir.path, err, string(output))
+		if err := chownRecursive(dir.path); err != nil {
+			return fmt.Errorf("failed to chown %s dir (%s): %w", dir.name, dir.path, err)
 		}
 
 		// Set permissions: 755 for directories, 644 for files
