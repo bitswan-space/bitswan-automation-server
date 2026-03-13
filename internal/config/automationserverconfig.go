@@ -210,6 +210,17 @@ func (m *AutomationServerConfig) ConfigExists() bool {
 	return tomlExists == nil
 }
 
+// ClearAOCSettings removes the AOC connection settings while preserving other config
+func (m *AutomationServerConfig) ClearAOCSettings() error {
+	config, err := m.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	config.AutomationOperationsCenter = AutomationOperationsCenterSettings{}
+	return m.SaveConfig(config)
+}
+
 // GetConfigPath returns the path to the primary TOML config file
 func (m *AutomationServerConfig) GetConfigPath() string {
 	return filepath.Join(m.configDir, "automation_server_config.toml")
