@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -155,17 +153,10 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	// Remove workspace routing from global caddy
 	fmt.Fprintln(writer, "Removing workspace routing from global caddy...")
 	routeID := fmt.Sprintf("workspace_%s_routing", strings.ReplaceAll(strings.ReplaceAll(workspaceName, ".", "_"), "-", "_"))
-	removeURL := "http://localhost:2019/id/" + routeID
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-	}
-	req, _ := http.NewRequest("DELETE", removeURL, nil)
-	resp, err := client.Do(req)
-	if err == nil {
-		resp.Body.Close()
-		fmt.Fprintln(writer, "Workspace routing removed from global caddy.")
-	} else {
+	if err := removeRouteFromIngress(routeID); err != nil {
 		fmt.Fprintf(writer, "Warning: Failed to remove workspace routing from global caddy: %v. Continuing with removal.\n", err)
+	} else {
+		fmt.Fprintln(writer, "Workspace routing removed from global caddy.")
 	}
 
 	// 6. Remove caddy files (before removing workspace folder so metadata is available)

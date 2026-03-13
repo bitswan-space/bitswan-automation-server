@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/dchest/uniuri"
@@ -193,11 +192,6 @@ func (c *CouchDBService) Enable() error {
 		return fmt.Errorf("failed to start CouchDB container: %w", err)
 	}
 
-	// Register with Caddy
-	if err := c.RegisterWithCaddy(); err != nil {
-		return fmt.Errorf("failed to register with Caddy: %w", err)
-	}
-
 	fmt.Println("CouchDB service enabled successfully!")
 
 	// Print connection info in a single, logically-grouped block:
@@ -245,11 +239,6 @@ func (c *CouchDBService) Disable() error {
 		fmt.Printf("Warning: failed to stop CouchDB container: %v\n", err)
 	}
 
-	// Unregister from Caddy
-	if err := c.UnregisterFromCaddy(); err != nil {
-		fmt.Printf("Warning: failed to unregister from Caddy: %v\n", err)
-	}
-
 	// Remove secrets file
 	secretsFile := filepath.Join(c.WorkspacePath, "secrets", "couchdb")
 	if err := os.Remove(secretsFile); err != nil && !os.IsNotExist(err) {
@@ -276,55 +265,6 @@ func (c *CouchDBService) IsEnabled() bool {
 	_, composeExists := os.Stat(composeFile)
 
 	return secretsExists == nil && composeExists == nil
-}
-
-// RegisterWithCaddy registers the CouchDB service with Caddy
-func (c *CouchDBService) RegisterWithCaddy() error {
-	// Get workspace metadata to get the domain
-	metadata, err := c.getWorkspaceMetadata()
-	if err != nil {
-		return fmt.Errorf("failed to get workspace metadata: %w", err)
-	}
-
-	if metadata.Domain == "" {
-		return fmt.Errorf("no domain configured for workspace '%s'", c.WorkspaceName)
-	}
-
-	// Create hostname in the format: workspacename--couchdb.domain
-	hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
-
-	// Register with Caddy using the container name as upstream
-	upstream := fmt.Sprintf("%s__couchdb:5984", c.WorkspaceName)
-
-	if err := caddyapi.AddRoute(hostname, upstream); err != nil {
-		return fmt.Errorf("failed to register CouchDB route: %w", err)
-	}
-
-	fmt.Printf("Registered CouchDB with Caddy: %s -> %s\n", hostname, upstream)
-	return nil
-}
-
-// UnregisterFromCaddy removes the CouchDB service from Caddy
-func (c *CouchDBService) UnregisterFromCaddy() error {
-	// Get workspace metadata to get the domain
-	metadata, err := c.getWorkspaceMetadata()
-	if err != nil {
-		return fmt.Errorf("failed to get workspace metadata: %w", err)
-	}
-
-	if metadata.Domain == "" {
-		return fmt.Errorf("no domain configured for workspace '%s'", c.WorkspaceName)
-	}
-
-	// Create hostname in the format: workspacename--couchdb.domain
-	hostname := fmt.Sprintf("%s--couchdb.%s", c.WorkspaceName, metadata.Domain)
-
-	if err := caddyapi.RemoveRoute(hostname); err != nil {
-		return fmt.Errorf("failed to unregister CouchDB route: %w", err)
-	}
-
-	fmt.Printf("Unregistered CouchDB from Caddy: %s\n", hostname)
-	return nil
 }
 
 // getWorkspaceMetadata retrieves workspace metadata
