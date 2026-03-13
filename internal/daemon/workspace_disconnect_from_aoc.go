@@ -12,40 +12,34 @@ import (
 // runDisconnectFromAOC disconnects from AOC by cleaning up all AOC-related config
 func (s *Server) runDisconnectFromAOC() error {
 	// 1. Disconnect MQTT
-	fmt.Println("Disconnecting MQTT connection...")
 	publisher := GetMQTTPublisher()
 	publisher.Disconnect()
-	fmt.Println("MQTT connection disconnected.")
 
 	// 2. Clean up workspace metadata and OAuth configs, collect workspace names
-	fmt.Println("Cleaning up workspace configurations...")
 	workspaceNames, err := cleanupWorkspaceAOCConfig()
 	if err != nil {
 		fmt.Printf("Warning: Failed to clean up some workspace configs: %v\n", err)
 	}
 
 	// 3. Clear AOC settings from the main config
-	fmt.Println("Removing AOC credentials...")
 	cfg := config.NewAutomationServerConfig()
 	if err := cfg.ClearAOCSettings(); err != nil {
 		return fmt.Errorf("failed to clear AOC settings: %w", err)
 	}
 
 	// 4. Regenerate docker-compose files and restart services for each workspace
-	// This removes OAuth/MQTT env vars from docker-compose and restarts editor/gitops
 	if len(workspaceNames) > 0 {
-		fmt.Println("\nUpdating workspace deployments...")
+		fmt.Printf("Restarting %d workspace(s)...\n", len(workspaceNames))
 		for _, name := range workspaceNames {
-			fmt.Printf("\n🔄 Updating workspace '%s'...\n", name)
+			fmt.Printf("  Restarting '%s'...\n", name)
 			if err := s.runWorkspaceUpdate([]string{name}); err != nil {
-				fmt.Printf("  Warning: Failed to update workspace '%s': %v\n", name, err)
+				fmt.Printf("  Warning: Failed to restart workspace '%s': %v\n", name, err)
 				continue
 			}
-			fmt.Printf("  ✅ Workspace '%s' updated and services restarted.\n", name)
 		}
 	}
 
-	fmt.Println("\nSuccessfully disconnected from AOC.")
+	fmt.Println("\nDisconnected from AOC.")
 	return nil
 }
 
@@ -77,16 +71,14 @@ func cleanupWorkspaceAOCConfig() ([]string, error) {
 		oauthConfigPath := filepath.Join(workspacePath, "oauth-config.yaml")
 		if _, err := os.Stat(oauthConfigPath); err == nil {
 			if err := os.Remove(oauthConfigPath); err != nil {
-				fmt.Printf("  Warning: Failed to remove %s: %v\n", oauthConfigPath, err)
-			} else {
-				fmt.Printf("  Removed OAuth config for workspace '%s'\n", workspaceName)
+				fmt.Printf("  Warning: Failed to remove OAuth config for workspace '%s': %v\n", workspaceName, err)
 			}
 		}
 
 		// Clear MQTT and workspace_id fields from metadata.yaml
 		metadataPath := filepath.Join(workspacePath, "metadata.yaml")
-		if err := clearWorkspaceAOCMetadata(metadataPath, workspaceName); err != nil {
-			fmt.Printf("  Warning: Failed to update metadata for workspace '%s': %v\n", workspaceName, err)
+		if err := clearWorkspaceAOCMetadata(metadataPath); err != nil {
+			fmt.Printf("  Warning: Failed to clear metadata for workspace '%s': %v\n", workspaceName, err)
 		}
 	}
 
@@ -94,7 +86,7 @@ func cleanupWorkspaceAOCConfig() ([]string, error) {
 }
 
 // clearWorkspaceAOCMetadata clears AOC-related fields from a workspace's metadata.yaml
-func clearWorkspaceAOCMetadata(metadataPath, workspaceName string) error {
+func clearWorkspaceAOCMetadata(metadataPath string) error {
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -115,10 +107,5 @@ func clearWorkspaceAOCMetadata(metadataPath, workspaceName string) error {
 	metadata.MqttPort = nil
 	metadata.MqttTopic = nil
 
-	if err := metadata.SaveToFile(metadataPath); err != nil {
-		return fmt.Errorf("failed to save metadata: %w", err)
-	}
-
-	fmt.Printf("  Cleared AOC metadata for workspace '%s'\n", workspaceName)
-	return nil
+	return metadata.SaveToFile(metadataPath)
 }
