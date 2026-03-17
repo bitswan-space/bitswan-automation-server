@@ -1,14 +1,9 @@
 package oauth
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v2"
@@ -211,106 +206,3 @@ func CreateOAuthEnvVars(config *Config, serviceName, workspaceName, domain strin
 	return oauthEnvVars
 }
 
-// EnsureOAuth2Proxy downloads oauth2-proxy binary if it doesn't exist
-func EnsureOAuth2Proxy(bitswanConfigDir string) error {
-	oauth2ProxyPath := filepath.Join(bitswanConfigDir, "oauth2-proxy")
-
-	// Check if oauth2-proxy already exists
-	if _, err := os.Stat(oauth2ProxyPath); err == nil {
-		fmt.Println("oauth2-proxy already exists at", oauth2ProxyPath)
-		return nil
-	}
-
-	fmt.Println("Downloading oauth2-proxy...")
-
-	// Get the latest release info from GitHub API
-	resp, err := http.Get("https://api.github.com/repos/oauth2-proxy/oauth2-proxy/releases/latest")
-	if err != nil {
-		return fmt.Errorf("failed to fetch latest release info: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to fetch release info: status code %d", resp.StatusCode)
-	}
-
-	// Parse the JSON response
-	var releaseInfo struct {
-		Assets []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&releaseInfo); err != nil {
-		return fmt.Errorf("failed to parse release info: %w", err)
-	}
-
-	// Find the linux-amd64 tarball
-	var downloadURL string
-	for _, asset := range releaseInfo.Assets {
-		if strings.Contains(asset.Name, "linux-amd64.tar.gz") && !strings.Contains(asset.Name, ".sha256sum") {
-			downloadURL = asset.BrowserDownloadURL
-			break
-		}
-	}
-
-	if downloadURL == "" {
-		return fmt.Errorf("could not find linux-amd64 tarball in release assets")
-	}
-
-	fmt.Printf("Downloading from: %s\n", downloadURL)
-
-	// Download the tarball
-	resp, err = http.Get(downloadURL)
-	if err != nil {
-		return fmt.Errorf("failed to download oauth2-proxy: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download: status code %d", resp.StatusCode)
-	}
-
-	// Create a gzip reader
-	gzipReader, err := gzip.NewReader(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gzipReader.Close()
-
-	// Create a tar reader
-	tarReader := tar.NewReader(gzipReader)
-
-	// Extract oauth2-proxy binary from the tar archive
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("failed to read tar: %w", err)
-		}
-
-		// Look for the oauth2-proxy binary
-		if strings.HasSuffix(header.Name, "/oauth2-proxy") || header.Name == "oauth2-proxy" {
-			// Create the output file
-			outFile, err := os.OpenFile(oauth2ProxyPath, os.O_CREATE|os.O_WRONLY, 0755)
-			if err != nil {
-				return fmt.Errorf("failed to create output file: %w", err)
-			}
-
-			// Copy the binary
-			if _, err := io.Copy(outFile, tarReader); err != nil {
-				outFile.Close()
-				return fmt.Errorf("failed to write binary: %w", err)
-			}
-			outFile.Close()
-
-			fmt.Printf("oauth2-proxy downloaded successfully to %s\n", oauth2ProxyPath)
-			return nil
-		}
-	}
-
-	return fmt.Errorf("oauth2-proxy binary not found in the tarball")
-}
