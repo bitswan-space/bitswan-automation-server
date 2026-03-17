@@ -3,13 +3,11 @@ package daemon
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -97,38 +95,24 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
 	}
 
-	// Init shared Caddy if not exists - call initIngress directly to avoid recursion
-	client := &http.Client{
-		Timeout: 2 * time.Second,
+	// Ensure the global Traefik ingress is running with REST provider support.
+	// initIngress is idempotent: it returns early if Traefik is already working correctly,
+	// and restarts the container if it exists but lacks REST provider support.
+	if _, err = initIngress(*verbose); err != nil {
+		return fmt.Errorf("failed to initialize Traefik: %w", err)
 	}
-	resp, err := client.Get("http://localhost:2019")
-	caddy_running := true
-	if err != nil {
-		caddy_running = false
-	} else {
-		defer resp.Body.Close()
-	}
+	fmt.Println("Ingress proxy is ready!")
 
-	if !caddy_running {
-		_, err := initIngress(*verbose)
-		if err != nil {
-			return fmt.Errorf("failed to initialize Caddy: %w", err)
-		}
-		fmt.Println("Ingress proxy is ready!")
-	} else {
-		fmt.Println("A running instance of Caddy with admin found")
-	}
-
-	// Initialize workspace sub-caddy
-	fmt.Println("Initializing workspace sub-caddy...")
-	workspaceCaddyInitialized, err := initCaddy(workspaceName, *verbose)
+	// Initialize workspace sub-traefik
+	fmt.Println("Initializing workspace sub-traefik...")
+	workspaceTraefikInitialized, err := initTraefik(workspaceName, *verbose)
 	if err != nil {
-		return fmt.Errorf("failed to initialize workspace sub-caddy: %w", err)
+		return fmt.Errorf("failed to initialize workspace sub-traefik: %w", err)
 	}
-	if workspaceCaddyInitialized {
-		fmt.Println("Workspace sub-caddy initialized!")
+	if workspaceTraefikInitialized {
+		fmt.Println("Workspace sub-traefik initialized!")
 	} else {
-		fmt.Println("Workspace sub-caddy already running")
+		fmt.Println("Workspace sub-traefik already running")
 	}
 
 	// Register workspace routing in global caddy

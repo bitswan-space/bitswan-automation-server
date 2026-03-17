@@ -248,6 +248,106 @@ func CreateCaddyDockerComposeFile(caddyPath string, networks ...string) (string,
 	return buf.String(), nil
 }
 
+// CreateTraefikDockerComposeFile creates a docker-compose file for global Traefik.
+// networks parameter is optional - if provided, adds those networks along with bitswan_network.
+func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		traefikPath + "/certs:/tls:z",
+	}
+
+	traefikNetworks := []string{"bitswan_network"}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": map[string]interface{}{
+				"image":          "traefik:v3.3",
+				"restart":        "always",
+				"container_name": "traefik",
+				"ports":          []string{"80:80", "443:443", "8080:8080"},
+				"networks":       traefikNetworks,
+				"volumes":        traefikVolumes,
+			},
+		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateWorkspaceTraefikDockerComposeFile creates a docker-compose file for workspace sub-traefik.
+// workspaceName: name of the workspace (used for container name)
+// traefikPath: path to traefik config directory
+// networks: list of additional networks (bitswan_network and bitswan_{workspace}_common are always included)
+func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath string, networks []string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+	}
+
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	traefikNetworks := []string{"bitswan_network", workspaceCommonNetwork}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+		workspaceCommonNetwork: map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	containerName := fmt.Sprintf("%s__traefik", workspaceName)
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": map[string]interface{}{
+				"image":          "traefik:v3.3",
+				"restart":        "always",
+				"container_name": containerName,
+				"networks":       traefikNetworks,
+				"volumes":        traefikVolumes,
+			},
+		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
 // CreateWorkspaceCaddyDockerComposeFile creates a docker-compose file for workspace sub-caddy
 // workspaceName: name of the workspace (used for container name)
 // caddyPath: path to caddy config directory
