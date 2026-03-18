@@ -67,3 +67,35 @@ func GetLatestEditorStagingVersion() (string, error) {
 func GetLatestGitopsStagingVersion() (string, error) {
 	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops-staging/tags/")
 }
+
+// ResolveGitopsImage returns the full gitops image string based on the staging flag.
+func ResolveGitopsImage(staging bool) (string, error) {
+	if staging {
+		version, err := GetLatestGitopsStagingVersion()
+		if err != nil {
+			return "", err
+		}
+		return "bitswan/gitops-staging:" + version, nil
+	}
+	version, err := GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops/tags/")
+	if err != nil {
+		return "", err
+	}
+	return "bitswan/gitops:" + version, nil
+}
+
+// ResolveEditorImage returns the full editor image string based on the staging flag.
+func ResolveEditorImage(staging bool) (string, error) {
+	if staging {
+		version, err := GetLatestEditorStagingVersion()
+		if err != nil {
+			return "", err
+		}
+		return "bitswan/bitswan-editor-staging:" + version, nil
+	}
+	version, err := GetLatestEditorVersion()
+	if err != nil {
+		return "", err
+	}
+	return "bitswan/bitswan-editor:" + version, nil
+}
