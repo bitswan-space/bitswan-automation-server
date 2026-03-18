@@ -523,35 +523,19 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	imgopsImage := *gitopsImage
 	if imgopsImage == "" {
-		if *staging {
-			gitopsLatestVersion, err := dockerhub.GetLatestGitopsStagingVersion()
-			if err != nil {
-				return fmt.Errorf("failed to get latest BitSwan GitOps staging version: %w", err)
-			}
-			imgopsImage = "bitswan/gitops-staging:" + gitopsLatestVersion
-		} else {
-			gitopsLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops/tags/")
-			if err != nil {
-				return fmt.Errorf("failed to get latest BitSwan GitOps version: %w", err)
-			}
-			imgopsImage = "bitswan/gitops:" + gitopsLatestVersion
+		var err error
+		imgopsImage, err = dockerhub.ResolveGitopsImage(*staging)
+		if err != nil {
+			return fmt.Errorf("failed to get latest BitSwan GitOps image: %w", err)
 		}
 	}
 
 	bitswanEditorImage := *editorImage
 	if bitswanEditorImage == "" {
-		if *staging {
-			bitswanEditorLatestVersion, err := dockerhub.GetLatestEditorStagingVersion()
-			if err != nil {
-				return fmt.Errorf("failed to get latest BitSwan Editor staging version: %w", err)
-			}
-			bitswanEditorImage = "bitswan/bitswan-editor-staging:" + bitswanEditorLatestVersion
-		} else {
-			bitswanEditorLatestVersion, err := dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/bitswan-editor/tags/")
-			if err != nil {
-				return fmt.Errorf("failed to get latest BitSwan Editor version: %w", err)
-			}
-			bitswanEditorImage = "bitswan/bitswan-editor:" + bitswanEditorLatestVersion
+		var err error
+		bitswanEditorImage, err = dockerhub.ResolveEditorImage(*staging)
+		if err != nil {
+			return fmt.Errorf("failed to get latest BitSwan Editor image: %w", err)
 		}
 	}
 

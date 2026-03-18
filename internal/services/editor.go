@@ -645,19 +645,9 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 	if editorImage != "" {
 		bitswanEditorImage = editorImage
 	} else {
-		var latestVersion string
-		if staging {
-			latestVersion, err = dockerhub.GetLatestEditorStagingVersion()
-			if err != nil {
-				return fmt.Errorf("failed to get latest staging version: %w", err)
-			}
-			bitswanEditorImage = "bitswan/bitswan-editor-staging:" + latestVersion
-		} else {
-			latestVersion, err = e.getLatestVersion()
-			if err != nil {
-				return fmt.Errorf("failed to get latest version: %w", err)
-			}
-			bitswanEditorImage = "bitswan/bitswan-editor:" + latestVersion
+		bitswanEditorImage, err = dockerhub.ResolveEditorImage(staging)
+		if err != nil {
+			return fmt.Errorf("failed to get latest editor image: %w", err)
 		}
 	}
 

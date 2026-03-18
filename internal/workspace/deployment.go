@@ -71,23 +71,15 @@ func UpdateWorkspaceDeployment(workspaceName string, customGitopsImage string, s
 		gitopsImage = customGitopsImage
 		fmt.Printf("Using custom gitops image: %s\n", gitopsImage)
 	} else {
-		// Get latest gitops image
-		var gitopsLatestVersion string
 		var err error
-		if staging {
-			gitopsLatestVersion, err = dockerhub.GetLatestGitopsStagingVersion()
-			if err != nil {
-				fmt.Printf("    ⚠️  Failed to get latest gitops-staging version, using 'latest': %v\n", err)
-				gitopsLatestVersion = "latest"
+		gitopsImage, err = dockerhub.ResolveGitopsImage(staging)
+		if err != nil {
+			fmt.Printf("    ⚠️  Failed to get latest gitops image, using 'latest': %v\n", err)
+			if staging {
+				gitopsImage = "bitswan/gitops-staging:latest"
+			} else {
+				gitopsImage = "bitswan/gitops:latest"
 			}
-			gitopsImage = "bitswan/gitops-staging:" + gitopsLatestVersion
-		} else {
-			gitopsLatestVersion, err = dockerhub.GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/gitops/tags/")
-			if err != nil {
-				fmt.Printf("    ⚠️  Failed to get latest gitops version, using 'latest': %v\n", err)
-				gitopsLatestVersion = "latest"
-			}
-			gitopsImage = "bitswan/gitops:" + gitopsLatestVersion
 		}
 	}
 
