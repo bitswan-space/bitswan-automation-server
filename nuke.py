@@ -163,7 +163,20 @@ def main():
         check_success=False
     )
     
-    # Step 3: Remove Docker networks matching "bitswan_*"
+    # Step 3: Remove caddy and traefik containers (before networks, so networks can be removed)
+    run_command(
+        ["docker", "rm", "-f", "caddy"],
+        "Removing caddy container",
+        check_success=False
+    )
+
+    run_command(
+        ["docker", "rm", "-f", "traefik"],
+        "Removing traefik container",
+        check_success=False
+    )
+
+    # Step 4: Remove Docker networks matching "bitswan_*"
     print(f"\n{'='*60}")
     print("STEP: Finding and removing Docker networks matching 'bitswan_*'")
     print(f"{'='*60}")
@@ -176,7 +189,7 @@ def main():
             text=True,
             check=False
         )
-        
+
         if list_result.stdout.strip():
             network_ids = [nid.strip() for nid in list_result.stdout.strip().split('\n') if nid.strip()]
             print(f"Found {len(network_ids)} network(s) to remove: {', '.join(network_ids)}")
@@ -189,13 +202,6 @@ def main():
             print("No networks matching 'bitswan_*' found")
     except Exception as e:
         print(f"Error finding networks: {e}")
-    
-    # Step 4: Remove caddy container
-    run_command(
-        ["docker", "rm", "-f", "caddy"],
-        "Removing caddy container",
-        check_success=False
-    )
     
     # Step 5: Remove local config directory
     config_dir = Path.home() / ".config" / "bitswan"

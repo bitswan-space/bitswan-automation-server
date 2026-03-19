@@ -115,9 +115,9 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		fmt.Println("Workspace sub-traefik already running")
 	}
 
-	// Register workspace routing in global caddy
+	// Register workspace routing in global traefik
 	if *domain != "" {
-		fmt.Println("Registering workspace routing in global caddy...")
+		fmt.Println("Registering workspace routing in global traefik...")
 		if err := registerWorkspaceRoutingToIngress(workspaceName, *domain); err != nil {
 			return fmt.Errorf("failed to register workspace routing: %w", err)
 		}
