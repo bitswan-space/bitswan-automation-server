@@ -35,41 +35,43 @@ Before installation, make sure you have installed `Docker` and `Docker compose`.
 # Installation
 ## Linux / WSL
 ```
-LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server-${LATEST_VERSION}-linux-amd64.tar.gz" | tar -xz
+curl -Lo bitswan https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=linux&arch=amd64 && chmod +x bitswan
 ```
 ## MacOS (Apple Sillicon M1+)
 ```
-LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server-${LATEST_VERSION}-darwin-arm.tar.gz" | tar -xz
+curl -Lo bitswan https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=darwin&arch=arm64 && chmod +x bitswan
 ```
 ## MacOS (Intel-based)
 ```
-LATEST_VERSION=$(curl -sL https://api.github.com/repos/bitswan-space/bitswan-automation-server/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-curl -L "https://github.com/bitswan-space/bitswan-automation-server/releases/download/${LATEST_VERSION}/bitswan-automation-server-${LATEST_VERSION}-darwin-amd64.tar.gz" | tar -xz
+curl -Lo bitswan https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=darwin&arch=amd64 && chmod +x bitswan
 ```
 
 Move the binary to a directory in your PATH
 
 ```
-sudo mv bitswan-automation-server-<your-version> /usr/local/bin/bitswan
+sudo mv bitswan /usr/local/bin/bitswan
 ```
 
 Alternatively, if you don't have sudo access or prefer a local installation:
 
 ```
 mkdir -p ~/bin
-mv bitswan-automation-server-<your-version> ~/bin/
+mv bitswan ~/bin/
 
 #Add to PATH if using ~/bin (add this to your ~/.bashrc or ~/.zshrc)
 export PATH="$HOME/bin:$PATH"
 ```
 
+# Starting the automation server daemon
+
+```
+bitswan automation-server-daemon init
+```
+
 # Setting up and connecting a workspace
 ## SaaS
-```sh
-bitswan workspace init my-workspace
-```
+
+Login to [aoc.bitswan.ai](https://aoc.bitswan.ai) and connect the automation server and add a workspace using the UI.
 
 ## On-prem
 ### With public domain / DNS SSL
