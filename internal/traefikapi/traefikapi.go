@@ -86,7 +86,9 @@ type traefikRouter struct {
 }
 
 // traefikRouterTLS, when non-nil, enables TLS termination on a router.
-type traefikRouterTLS struct{}
+type traefikRouterTLS struct {
+	CertResolver string `json:"certResolver,omitempty"`
+}
 
 type traefikService struct {
 	LoadBalancer *traefikLoadBalancer `json:"loadBalancer"`
@@ -406,13 +408,19 @@ func RegisterWorkspaceRouting(workspaceName, domain string) error {
 	pattern2 := fmt.Sprintf(`[^.]+\.%s-[^.]+\.%s`, workspaceName, escapedDomain)
 	rule := fmt.Sprintf("HostRegexp(`%s`) || HostRegexp(`%s`)", pattern1, pattern2)
 
+	// Use ACME certResolver for real domains (not .localhost)
+	certResolver := ""
+	if !strings.HasSuffix(domain, ".localhost") {
+		certResolver = "letsencrypt"
+	}
+
 	traefikBaseURL := getTraefikBaseURL()
 	err := modifyState(traefikBaseURL, func(state *traefikDynConfig) error {
 		state.HTTP.Routers[routeID] = &traefikRouter{
 			EntryPoints: []string{"web", "websecure"},
 			Rule:        rule,
 			Service:     routeID,
-			TLS:         &traefikRouterTLS{},
+			TLS:         &traefikRouterTLS{CertResolver: certResolver},
 		}
 		state.HTTP.Services[routeID] = &traefikService{
 			LoadBalancer: &traefikLoadBalancer{
@@ -438,7 +446,8 @@ func AddRoute(hostname, upstream string) error {
 // If traefikBaseURL is empty, uses the default from getTraefikBaseURL().
 // Routes targeting a workspace sub-traefik are HTTP-only (no TLS).
 // Routes targeting the global traefik include TLS and both entrypoints.
-func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string) error {
+// An optional certResolver string can be provided to use ACME (e.g. "letsencrypt").
+func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver ...string) error {
 	if traefikBaseURL == "" {
 		traefikBaseURL = getTraefikBaseURL()
 	}
@@ -449,6 +458,11 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string) error {
 
 	workspaceTarget := isWorkspaceURL(traefikBaseURL)
 
+	resolver := ""
+	if len(certResolver) > 0 {
+		resolver = certResolver[0]
+	}
+
 	return modifyState(traefikBaseURL, func(state *traefikDynConfig) error {
 		router := &traefikRouter{
 			Rule:    fmt.Sprintf("Host(`%s`)", hostname),
@@ -458,7 +472,7 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string) error {
 			router.EntryPoints = []string{"web"}
 		} else {
 			router.EntryPoints = []string{"web", "websecure"}
-			router.TLS = &traefikRouterTLS{}
+			router.TLS = &traefikRouterTLS{CertResolver: resolver}
 		}
 
 		state.HTTP.Routers[routeID] = router

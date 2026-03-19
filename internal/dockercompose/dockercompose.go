@@ -254,6 +254,7 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 	traefikVolumes := []string{
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
 		traefikPath + "/certs:/tls:z",
+		traefikPath + "/acme:/acme:z",
 	}
 
 	traefikNetworks := []string{"bitswan_network"}

@@ -148,8 +148,18 @@ func initIngress(verbose bool) (bool, error) {
 		return false, fmt.Errorf("failed to create ingress config directory: %w", err)
 	}
 
-	// Create Traefik static config enabling REST provider and entrypoints
-	traefikStaticConfig := `entryPoints:
+	// Create acme directory for Let's Encrypt certificate storage
+	acmeDir := traefikConfig + "/acme"
+	if err := os.MkdirAll(acmeDir, 0700); err != nil {
+		return false, fmt.Errorf("failed to create acme directory: %w", err)
+	}
+
+	// Create Traefik static config enabling REST provider, entrypoints, and ACME
+	acmeEmail := os.Getenv("BITSWAN_ACME_EMAIL")
+	if acmeEmail == "" {
+		acmeEmail = "noreply@bitswan.space"
+	}
+	traefikStaticConfig := fmt.Sprintf(`entryPoints:
   web:
     address: ":80"
   websecure:
@@ -159,7 +169,14 @@ api:
 providers:
   rest:
     insecure: true
-`
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: %s
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+`, acmeEmail)
 
 	traefikConfigFilePath := traefikConfig + "/traefik.yml"
 	if err := os.WriteFile(traefikConfigFilePath, []byte(traefikStaticConfig), 0755); err != nil {
@@ -180,6 +197,9 @@ providers:
 		}
 		if err := os.MkdirAll(traefikConfigForCompose+"/certs", 0755); err != nil {
 			return false, fmt.Errorf("failed to create ingress certs directory on host: %w", err)
+		}
+		if err := os.MkdirAll(traefikConfigForCompose+"/acme", 0700); err != nil {
+			return false, fmt.Errorf("failed to create ingress acme directory on host: %w", err)
 		}
 
 		// Also create/ensure traefik.yml exists on host
@@ -485,6 +505,12 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 		}
 	}
 
+	// Determine cert resolver: use ACME for real domains, nothing for localhost (mkcert handles it)
+	certResolver := ""
+	if !req.Mkcert && req.CertsDir == "" && !strings.HasSuffix(req.Hostname, ".localhost") {
+		certResolver = "letsencrypt"
+	}
+
 	// If workspace name is specified, set up routes in both platform traefik and workspace sub-traefik
 	if workspaceName != "" {
 		// Get workspace sub-traefik URL
@@ -512,7 +538,7 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 		// Add reverse proxy route at platform traefik: https://hostname -> workspace sub-traefik (with TLS)
 		// The platform traefik proxies to the workspace sub-traefik at port 80
 		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, ""); err != nil {
+		if err := traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, "", certResolver); err != nil {
 			return fmt.Errorf("failed to add route to platform traefik: %w", err)
 		}
 	} else {
@@ -530,7 +556,7 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 			}
 		}
 
-		if err := traefikapi.AddRoute(req.Hostname, req.Upstream); err != nil {
+		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, "", certResolver); err != nil {
 			return fmt.Errorf("failed to add route: %w", err)
 		}
 	}

@@ -7,8 +7,17 @@ Rewritten from bash to Python for better error handling and logging.
 import subprocess
 import sys
 import os
+import pwd
 from pathlib import Path
 import time
+
+
+def get_real_home():
+    """Get the real user's home directory, handling sudo correctly."""
+    sudo_user = os.environ.get('SUDO_USER')
+    if sudo_user:
+        return Path(pwd.getpwnam(sudo_user).pw_dir)
+    return Path.home()
 
 
 def run_command(cmd, description, check_success=True):
@@ -204,7 +213,7 @@ def main():
         print(f"Error finding networks: {e}")
     
     # Step 5: Remove local config directory
-    config_dir = Path.home() / ".config" / "bitswan"
+    config_dir = get_real_home() / ".config" / "bitswan"
     print(f"\n{'='*60}")
     print(f"STEP: Removing local config directory: {config_dir}")
     print(f"{'='*60}")
@@ -303,7 +312,7 @@ def main():
         print("STEP: Initializing workspace")
         print(f"{'='*60}")
         run_command(
-            ["./bitswan", "workspace", "init", "--local", "test1"],
+            ["./bitswan", "workspace", "init", "--domain", "jankotrc.bswn.io", "test1"],
             "Initializing workspace 'test1' with 'bitswan workspace init --local test1'",
             check_success=True
         )
