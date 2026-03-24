@@ -20,6 +20,7 @@ func NewServiceCmd() *cobra.Command {
 	cmd.AddCommand(NewPostgresCmd())
 	cmd.AddCommand(NewMinioCmd())
 	cmd.AddCommand(NewEditorCmd())
+	cmd.AddCommand(NewCodingAgentCmd())
 
 	return cmd
 } 

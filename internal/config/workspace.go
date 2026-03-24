@@ -22,6 +22,8 @@ type WorkspaceMetadata struct {
 	GitopsDevSourceDir *string `yaml:"gitops-dev-source-dir,omitempty"`
 	EditorDevSourceDir *string `yaml:"editor-dev-source-dir,omitempty"`
 	DevMode            bool    `yaml:"dev-mode,omitempty"`
+	CodingAgentEnabled bool    `yaml:"coding-agent-enabled,omitempty"`
+	CodingAgentSecret  string  `yaml:"coding-agent-secret,omitempty"`
 }
 
 func GetWorkspaceMetadata(workspaceName string) (WorkspaceMetadata, error) {
