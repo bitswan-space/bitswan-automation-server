@@ -33,7 +33,8 @@ type ServiceEnableRequest struct {
 	CouchDBImage   string                 `json:"couchdb_image,omitempty"`
 	PostgresImage  string                 `json:"postgres_image,omitempty"`
 	PgAdminImage   string                 `json:"pgadmin_image,omitempty"`
-	MinioImage     string                 `json:"minio_image,omitempty"`
+	MinioImage       string                 `json:"minio_image,omitempty"`
+	CodingAgentImage string                 `json:"coding_agent_image,omitempty"`
 }
 
 // ServiceDisableRequest represents the request to disable a service
@@ -67,17 +68,18 @@ type ServiceStopRequest struct {
 
 // ServiceUpdateRequest represents the request to update a service
 type ServiceUpdateRequest struct {
-	ServiceType    string `json:"service_type"`
-	Workspace      string `json:"workspace"`
-	Stage          string `json:"stage,omitempty"`
-	EditorImage    string `json:"editor_image,omitempty"`
-	TrustCA        bool   `json:"trust_ca,omitempty"`
-	KafkaImage     string `json:"kafka_image,omitempty"`
-	ZookeeperImage string `json:"zookeeper_image,omitempty"`
-	CouchDBImage   string `json:"couchdb_image,omitempty"`
-	PostgresImage  string `json:"postgres_image,omitempty"`
-	PgAdminImage   string `json:"pgadmin_image,omitempty"`
-	MinioImage     string `json:"minio_image,omitempty"`
+	ServiceType      string `json:"service_type"`
+	Workspace        string `json:"workspace"`
+	Stage            string `json:"stage,omitempty"`
+	EditorImage      string `json:"editor_image,omitempty"`
+	TrustCA          bool   `json:"trust_ca,omitempty"`
+	KafkaImage       string `json:"kafka_image,omitempty"`
+	ZookeeperImage   string `json:"zookeeper_image,omitempty"`
+	CouchDBImage     string `json:"couchdb_image,omitempty"`
+	PostgresImage    string `json:"postgres_image,omitempty"`
+	PgAdminImage     string `json:"pgadmin_image,omitempty"`
+	MinioImage       string `json:"minio_image,omitempty"`
+	CodingAgentImage string `json:"coding_agent_image,omitempty"`
 }
 
 // ServiceBackupRequest represents the request to backup CouchDB
@@ -283,6 +285,8 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 	case "editor":
 		// Editor stays managed locally by the automation server
 		s.handleEditorEnableLocal(w, req)
+	case "coding-agent":
+		s.handleCodingAgentEnableLocal(w, req)
 	case "kafka", "couchdb", "postgres", "minio":
 		// Proxy to gitops
 		gitopsBody := gitopsServiceRequest{
@@ -331,6 +335,18 @@ func (s *Server) handleServiceDisable(w http.ResponseWriter, r *http.Request, se
 			Success: true,
 			Message: "editor service disabled successfully",
 		})
+	case "coding-agent":
+		err := s.disableCodingAgentService(req.Workspace)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "coding-agent service disabled successfully",
+		})
 	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/disable", serviceType), gitopsBody)
@@ -358,6 +374,18 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request, ser
 	switch serviceType {
 	case "editor":
 		statusData, err := s.getEditorStatus(workspace, showPasswords)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Data:    statusData,
+		})
+	case "coding-agent":
+		statusData, err := s.getCodingAgentStatus(workspace)
 		if err != nil {
 			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -408,6 +436,18 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request, serv
 			Success: true,
 			Message: "editor service started successfully",
 		})
+	case "coding-agent":
+		err := s.startCodingAgentService(req.Workspace)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "coding-agent service started successfully",
+		})
 	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/start", serviceType), gitopsBody)
@@ -447,6 +487,18 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request, servi
 			Success: true,
 			Message: "editor service stopped successfully",
 		})
+	case "coding-agent":
+		err := s.stopCodingAgentService(req.Workspace)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "coding-agent service stopped successfully",
+		})
 	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{Stage: req.Stage}
 		proxyToGitops(w, "POST", req.Workspace, fmt.Sprintf("/services/%s/stop", serviceType), gitopsBody)
@@ -485,6 +537,18 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request, ser
 		json.NewEncoder(w).Encode(ServiceResponse{
 			Success: true,
 			Message: "editor service updated successfully",
+		})
+	case "coding-agent":
+		err := s.updateCodingAgentService(req)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "coding-agent service updated successfully",
 		})
 	case "kafka", "couchdb", "postgres", "minio":
 		gitopsBody := gitopsServiceRequest{
@@ -858,4 +922,179 @@ func (s *Server) updateEditorService(req ServiceUpdateRequest) error {
 	}
 
 	return editorService.WaitForEditorReady()
+}
+
+// =============================================================================
+// Coding Agent service — handled locally by the automation server
+// =============================================================================
+
+func (s *Server) handleCodingAgentEnableLocal(w http.ResponseWriter, req ServiceEnableRequest) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
+		return
+	}
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	logWriter := NewLogStreamWriter(w, "info")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := rPipe.Read(buf)
+			if n > 0 {
+				logWriter.Write(buf[:n])
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", readErr))
+				break
+			}
+		}
+	}()
+
+	operationErr := s.enableCodingAgentService(req)
+
+	wPipe.Close()
+	wg.Wait()
+
+	if operationErr != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", operationErr))
+	}
+}
+
+func (s *Server) enableCodingAgentService(req ServiceEnableRequest) error {
+	// Delegate to the gitops server's ensure endpoint — single path for starting the agent.
+	metadata, err := config.GetWorkspaceMetadata(req.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to read workspace metadata: %w", err)
+	}
+
+	gitopsURL := fmt.Sprintf("http://%s-gitops:8079", req.Workspace)
+	ensureURL := gitopsURL + "/worktrees/coding-agent/ensure"
+
+	httpReq, err := http.NewRequest("POST", ensureURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+metadata.GitopsSecret)
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to call gitops ensure endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("gitops ensure failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func (s *Server) disableCodingAgentService(workspace string) error {
+	agentService, err := services.NewCodingAgentService(workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Coding Agent service: %w", err)
+	}
+
+	if !agentService.IsEnabled() {
+		return fmt.Errorf("Coding Agent service is not enabled for workspace '%s'", workspace)
+	}
+
+	return agentService.Disable()
+}
+
+func (s *Server) getCodingAgentStatus(workspace string) (map[string]interface{}, error) {
+	agentService, err := services.NewCodingAgentService(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Coding Agent service: %w", err)
+	}
+
+	return map[string]interface{}{
+		"enabled": agentService.IsEnabled(),
+		"running": agentService.IsContainerRunning(),
+	}, nil
+}
+
+func (s *Server) startCodingAgentService(workspace string) error {
+	agentService, err := services.NewCodingAgentService(workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Coding Agent service: %w", err)
+	}
+
+	if !agentService.IsEnabled() {
+		return fmt.Errorf("Coding Agent service is not enabled for workspace '%s'", workspace)
+	}
+
+	if agentService.IsContainerRunning() {
+		return nil
+	}
+
+	return agentService.StartContainer()
+}
+
+func (s *Server) stopCodingAgentService(workspace string) error {
+	agentService, err := services.NewCodingAgentService(workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Coding Agent service: %w", err)
+	}
+
+	if !agentService.IsEnabled() {
+		return fmt.Errorf("Coding Agent service is not enabled for workspace '%s'", workspace)
+	}
+
+	if !agentService.IsContainerRunning() {
+		return nil
+	}
+
+	return agentService.StopContainer()
+}
+
+func (s *Server) updateCodingAgentService(req ServiceUpdateRequest) error {
+	agentService, err := services.NewCodingAgentService(req.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Coding Agent service: %w", err)
+	}
+
+	if !agentService.IsEnabled() {
+		return fmt.Errorf("Coding Agent service is not enabled for workspace '%s'", req.Workspace)
+	}
+
+	if agentService.IsContainerRunning() {
+		if err := agentService.StopContainer(); err != nil {
+			return fmt.Errorf("failed to stop coding-agent container: %w", err)
+		}
+	}
+
+	if req.CodingAgentImage != "" {
+		if err := agentService.UpdateImage(req.CodingAgentImage); err != nil {
+			return fmt.Errorf("failed to update coding-agent image: %w", err)
+		}
+	}
+
+	return agentService.StartContainer()
 }
