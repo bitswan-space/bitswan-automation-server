@@ -5,10 +5,38 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 )
+
+// mqttMonitorStop is used to signal the MQTT monitor goroutine to stop.
+var (
+	mqttMonitorStop chan struct{}
+	mqttMonitorMu   sync.Mutex
+)
+
+// stopMQTTMonitor signals the background MQTT monitor to stop.
+func stopMQTTMonitor() {
+	mqttMonitorMu.Lock()
+	defer mqttMonitorMu.Unlock()
+	if mqttMonitorStop != nil {
+		close(mqttMonitorStop)
+		mqttMonitorStop = nil
+	}
+}
+
+// startMQTTMonitor starts a new background MQTT monitor, stopping any existing one.
+func startMQTTMonitor(server *Server) {
+	mqttMonitorMu.Lock()
+	defer mqttMonitorMu.Unlock()
+	if mqttMonitorStop != nil {
+		close(mqttMonitorStop)
+	}
+	mqttMonitorStop = make(chan struct{})
+	go monitorMQTTConnection(server, mqttMonitorStop)
+}
 
 // initializeMQTTPublisher initializes the MQTT publisher if AOC is configured
 // This function is non-blocking and will retry on failure
@@ -33,7 +61,7 @@ func initializeMQTTPublisherWithServer(server *Server) error {
 			if initialized {
 				// Successfully initialized!
 				fmt.Println("Starting background health monitor for MQTT connection...")
-				go monitorMQTTConnection(server)
+				startMQTTMonitor(server)
 				return
 			}
 
@@ -51,7 +79,7 @@ func initializeMQTTPublisherWithServer(server *Server) error {
 				fmt.Printf("MQTT publisher initialization failed after %d attempts: %v. Starting background reconnection monitor...\n",
 					maxRetries, err)
 				// Start background reconnection monitor even if initial attempts failed
-				go monitorMQTTConnection(server)
+				startMQTTMonitor(server)
 			}
 		}
 	}()
@@ -136,7 +164,7 @@ func (s *Server) handleMQTTReinitialize(w http.ResponseWriter, r *http.Request) 
 	initialized, err := tryInitializeMQTTPublisher(s)
 	if initialized {
 		// Start a new health monitor
-		go monitorMQTTConnection(s)
+		startMQTTMonitor(s)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status":  "ok",
@@ -164,32 +192,34 @@ func (s *Server) handleMQTTReinitialize(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// monitorMQTTConnection continuously monitors the MQTT connection and attempts to reconnect if it fails
-// This provides automatic self-healing for the MQTT connection
-func monitorMQTTConnection(server *Server) {
+// monitorMQTTConnection continuously monitors the MQTT connection and attempts to reconnect if it fails.
+// Exits when stop is closed or when AOC is no longer configured.
+func monitorMQTTConnection(server *Server, stop chan struct{}) {
 	checkInterval := 30 * time.Second
 	reconnectDelay := 10 * time.Second
 
-	fmt.Println("MQTT connection monitor started (checking every 30 seconds)")
-
 	for {
-		time.Sleep(checkInterval)
+		select {
+		case <-stop:
+			return
+		case <-time.After(checkInterval):
+		}
 
 		publisher := GetMQTTPublisher()
 		if !publisher.IsConnected() {
-			fmt.Println("MQTT connection lost, attempting to reconnect...")
-
-			// Try to reinitialize the connection
 			initialized, err := tryInitializeMQTTPublisher(server)
 			if initialized {
-				fmt.Println("MQTT connection successfully restored!")
-			} else if err != nil {
-				fmt.Printf("MQTT reconnection failed: %v. Will retry in %v...\n", err, checkInterval)
-			}
-
-			// If we failed, wait before the next automatic check
-			if !initialized && err != nil {
-				time.Sleep(reconnectDelay)
+				fmt.Println("MQTT connection restored.")
+			} else if err == nil {
+				// AOC not configured — stop monitoring
+				return
+			} else {
+				fmt.Printf("MQTT reconnection failed: %v\n", err)
+				select {
+				case <-stop:
+					return
+				case <-time.After(reconnectDelay):
+				}
 			}
 		}
 	}
