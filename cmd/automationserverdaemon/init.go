@@ -60,6 +60,11 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Ensure inotify limits are high enough for file watchers (Vite, nodemon, etc.)
+	if runtime.GOOS == "linux" {
+		ensureInotifyLimits()
+	}
+
 	// Generate and save the authentication token to the config file
 	cfg := config.NewAutomationServerConfig()
 	existingToken, err := cfg.GetLocalServerToken()
@@ -284,5 +289,55 @@ func checkNetworkExists(networkName string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// ensureInotifyLimits raises the kernel inotify limits if they are below
+// the recommended values. Many containers running file watchers (Vite,
+// nodemon, etc.) exhaust the defaults quickly, causing EMFILE errors.
+func ensureInotifyLimits() {
+	type sysctlSetting struct {
+		key      string
+		minValue int
+		procPath string
+	}
+
+	settings := []sysctlSetting{
+		{"fs.inotify.max_user_watches", 524288, "/proc/sys/fs/inotify/max_user_watches"},
+		{"fs.inotify.max_user_instances", 1024, "/proc/sys/fs/inotify/max_user_instances"},
+	}
+
+	for _, s := range settings {
+		data, err := os.ReadFile(s.procPath)
+		if err != nil {
+			continue
+		}
+		var current int
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &current); err != nil {
+			continue
+		}
+		if current >= s.minValue {
+			continue
+		}
+
+		fmt.Printf("Raising %s from %d to %d...\n", s.key, current, s.minValue)
+
+		// Apply immediately
+		cmd := exec.Command("sysctl", "-w", fmt.Sprintf("%s=%d", s.key, s.minValue))
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("  Warning: failed to set %s (may need root): %v\n", s.key, err)
+			continue
+		}
+
+		// Make persistent via sysctl.conf
+		confLine := fmt.Sprintf("%s=%d", s.key, s.minValue)
+		confData, err := os.ReadFile("/etc/sysctl.conf")
+		if err == nil && !strings.Contains(string(confData), s.key) {
+			f, err := os.OpenFile("/etc/sysctl.conf", os.O_APPEND|os.O_WRONLY, 0644)
+			if err == nil {
+				fmt.Fprintf(f, "\n# BitSwan: raise inotify limits for container file watchers\n%s\n", confLine)
+				f.Close()
+			}
+		}
+	}
 }
 
