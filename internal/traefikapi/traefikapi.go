@@ -391,52 +391,6 @@ func UnregisterTraefikService(serviceName, workspaceName, domain string) error {
 	})
 }
 
-// RegisterWorkspaceRouting registers wildcard routing rules in the global Traefik
-// to proxy all workspace hostname patterns to the workspace sub-traefik.
-//
-// Two patterns are registered:
-//
-//	{workspaceName}-*.{domain}    — e.g. myws-automation.example.com
-//	*.{workspaceName}-*.{domain}  — e.g. sub.myws-automation.example.com
-func RegisterWorkspaceRouting(workspaceName, domain string) error {
-	workspaceTraefikUpstream := fmt.Sprintf("http://%s__traefik:80", workspaceName)
-	routeID := fmt.Sprintf("workspace_%s_routing", sanitizeHostname(workspaceName))
-
-	// Escape dots in domain for use inside HostRegexp.
-	escapedDomain := strings.ReplaceAll(domain, ".", `\.`)
-	pattern1 := fmt.Sprintf(`%s-[^.]+\.%s`, workspaceName, escapedDomain)
-	pattern2 := fmt.Sprintf(`[^.]+\.%s-[^.]+\.%s`, workspaceName, escapedDomain)
-	rule := fmt.Sprintf("HostRegexp(`%s`) || HostRegexp(`%s`)", pattern1, pattern2)
-
-	// Use ACME certResolver for real domains (not .localhost)
-	certResolver := ""
-	if !strings.HasSuffix(domain, ".localhost") {
-		certResolver = "letsencrypt"
-	}
-
-	traefikBaseURL := getTraefikBaseURL()
-	err := modifyState(traefikBaseURL, func(state *traefikDynConfig) error {
-		state.HTTP.Routers[routeID] = &traefikRouter{
-			EntryPoints: []string{"web", "websecure"},
-			Rule:        rule,
-			Service:     routeID,
-			TLS:         &traefikRouterTLS{CertResolver: certResolver},
-		}
-		state.HTTP.Services[routeID] = &traefikService{
-			LoadBalancer: &traefikLoadBalancer{
-				Servers: []traefikServer{{URL: workspaceTraefikUpstream}},
-			},
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to register workspace routing for %s: %w", workspaceName, err)
-	}
-
-	fmt.Printf("Registered workspace routing: %s || %s -> %s\n", pattern1, pattern2, workspaceTraefikUpstream)
-	return nil
-}
-
 // AddRoute adds a route for hostname → upstream using the default Traefik base URL.
 func AddRoute(hostname, upstream string) error {
 	return AddRouteWithTraefik(hostname, upstream, "")

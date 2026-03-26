@@ -255,6 +255,7 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
 		traefikPath + "/certs:/tls:z",
 		traefikPath + "/acme:/acme:z",
+		"/var/run/docker.sock:/var/run/docker.sock:ro",
 	}
 
 	traefikNetworks := []string{"bitswan_network"}
@@ -299,8 +300,12 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 // CreateWorkspaceTraefikDockerComposeFile creates a docker-compose file for workspace sub-traefik.
 // workspaceName: name of the workspace (used for container name)
 // traefikPath: path to traefik config directory
+// domain: the public domain (e.g. "jankotrc.bswn.io" or "bitswan.localhost") — used to generate
+//
+//	Docker labels so the global Traefik auto-discovers this sub-traefik.
+//
 // networks: list of additional networks (bitswan_network and bitswan_{workspace}_common are always included)
-func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath string, networks []string) (string, error) {
+func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain string, networks []string) (string, error) {
 	traefikVolumes := []string{
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
 	}
@@ -325,16 +330,40 @@ func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath string, 
 
 	containerName := fmt.Sprintf("%s__traefik", workspaceName)
 
+	// Build Docker labels so the global Traefik auto-discovers this sub-traefik
+	// and creates a HostRegexp routing rule for all {workspace}-*.{domain} hostnames.
+	serviceMap := map[string]interface{}{
+		"image":          "traefik:v3.3",
+		"restart":        "always",
+		"container_name": containerName,
+		"networks":       traefikNetworks,
+		"volumes":        traefikVolumes,
+	}
+
+	if domain != "" {
+		routerName := fmt.Sprintf("%s-routing", workspaceName)
+		escapedDomain := strings.ReplaceAll(domain, ".", `\.`)
+		pattern1 := fmt.Sprintf(`%s-[^.]+\.%s`, workspaceName, escapedDomain)
+		pattern2 := fmt.Sprintf(`[^.]+\.%s-[^.]+\.%s`, workspaceName, escapedDomain)
+		rule := fmt.Sprintf("HostRegexp(`%s`) || HostRegexp(`%s`)", pattern1, pattern2)
+
+		labels := map[string]string{
+			"traefik.enable": "true",
+			fmt.Sprintf("traefik.http.routers.%s.rule", routerName):                      rule,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints", routerName):               "websecure",
+			fmt.Sprintf("traefik.http.routers.%s.tls", routerName):                       "true",
+			fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", routerName): "80",
+		}
+		if !strings.HasSuffix(domain, ".localhost") {
+			labels[fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", routerName)] = "letsencrypt"
+		}
+		serviceMap["labels"] = labels
+	}
+
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",
 		"services": map[string]interface{}{
-			"traefik": map[string]interface{}{
-				"image":          "traefik:v3.3",
-				"restart":        "always",
-				"container_name": containerName,
-				"networks":       traefikNetworks,
-				"volumes":        traefikVolumes,
-			},
+			"traefik": serviceMap,
 		},
 		"networks": networksMap,
 	}

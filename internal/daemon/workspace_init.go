@@ -103,28 +103,7 @@ func (s *Server) runWorkspaceInit(args []string) error {
 	}
 	fmt.Println("Ingress proxy is ready!")
 
-	// Initialize workspace sub-traefik
-	fmt.Println("Initializing workspace sub-traefik...")
-	workspaceTraefikInitialized, err := initTraefik(workspaceName, *verbose)
-	if err != nil {
-		return fmt.Errorf("failed to initialize workspace sub-traefik: %w", err)
-	}
-	if workspaceTraefikInitialized {
-		fmt.Println("Workspace sub-traefik initialized!")
-	} else {
-		fmt.Println("Workspace sub-traefik already running")
-	}
-
-	// Register workspace routing in global traefik
-	if *domain != "" {
-		fmt.Println("Registering workspace routing in global traefik...")
-		if err := registerWorkspaceRoutingToIngress(workspaceName, *domain); err != nil {
-			return fmt.Errorf("failed to register workspace routing: %w", err)
-		}
-		fmt.Println("Workspace routing registered!")
-	}
-
-	// Handle --local flag
+	// Handle --local flag (must be before initTraefik so domain is fully resolved)
 	if *local && (*setHosts || *mkCerts) {
 		return fmt.Errorf("cannot use --local flag with --set-hosts or --mkcerts")
 	}
@@ -135,6 +114,20 @@ func (s *Server) runWorkspaceInit(args []string) error {
 		if *domain == "" {
 			*domain = "bitswan.localhost"
 		}
+	}
+
+	// Initialize workspace sub-traefik.
+	// Domain is passed so the sub-traefik container gets Docker labels that tell
+	// the global Traefik to route {workspace}-*.{domain} traffic to it automatically.
+	fmt.Println("Initializing workspace sub-traefik...")
+	workspaceTraefikInitialized, err := initTraefik(workspaceName, *domain, *verbose)
+	if err != nil {
+		return fmt.Errorf("failed to initialize workspace sub-traefik: %w", err)
+	}
+	if workspaceTraefikInitialized {
+		fmt.Println("Workspace sub-traefik initialized!")
+	} else {
+		fmt.Println("Workspace sub-traefik already running")
 	}
 
 	// Create the workspace directory (we already checked it doesn't exist above)

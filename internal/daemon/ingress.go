@@ -169,6 +169,9 @@ api:
 providers:
   rest:
     insecure: true
+  docker:
+    exposedByDefault: false
+    network: bitswan_network
 certificatesResolvers:
   letsencrypt:
     acme:
@@ -257,7 +260,7 @@ certificatesResolvers:
 // right now workspaceName includes the production stage automatically
 // Returns (newlyInitialized, error) where newlyInitialized is true if initialization happened,
 // false if it was already initialized.
-func initTraefik(workspaceName string, verbose bool) (bool, error) {
+func initTraefik(workspaceName, domain string, verbose bool) (bool, error) {
 	homeDir := os.Getenv("HOME")
 	workspaceConfig := fmt.Sprintf("%s/.config/bitswan/workspaces/%s", homeDir, workspaceName)
 	traefikConfig := workspaceConfig + "/traefik"
@@ -323,7 +326,7 @@ providers:
 	}
 
 	// Generate docker-compose for workspace sub-traefik
-	traefikDockerCompose, err := dockercompose.CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikConfigForCompose, stageNetworks)
+	traefikDockerCompose, err := dockercompose.CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikConfigForCompose, domain, stageNetworks)
 	if err != nil {
 		return false, fmt.Errorf("failed to create workspace traefik docker-compose file: %w", err)
 	}
@@ -455,13 +458,6 @@ func removeRouteFromIngress(hostname string) error {
 	return traefikapi.RemoveRoute(hostname)
 }
 
-// registerWorkspaceRoutingToIngress registers the wildcard routing patterns for a workspace
-// in the global Traefik so all workspace-scoped hostnames are proxied to the workspace sub-traefik.
-// This must be called once at workspace init time, before individual service routes are added.
-func registerWorkspaceRoutingToIngress(workspaceName, domain string) error {
-	return traefikapi.RegisterWorkspaceRouting(workspaceName, domain)
-}
-
 // addRouteToIngress is a helper function that adds a route to the ingress proxy
 // It can be called directly from workspace_init or from the HTTP handler
 func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
@@ -536,7 +532,9 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 		}
 
 		// Add reverse proxy route at platform traefik: https://hostname -> workspace sub-traefik (with TLS)
-		// The platform traefik proxies to the workspace sub-traefik at port 80
+		// The platform traefik proxies to the workspace sub-traefik at port 80.
+		// This explicit Host() route (vs. the Docker-label HostRegexp) causes Traefik to
+		// proactively obtain a Let's Encrypt cert for this specific hostname.
 		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
 		if err := traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, "", certResolver); err != nil {
 			return fmt.Errorf("failed to add route to platform traefik: %w", err)
