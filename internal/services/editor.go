@@ -94,7 +94,6 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 			gitopsPath + "/coder-home:/home/coder:z",
 			gitopsPath + "/ssh:/workspace/.ssh:ro",
 			bitswanSrcPath + "/examples:/workspace/examples:ro",
-			gitopsPath + "/workspace/worktrees:/workspace/worktrees:z",
 			gitopsPath + "/coding-agent-sessions:/workspace/agent-sessions:ro",
 		},
 	}
