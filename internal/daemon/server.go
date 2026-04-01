@@ -220,12 +220,16 @@ func (s *Server) Run() error {
 		Handler: s.setupRoutes(),
 	}
 
-	// Create HTTP server for docs (listens on TCP port 8080)
-	docsMux := http.NewServeMux()
-	docsMux.HandleFunc("/", s.handleDocs) // Root path serves docs
-	docsMux.HandleFunc("/api-docs", s.handleDocs)
+	// Create HTTP server for TCP port 8080.
+	// Exposes docs and ingress management (unauthenticated — trusted Docker
+	// network; workspace JWT auth will be added later per ingress-plan.md).
+	tcpMux := http.NewServeMux()
+	tcpMux.HandleFunc("/ingress", s.handleIngress)
+	tcpMux.HandleFunc("/ingress/", s.handleIngress)
+	tcpMux.HandleFunc("/api-docs", s.handleDocs)
+	tcpMux.HandleFunc("/", s.handleDocs) // catch-all: serve docs
 	s.docsServer = &http.Server{
-		Handler: docsMux,
+		Handler: tcpMux,
 	}
 
 	// Start docs HTTP server on port 8080
