@@ -86,7 +86,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
-			"/var/run/bitswan/automation-server.sock:/var/run/bitswan/automation-server.sock",
+			"/var/run/bitswan:/var/run/bitswan",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
