@@ -51,7 +51,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		// Replace container home with host home for docker-compose volume paths
 		gitopsPathForVolumes = strings.Replace(config.GitopsPath, homeDir, hostHomeDir, 1)
 	}
-	
+
 	sshDir := gitopsPathForVolumes + "/ssh"
 	gitConfig := os.Getenv("HOME") + "/.gitconfig"
 
@@ -75,16 +75,18 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsSecretToken = uniuri.NewLen(64)
 	}
 
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", config.WorkspaceName)
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
-		"networks": []string{"bitswan_network"},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
+			"/var/run/bitswan:/var/run/bitswan",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
@@ -93,6 +95,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
+			"BITSWAN_WORKSPACE_CADDY=" + fmt.Sprintf("%s__caddy:2019", config.WorkspaceName),
 		},
 	}
 
@@ -144,7 +147,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		}
 		gitopsService["volumes"] = append(gitopsService["volumes"].([]string), gitopsVolumes...)
 	}
-	
+
 	// If this workspace has a local remote repository, mount it so GitOps can access it
 	if config.LocalRemotePath != "" && config.LocalRemoteName != "" {
 		// Mount local repository to /remote-repos/<name> for GitOps to access
@@ -169,6 +172,9 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"bitswan_network": map[string]interface{}{
 				"external": true,
 			},
+			workspaceCommonNetwork: map[string]interface{}{
+				"external": true,
+			},
 		},
 	}
 
@@ -184,12 +190,31 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	return buf.String(), gitopsSecretToken, nil
 }
 
-func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
+// CreateCaddyDockerComposeFile creates a docker-compose file for Caddy
+// networks parameter is optional - if provided, adds those networks along with bitswan_network
+func CreateCaddyDockerComposeFile(caddyPath string, networks ...string) (string, error) {
 	caddyVolumes := []string{
 		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
 		caddyPath + "/data:/data:z",
 		caddyPath + "/config:/config:z",
 		caddyPath + "/certs:/tls:z",
+	}
+
+	// Always include bitswan_network network
+	caddyNetworks := []string{"bitswan_network"}
+	caddyNetworks = append(caddyNetworks, networks...)
+
+	// Construct networks map
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	// Add additional networks as external
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
 	}
 
 	// Construct the docker-compose data structure
@@ -201,16 +226,206 @@ func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 				"restart":        "always",
 				"container_name": "caddy",
 				"ports":          []string{"80:80", "443:443", "2019:2019"},
-				"networks":       []string{"bitswan_network"},
+				"networks":       caddyNetworks,
 				"volumes":        caddyVolumes,
 				"entrypoint":     []string{"caddy", "run", "--resume", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 			},
 		},
-		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
-				"external": true,
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+
+	// Serialize the docker-compose data structure to YAML and write it to the file
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2) // Optional: Set indentation
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateTraefikDockerComposeFile creates a docker-compose file for global Traefik.
+// networks parameter is optional - if provided, adds those networks along with bitswan_network.
+func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		traefikPath + "/certs:/tls:z",
+		traefikPath + "/acme:/acme:z",
+		"/var/run/docker.sock:/var/run/docker.sock:ro",
+	}
+
+	traefikNetworks := []string{"bitswan_network"}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": map[string]interface{}{
+				"image":          "traefik:v3.3",
+				"restart":        "always",
+				"container_name": "traefik",
+				"ports":          []string{"80:80", "443:443", "8080:8080"},
+				"networks":       traefikNetworks,
+				"volumes":        traefikVolumes,
 			},
 		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateWorkspaceTraefikDockerComposeFile creates a docker-compose file for workspace sub-traefik.
+// workspaceName: name of the workspace (used for container name)
+// traefikPath: path to traefik config directory
+// domain: the public domain (e.g. "jankotrc.bswn.io" or "bitswan.localhost") — used to generate
+//
+//	Docker labels so the global Traefik auto-discovers this sub-traefik.
+//
+// networks: list of additional networks (bitswan_network and bitswan_{workspace}_common are always included)
+func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain string, networks []string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+	}
+
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	traefikNetworks := []string{"bitswan_network", workspaceCommonNetwork}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+		workspaceCommonNetwork: map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	containerName := fmt.Sprintf("%s__traefik", workspaceName)
+
+	// Build Docker labels so the global Traefik auto-discovers this sub-traefik
+	// and creates a HostRegexp routing rule for all {workspace}-*.{domain} hostnames.
+	serviceMap := map[string]interface{}{
+		"image":          "traefik:v3.3",
+		"restart":        "always",
+		"container_name": containerName,
+		"networks":       traefikNetworks,
+		"volumes":        traefikVolumes,
+	}
+
+	if domain != "" {
+		routerName := fmt.Sprintf("%s-routing", workspaceName)
+		escapedDomain := strings.ReplaceAll(domain, ".", `\.`)
+		pattern1 := fmt.Sprintf(`%s-[^.]+\.%s`, workspaceName, escapedDomain)
+		pattern2 := fmt.Sprintf(`[^.]+\.%s-[^.]+\.%s`, workspaceName, escapedDomain)
+		rule := fmt.Sprintf("HostRegexp(`%s`) || HostRegexp(`%s`)", pattern1, pattern2)
+
+		labels := map[string]string{
+			"traefik.enable": "true",
+			fmt.Sprintf("traefik.http.routers.%s.rule", routerName):                      rule,
+			fmt.Sprintf("traefik.http.routers.%s.entrypoints", routerName):               "websecure",
+			fmt.Sprintf("traefik.http.routers.%s.tls", routerName):                       "true",
+			fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", routerName): "80",
+		}
+		if !strings.HasSuffix(domain, ".localhost") {
+			labels[fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", routerName)] = "letsencrypt"
+		}
+		serviceMap["labels"] = labels
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": serviceMap,
+		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateWorkspaceCaddyDockerComposeFile creates a docker-compose file for workspace sub-caddy
+// workspaceName: name of the workspace (used for container name)
+// caddyPath: path to caddy config directory
+// networks: list of additional networks (bitswan_network and bitswan_{workspace}_common are always included)
+func CreateWorkspaceCaddyDockerComposeFile(workspaceName, caddyPath string, networks []string) (string, error) {
+	caddyVolumes := []string{
+		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
+		caddyPath + "/data:/data:z",
+		caddyPath + "/config:/config:z",
+	}
+
+	// Always include bitswan_network and workspace common network
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	caddyNetworks := []string{"bitswan_network", workspaceCommonNetwork}
+	caddyNetworks = append(caddyNetworks, networks...)
+
+	// Construct networks map
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+		workspaceCommonNetwork: map[string]interface{}{
+			"external": true,
+		},
+	}
+	// Add additional networks as external
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	containerName := fmt.Sprintf("%s__caddy", workspaceName)
+
+	// Construct the docker-compose data structure
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"caddy": map[string]interface{}{
+				"image":          "caddy:2.9",
+				"restart":        "always",
+				"container_name": containerName,
+				// No host port binding - ports are only exposed within Docker networks
+				// Caddy will listen on 80, 443, and 2019 inside the container
+				"networks":   caddyNetworks,
+				"volumes":    caddyVolumes,
+				"entrypoint": []string{"caddy", "run", "--resume", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
+			},
+		},
+		"networks": networksMap,
 	}
 
 	var buf bytes.Buffer

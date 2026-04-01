@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/certauthority"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
@@ -74,7 +73,8 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	}
 	
 	workspaceName := e.WorkspaceName
-
+	workspaceCommonNetwork := fmt.Sprintf("bitswan_%s_common", workspaceName)
+	
 	// Also convert bitswan-src path for examples mount
 	bitswanSrcPath := filepath.Dir(filepath.Dir(gitopsPath)) + "/bitswan-src"
 
@@ -82,7 +82,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		"image":    bitswanEditorImage,
 		"restart":  "always",
 		"hostname": workspaceName + "-editor",
-		"networks": []string{"bitswan_network"},
+		"networks": []string{"bitswan_network", workspaceCommonNetwork},
 		"environment": []string{
 			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
 			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
@@ -136,6 +136,9 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		},
 		"networks": map[string]interface{}{
 			"bitswan_network": map[string]interface{}{
+				"external": true,
+			},
+			workspaceCommonNetwork: map[string]interface{}{
 				"external": true,
 			},
 		},
@@ -243,11 +246,6 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		return fmt.Errorf("failed to save docker-compose file: %w", err)
 	}
 
-	// Register Editor service with Caddy
-	if err := caddyapi.RegisterServiceWithCaddy("editor", e.WorkspaceName, domain, fmt.Sprintf("%s-editor:9999", e.WorkspaceName)); err != nil {
-		return fmt.Errorf("failed to register Editor service with caddy: %w", err)
-	}
-
 	fmt.Printf("Editor service enabled for workspace '%s'\n", e.WorkspaceName)
 	return nil
 }
@@ -276,13 +274,6 @@ func (e *EditorService) Disable() error {
 	coderHomeDir := filepath.Join(e.WorkspacePath, "coder-home")
 	if err := os.RemoveAll(coderHomeDir); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove coder-home directory: %w", err)
-	}
-
-	// Get domain from metadata for Caddy cleanup
-	metadata, err := e.GetMetadata()
-	if err == nil && metadata.Domain != "" {
-		// Remove from Caddy (best effort)
-		caddyapi.UnregisterCaddyService("editor", e.WorkspaceName, metadata.Domain)
 	}
 
 	fmt.Printf("Editor service disabled for workspace '%s'\n", e.WorkspaceName)

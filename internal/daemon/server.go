@@ -134,9 +134,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/certauthority", s.authMiddleware(s.handleCertAuthority))
 	mux.HandleFunc("/certauthority/", s.authMiddleware(s.handleCertAuthority))
 
-	// Ingress endpoints (authenticated)
-	mux.HandleFunc("/ingress", s.authMiddleware(s.handleIngress))
-	mux.HandleFunc("/ingress/", s.authMiddleware(s.handleIngress))
+	// Ingress endpoints — unauthenticated on the Unix socket.
+	// Access to the socket is controlled by the filesystem bind-mount in
+	// docker-compose; socket access is the trust gate here.
+	// Workspace-scoped JWT auth will be added later per ingress-plan.md.
+	mux.HandleFunc("/ingress", s.handleIngress)
+	mux.HandleFunc("/ingress/", s.handleIngress)
 
 	// Service endpoints (authenticated)
 	mux.HandleFunc("/service", s.authMiddleware(s.handleService))
@@ -237,7 +240,7 @@ func (s *Server) Run() error {
 
 	// Set up ingress route for docs (with retry logic)
 	go func() {
-		// Wait a bit for Caddy to be ready
+		// Wait a bit for Traefik to be ready
 		time.Sleep(2 * time.Second)
 		maxRetries := 5
 		for i := 0; i < maxRetries; i++ {

@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 )
 
 const (
@@ -42,7 +40,10 @@ func (s *Server) setupDocsIngress() error {
 
 	// AddRoute will automatically remove any existing route with the same hostname before adding
 	// This ensures we always have the correct upstream (fixes issue if route was created with wrong upstream)
-	if err := caddyapi.AddRoute(docsHostname, upstream); err != nil {
+	if err := (addRouteToIngress(IngressAddRouteRequest{
+		Hostname: docsHostname,
+		Upstream: upstream,
+	}, "")); err != nil {
 		// If Caddy is not available, that's okay - we'll try again later
 		return nil
 	}
