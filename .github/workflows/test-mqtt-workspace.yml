@@ -162,64 +162,61 @@ jobs:
           
       - name: Initialize ingress
         run: |
-          # Initialize ingress (this sets up Caddy)
+          # Initialize ingress (this sets up Traefik)
           sudo ./bitswan ingress init || true
-          # Wait for Caddy to be ready
-          echo "Waiting for Caddy to be ready..."
+          # Wait for Traefik to be ready
+          echo "Waiting for Traefik to be ready..."
           for i in {1..30}; do
-            if docker ps | grep -q caddy; then
-              echo "Caddy is running!"
+            if docker ps | grep -q traefik; then
+              echo "Traefik is running!"
               break
             fi
             if [ $i -eq 30 ]; then
-              echo "Caddy failed to start"
-              docker ps -a | grep caddy || echo "No Caddy container found"
+              echo "Traefik failed to start"
+              docker ps -a | grep traefik || echo "No Traefik container found"
               exit 1
             fi
-            echo "Waiting for Caddy... ($i/30)"
+            echo "Waiting for Traefik... ($i/30)"
             sleep 1
           done
           
       - name: Set up MQTT ingress route
         run: |
-          
-          # Add ingress route for MQTT WSS through Caddy
+          # Add ingress route for MQTT WSS through Traefik
           # This allows connecting via wss://mqtt.bitswan.localhost
           ./bitswan ingress add-route mqtt.bitswan.localhost aoc-emqx:8084 --mkcert || true
-          
-          # Wait for Caddy to reload and pick up the route
-          echo "Waiting for Caddy to reload route configuration..."
+
+          # Wait for Traefik to reload and pick up the route
+          echo "Waiting for Traefik to reload route configuration..."
           sleep 5
-          
-          # Verify Caddy is still running
-          if ! docker ps | grep -q caddy; then
-            echo "Error: Caddy container stopped after adding route"
-            docker ps -a | grep caddy
+
+          # Verify Traefik is still running
+          if ! docker ps | grep -q traefik; then
+            echo "Error: Traefik container stopped after adding route"
+            docker ps -a | grep traefik
             exit 1
           fi
-          
-          # Debug: Verify Caddy can reach EMQX
-          echo "Testing Caddy -> EMQX connectivity..."
-          docker exec caddy ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Caddy container)"
-          docker exec caddy nc -zv aoc-emqx 8084 || docker exec caddy sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
-          
-          # Debug: Check Caddy routes
-          echo "Checking Caddy routes..."
-          curl -s http://localhost:2019/config/apps/http/servers/srv0/routes | jq -r '.[] | select(.match[0].host[]? | contains("mqtt")) | "Route: \(.match[0].host[])"' || echo "Could not list Caddy routes"
-          
-          # Debug: Check Caddy logs for errors
-          echo "Recent Caddy logs (errors):"
-          docker logs caddy --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
-          
-          # Debug: Check if route is accessible
+
+          # Debug: Verify Traefik can reach EMQX
+          echo "Testing Traefik -> EMQX connectivity..."
+          docker exec traefik ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Traefik container)"
+          docker exec traefik nc -zv aoc-emqx 8084 || docker exec traefik sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
+
+          # Debug: Check Traefik routes via its REST API
+          echo "Checking Traefik routes..."
+          curl -s http://localhost:8080/api/http/routers | jq -r '.[] | select(.rule | contains("mqtt")) | "Route: \(.rule)"' || echo "Could not list Traefik routes"
+
+          # Debug: Check Traefik logs for errors
+          echo "Recent Traefik logs (errors):"
+          docker logs traefik --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
+
+          # Debug: Check DNS and HTTPS reachability
           echo "Testing DNS resolution..."
           nslookup mqtt.bitswan.localhost 127.0.0.1 || dig @127.0.0.1 mqtt.bitswan.localhost || echo "DNS check failed"
-          
-          # Debug: Test HTTPS connectivity
+
           echo "Testing HTTPS connectivity..."
           timeout 3 curl -k -v https://mqtt.bitswan.localhost:443 2>&1 | head -20 || echo "HTTPS test failed or timed out"
-          
-          # Verify the route is accessible
+
           echo "MQTT ingress route configured: wss://mqtt.bitswan.localhost"
 
       - name: Start mock AOC server
@@ -303,8 +300,8 @@ jobs:
             docker logs bitswan-automation-server-daemon --tail 100 || echo "Could not get daemon logs"
             echo "=== EMQX logs ==="
             docker logs aoc-emqx --tail 50 || echo "Could not get EMQX logs"
-            echo "=== Caddy logs ==="
-            docker logs caddy --tail 50 || echo "Could not get Caddy logs"
+            echo "=== Traefik logs ==="
+            docker logs traefik --tail 50 || echo "Could not get Traefik logs"
             exit 1
           }
           # Cleanup after test
