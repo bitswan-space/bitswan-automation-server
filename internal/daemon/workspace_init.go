@@ -62,12 +62,6 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
-	// Ensure oauth2-proxy binary is available
-	if err = oauth.EnsureOAuth2Proxy(bitswanConfig); err != nil {
-		fmt.Printf("Warning: Failed to download oauth2-proxy: %v\n", err)
-		fmt.Println("OAuth authentication may not work properly without oauth2-proxy")
-	}
-
 	// Init required networks
 	networksToCreate := []string{
 		"bitswan_network",
