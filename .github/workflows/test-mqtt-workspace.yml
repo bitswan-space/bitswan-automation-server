@@ -228,21 +228,21 @@ jobs:
             --name mock-aoc-server \
             --network bitswan_network \
             --network-alias api.bitswan.localhost \
-            -p 8080:8080 \
+            -p 8081:8081 \
             -v $(pwd)/bitswan:/usr/local/bin/bitswan:ro \
             bitswan/automation-server-runtime:latest \
             /usr/local/bin/bitswan _test mock-aoc-server \
-              --port 8080 \
+              --port 8081 \
               --emqx-secret "test-secret-key-for-ci-12345" \
               --server-id "test-ci-server-id" \
               --org-id "test-org-id" \
               --emqx-url "aoc-emqx" \
               --emqx-port 1883
-          
+
           # Wait for server to be ready
           echo "Waiting for mock AOC server to start..."
           for i in {1..30}; do
-            if curl -s http://localhost:8080/api/automation_server/info >/dev/null 2>&1; then
+            if curl -s http://localhost:8081/api/automation_server/info >/dev/null 2>&1; then
               echo "Mock AOC server is ready!"
               break
             fi
@@ -264,7 +264,7 @@ jobs:
           # Use the Docker network alias so daemon container can reach it
           sudo tee /home/runner/.config/bitswan/automation_server_config.toml > /dev/null <<EOF
           [aoc]
-          aoc_url = "http://api.bitswan.localhost:8080"
+          aoc_url = "http://api.bitswan.localhost:8081"
           automation_server_id = "test-ci-server-id"
           access_token = "test-token"
           expires_at = ""
