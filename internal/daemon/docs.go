@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	docsHostname = "automation-server-daemon-docs.bitswan.localhost"
-	docsPort     = 8080
+	docsHostname    = "automation-server-daemon-docs.bitswan.localhost"
+	docsPort        = 8080
+	caddyCompatPort = 2019
 )
 
 // handleDocs serves the Swagger UI documentation

@@ -236,6 +236,9 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"--name", "bitswan-automation-server-daemon",
 		"--restart", "unless-stopped",
 		"--add-host", "host.docker.internal:host-gateway", // Allow container to reach host services
+		// Network alias "caddy" lets older gitops images that still call caddy:2019
+		// reach the daemon's Caddy-compatible shim server on that port.
+		"--network-alias", "caddy",
 		"-e", "BITSWAN_TRAEFIK_HOST=http://traefik:8080",
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
 		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),

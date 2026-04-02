@@ -31,7 +31,12 @@ type Server struct {
 	server       *http.Server
 	docsServer   *http.Server
 	docsListener net.Listener
-	token        string
+	// caddyCompatServer provides a Caddy-compatible admin API on port 2019 so that
+	// older gitops images that still call caddy:2019 continue to work when Traefik
+	// is the active ingress. Requests are translated to Traefik REST API calls.
+	caddyCompatServer   *http.Server
+	caddyCompatListener net.Listener
+	token               string
 
 	// initConfirmCh is used to signal that the user has confirmed the SSH key prompt
 	// during workspace init. The daemon blocks until a value is sent on this channel.
@@ -238,6 +243,22 @@ func (s *Server) Run() error {
 	}
 	s.docsListener = docsListener
 
+	// Create Caddy-compatible admin API server on port 2019.
+	// This allows older gitops images that still call caddy:2019 to work when
+	// Traefik is the active ingress. The daemon container has network alias "caddy"
+	// so "caddy:2019" resolves to this server inside the Docker network.
+	caddyCompatMux := http.NewServeMux()
+	s.setupCaddyCompatRoutes(caddyCompatMux)
+	s.caddyCompatServer = &http.Server{Handler: caddyCompatMux}
+
+	caddyCompatListener, err := net.Listen("tcp", fmt.Sprintf(":%d", caddyCompatPort))
+	if err != nil {
+		// Non-fatal — Caddy compat is a best-effort backward-compat shim
+		fmt.Printf("Warning: failed to start Caddy compat server on port %d: %v\n", caddyCompatPort, err)
+	} else {
+		s.caddyCompatListener = caddyCompatListener
+	}
+
 	// Set up ingress route for docs (with retry logic)
 	go func() {
 		// Wait a bit for Traefik to be ready
@@ -275,6 +296,15 @@ func (s *Server) Run() error {
 		}
 	}()
 
+	if s.caddyCompatListener != nil {
+		go func() {
+			fmt.Printf("Caddy compat server listening on :%d (network alias: caddy)\n", caddyCompatPort)
+			if err := s.caddyCompatServer.Serve(s.caddyCompatListener); err != nil && err != http.ErrServerClosed {
+				fmt.Printf("Warning: Caddy compat server error: %v\n", err)
+			}
+		}()
+	}
+
 	// Wait for shutdown signal or error
 	select {
 	case err := <-errChan:
@@ -293,6 +323,10 @@ func (s *Server) Run() error {
 
 	if err := s.docsServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("docs server shutdown error: %w", err)
+	}
+
+	if s.caddyCompatServer != nil {
+		_ = s.caddyCompatServer.Shutdown(ctx) // best-effort
 	}
 
 	// Clean up socket file
