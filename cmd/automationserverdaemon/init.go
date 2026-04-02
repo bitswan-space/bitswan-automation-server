@@ -164,9 +164,10 @@ func startDaemonContainer(startMessage, successMessage string) error {
 
 	// Launch the daemon container
 	// Mount the binary, config directory, docker socket, and mkcert directory
-	// Use bitswan_network to allow resolving Docker service names like aoc-emqx
+	// Use bitswan_network to allow resolving Docker service names like traefik
 	// Use pre-built image with all tools (git, ssh-keygen, docker-cli, mkcert) pre-installed
-	// Set BITSWAN_CADDY_HOST to use 'caddy' hostname instead of 'localhost' when on bitswan_network
+	// Set BITSWAN_TRAEFIK_HOST so the daemon uses the 'traefik' container name instead of localhost
+	// Set BITSWAN_CADDY_HOST (legacy - used by isRunningInDaemon() to detect container context)
 	// Mount the bitswan automation server socket directory for IPC
 	daemonImage := "bitswan/automation-server-runtime:latest"
 
@@ -235,6 +236,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"--name", "bitswan-automation-server-daemon",
 		"--restart", "unless-stopped",
 		"--add-host", "host.docker.internal:host-gateway", // Allow container to reach host services
+		"-e", "BITSWAN_TRAEFIK_HOST=http://traefik:8080",
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
 		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", binaryPath),
@@ -242,7 +244,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"-v", fmt.Sprintf("%s:%s", socketDir, socketDir),
-		"-v", "/:/host:rw",
+		"-v", "/:/host:ro",
 		"--network", "bitswan_network",
 		daemonImage,
 		"/usr/local/bin/bitswan", "automation-server-daemon", "__run",
@@ -270,15 +272,12 @@ func checkNetworkExists(networkName string) (bool, error) {
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
-	type DockerNetwork struct {
-		Name string `json:"Name"`
-	}
 
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		var network DockerNetwork
+		var network docker.DockerNetwork
 		if err := json.Unmarshal([]byte(line), &network); err != nil {
 			return false, fmt.Errorf("error parsing JSON: %v", err)
 		}

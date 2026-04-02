@@ -162,64 +162,79 @@ jobs:
           
       - name: Initialize ingress
         run: |
-          # Initialize ingress (this sets up Caddy)
+          # Initialize ingress (this sets up Caddy or Traefik depending on the build)
           sudo ./bitswan ingress init || true
-          # Wait for Caddy to be ready
-          echo "Waiting for Caddy to be ready..."
+          # Wait for Caddy to be ready (primary); fall back to checking Traefik
+          echo "Waiting for ingress to be ready..."
+          INGRESS_CONTAINER=""
           for i in {1..30}; do
             if docker ps | grep -q caddy; then
               echo "Caddy is running!"
+              INGRESS_CONTAINER="caddy"
+              break
+            fi
+            if docker ps | grep -q traefik; then
+              echo "Traefik is running!"
+              INGRESS_CONTAINER="traefik"
               break
             fi
             if [ $i -eq 30 ]; then
-              echo "Caddy failed to start"
-              docker ps -a | grep caddy || echo "No Caddy container found"
+              echo "Neither Caddy nor Traefik started"
+              docker ps -a | grep -E "caddy|traefik" || echo "No ingress container found"
               exit 1
             fi
-            echo "Waiting for Caddy... ($i/30)"
+            echo "Waiting for ingress... ($i/30)"
             sleep 1
           done
-          
+          echo "INGRESS_CONTAINER=$INGRESS_CONTAINER" >> $GITHUB_ENV
+
       - name: Set up MQTT ingress route
         run: |
-          
-          # Add ingress route for MQTT WSS through Caddy
+
+          # Add ingress route for MQTT WSS through ingress proxy
           # This allows connecting via wss://mqtt.bitswan.localhost
           ./bitswan ingress add-route mqtt.bitswan.localhost aoc-emqx:8084 --mkcert || true
-          
-          # Wait for Caddy to reload and pick up the route
-          echo "Waiting for Caddy to reload route configuration..."
+
+          # Wait for ingress to reload and pick up the route
+          echo "Waiting for ingress to reload route configuration..."
           sleep 5
-          
-          # Verify Caddy is still running
-          if ! docker ps | grep -q caddy; then
-            echo "Error: Caddy container stopped after adding route"
-            docker ps -a | grep caddy
+
+          # Verify the ingress container is still running
+          if ! docker ps | grep -qE "caddy|traefik"; then
+            echo "Error: ingress container stopped after adding route"
+            docker ps -a | grep -E "caddy|traefik"
             exit 1
           fi
-          
-          # Debug: Verify Caddy can reach EMQX
-          echo "Testing Caddy -> EMQX connectivity..."
-          docker exec caddy ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Caddy container)"
-          docker exec caddy nc -zv aoc-emqx 8084 || docker exec caddy sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
-          
-          # Debug: Check Caddy routes
-          echo "Checking Caddy routes..."
-          curl -s http://localhost:2019/config/apps/http/servers/srv0/routes | jq -r '.[] | select(.match[0].host[]? | contains("mqtt")) | "Route: \(.match[0].host[])"' || echo "Could not list Caddy routes"
-          
-          # Debug: Check Caddy logs for errors
-          echo "Recent Caddy logs (errors):"
-          docker logs caddy --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
-          
-          # Debug: Check if route is accessible
+
+          # Debug: Verify ingress can reach EMQX
+          echo "Testing ingress -> EMQX connectivity..."
+          if docker ps | grep -q caddy; then
+            docker exec caddy ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Caddy container)"
+            docker exec caddy nc -zv aoc-emqx 8084 || docker exec caddy sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
+            # Debug: Check Caddy routes
+            echo "Checking Caddy routes..."
+            curl -s http://localhost:2019/config/apps/http/servers/srv0/routes | jq -r '.[] | select(.match[0].host[]? | contains("mqtt")) | "Route: \(.match[0].host[])"' || echo "Could not list Caddy routes"
+            # Debug: Check Caddy logs for errors
+            echo "Recent Caddy logs (errors):"
+            docker logs caddy --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
+          else
+            docker exec traefik ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Traefik container)"
+            docker exec traefik nc -zv aoc-emqx 8084 || docker exec traefik sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
+            # Debug: Check Traefik routes via its REST API
+            echo "Checking Traefik routes..."
+            curl -s http://localhost:8080/api/http/routers | jq -r '.[] | select(.rule | contains("mqtt")) | "Route: \(.rule)"' || echo "Could not list Traefik routes"
+            # Debug: Check Traefik logs for errors
+            echo "Recent Traefik logs (errors):"
+            docker logs traefik --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
+          fi
+
+          # Debug: Check DNS and HTTPS reachability
           echo "Testing DNS resolution..."
           nslookup mqtt.bitswan.localhost 127.0.0.1 || dig @127.0.0.1 mqtt.bitswan.localhost || echo "DNS check failed"
-          
-          # Debug: Test HTTPS connectivity
+
           echo "Testing HTTPS connectivity..."
           timeout 3 curl -k -v https://mqtt.bitswan.localhost:443 2>&1 | head -20 || echo "HTTPS test failed or timed out"
-          
-          # Verify the route is accessible
+
           echo "MQTT ingress route configured: wss://mqtt.bitswan.localhost"
 
       - name: Start mock AOC server
@@ -231,21 +246,21 @@ jobs:
             --name mock-aoc-server \
             --network bitswan_network \
             --network-alias api.bitswan.localhost \
-            -p 8080:8080 \
+            -p 8081:8081 \
             -v $(pwd)/bitswan:/usr/local/bin/bitswan:ro \
             bitswan/automation-server-runtime:latest \
             /usr/local/bin/bitswan _test mock-aoc-server \
-              --port 8080 \
+              --port 8081 \
               --emqx-secret "test-secret-key-for-ci-12345" \
               --server-id "test-ci-server-id" \
               --org-id "test-org-id" \
               --emqx-url "aoc-emqx" \
               --emqx-port 1883
-          
+
           # Wait for server to be ready
           echo "Waiting for mock AOC server to start..."
           for i in {1..30}; do
-            if curl -s http://localhost:8080/api/automation_server/info >/dev/null 2>&1; then
+            if curl -s http://localhost:8081/api/automation_server/info >/dev/null 2>&1; then
               echo "Mock AOC server is ready!"
               break
             fi
@@ -267,7 +282,7 @@ jobs:
           # Use the Docker network alias so daemon container can reach it
           sudo tee /home/runner/.config/bitswan/automation_server_config.toml > /dev/null <<EOF
           [aoc]
-          aoc_url = "http://api.bitswan.localhost:8080"
+          aoc_url = "http://api.bitswan.localhost:8081"
           automation_server_id = "test-ci-server-id"
           access_token = "test-token"
           expires_at = ""
@@ -303,8 +318,8 @@ jobs:
             docker logs bitswan-automation-server-daemon --tail 100 || echo "Could not get daemon logs"
             echo "=== EMQX logs ==="
             docker logs aoc-emqx --tail 50 || echo "Could not get EMQX logs"
-            echo "=== Caddy logs ==="
-            docker logs caddy --tail 50 || echo "Could not get Caddy logs"
+            echo "=== Ingress (Caddy/Traefik) logs ==="
+            docker logs caddy --tail 50 2>/dev/null || docker logs traefik --tail 50 2>/dev/null || echo "Could not get ingress logs"
             exit 1
           }
           # Cleanup after test

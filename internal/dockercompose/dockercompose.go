@@ -85,6 +85,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
+			"/var/run/bitswan:/var/run/bitswan",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
@@ -184,12 +185,30 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	return buf.String(), gitopsSecretToken, nil
 }
 
-func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
+// CreateCaddyDockerComposeFile creates a docker-compose file for Caddy.
+// networks parameter is optional - if provided, adds those networks along with bitswan_network.
+func CreateCaddyDockerComposeFile(caddyPath string, networks ...string) (string, error) {
 	caddyVolumes := []string{
 		caddyPath + "/Caddyfile:/etc/caddy/Caddyfile:z",
 		caddyPath + "/data:/data:z",
 		caddyPath + "/config:/config:z",
 		caddyPath + "/certs:/tls:z",
+	}
+
+	// Always include bitswan_network
+	caddyNetworks := []string{"bitswan_network"}
+	caddyNetworks = append(caddyNetworks, networks...)
+
+	// Construct networks map
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
 	}
 
 	// Construct the docker-compose data structure
@@ -201,16 +220,12 @@ func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 				"restart":        "always",
 				"container_name": "caddy",
 				"ports":          []string{"80:80", "443:443", "2019:2019"},
-				"networks":       []string{"bitswan_network"},
+				"networks":       caddyNetworks,
 				"volumes":        caddyVolumes,
 				"entrypoint":     []string{"caddy", "run", "--resume", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"},
 			},
 		},
-		"networks": map[string]interface{}{
-			"bitswan_network": map[string]interface{}{
-				"external": true,
-			},
-		},
+		"networks": networksMap,
 	}
 
 	var buf bytes.Buffer
@@ -218,6 +233,55 @@ func CreateCaddyDockerComposeFile(caddyPath string) (string, error) {
 	// Serialize the docker-compose data structure to YAML and write it to the file
 	encoder := yaml.NewEncoder(&buf)
 	encoder.SetIndent(2) // Optional: Set indentation
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateTraefikDockerComposeFile creates a docker-compose file for global Traefik.
+// networks parameter is optional - if provided, adds those networks along with bitswan_network.
+func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		traefikPath + "/certs:/tls:z",
+		traefikPath + "/acme:/acme:z",
+		"/var/run/docker.sock:/var/run/docker.sock:ro",
+	}
+
+	traefikNetworks := []string{"bitswan_network"}
+	traefikNetworks = append(traefikNetworks, networks...)
+
+	networksMap := map[string]interface{}{
+		"bitswan_network": map[string]interface{}{
+			"external": true,
+		},
+	}
+	for _, network := range networks {
+		networksMap[network] = map[string]interface{}{
+			"external": true,
+		}
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik": map[string]interface{}{
+				"image":          "traefik:v3.3",
+				"restart":        "always",
+				"container_name": "traefik",
+				"ports":          []string{"80:80", "443:443", "8080:8080"},
+				"networks":       traefikNetworks,
+				"volumes":        traefikVolumes,
+			},
+		},
+		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
 	if err := encoder.Encode(dockerCompose); err != nil {
 		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
 	}

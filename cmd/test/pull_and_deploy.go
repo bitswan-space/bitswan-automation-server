@@ -134,13 +134,14 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		fmt.Printf("✓ Image built: %s\n", imageTag)
 	}
 
-	if err := deployAutomation(metadata1.GitopsURL, metadata1.GitopsSecret, workspace1Name, deploymentID, checksum); err != nil {
+	deployTaskID1, err := deployAutomation(metadata1.GitopsURL, metadata1.GitopsSecret, workspace1Name, deploymentID, checksum)
+	if err != nil {
 		cleanupWorkspace(workspace1Name)
 		return fmt.Errorf("failed to deploy automation: %w", err)
 	}
 	time.Sleep(5 * time.Second)
 
-	endpointURL1, err := waitForDeployment(metadata1.GitopsURL, metadata1.GitopsSecret, workspace1Name, deploymentID)
+	endpointURL1, err := waitForDeployment(metadata1.GitopsURL, metadata1.GitopsSecret, workspace1Name, deploymentID, deployTaskID1)
 	if err != nil {
 		cleanupWorkspace(workspace1Name)
 		return fmt.Errorf("failed to wait for deployment: %w", err)
@@ -406,7 +407,7 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 	fmt.Println("\n[7/9] Waiting for deployment on workspace 2...")
 	time.Sleep(10 * time.Second) // Give it time to start building/deploying
 	
-	endpointURL2, err := waitForDeployment(metadata2.GitopsURL, metadata2.GitopsSecret, workspace2Name, deploymentID)
+	endpointURL2, err := waitForDeployment(metadata2.GitopsURL, metadata2.GitopsSecret, workspace2Name, deploymentID, "")
 	if err != nil {
 		cleanupWorkspace(workspace1Name)
 		cleanupWorkspace(workspace2Name)

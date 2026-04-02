@@ -1,19 +1,18 @@
 package daemon
 
 import (
-	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
+	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 )
 
 // IngressInitRequest represents the request to initialize ingress
@@ -29,10 +28,12 @@ type IngressInitResponse struct {
 
 // IngressAddRouteRequest represents the request to add a route
 type IngressAddRouteRequest struct {
-	Hostname string `json:"hostname"`
-	Upstream string `json:"upstream"`
-	Mkcert   bool   `json:"mkcert"`
-	CertsDir string `json:"certs_dir,omitempty"`
+	Hostname      string `json:"hostname"`
+	Upstream      string `json:"upstream"`
+	Mkcert        bool   `json:"mkcert"`
+	CertsDir      string `json:"certs_dir,omitempty"`
+	Secret        string `json:"secret,omitempty"` // Optional JWT token containing workspace ID
+	WorkspaceName string `json:"workspace_name,omitempty"`
 }
 
 // IngressAddRouteResponse represents the response from adding a route
@@ -48,10 +49,10 @@ type IngressListRoutesResponse struct {
 
 // RouteInfo represents simplified route information
 type RouteInfo struct {
-	ID       string   `json:"id"`
-	Hostname string   `json:"hostname"`
-	Upstream string   `json:"upstream"`
-	Terminal bool     `json:"terminal"`
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	Upstream string `json:"upstream"`
+	Terminal bool   `json:"terminal"`
 }
 
 // IngressRemoveRouteResponse represents the response from removing a route
@@ -121,74 +122,105 @@ func initIngress(verbose bool) (bool, error) {
 	// The files are accessible via the container path
 	homeDir := os.Getenv("HOME")
 	bitswanConfig := homeDir + "/.config/bitswan/"
-	caddyConfig := bitswanConfig + "caddy"
-	caddyCertsDir := caddyConfig + "/certs"
+	traefikConfig := bitswanConfig + "traefik"
+	traefikCertsDir := traefikConfig + "/certs"
 
-	caddyProjectName := "bitswan-caddy"
-	// If caddy container exists and caddy dir exists, return success (already initialized)
-	caddyContainerId, err := exec.Command("docker", "ps", "-q", "-f", "name=caddy").Output()
-	if err != nil {
-		return false, fmt.Errorf("failed to check if caddy container exists: %w", err)
-	}
-	if string(caddyContainerId) != "" {
-		return false, nil
+	traefikProjectName := "bitswan-traefik"
+
+	// Check if Traefik is already running with REST provider support.
+	// We test this by pushing an empty state: if it succeeds, Traefik is fully initialized.
+	if err := traefikapi.InitTraefik(); err == nil {
+		return false, nil // Already running and REST provider is working.
 	}
 
-	if err := os.MkdirAll(caddyConfig, 0755); err != nil {
+	// Traefik is either not running or is running without REST provider support.
+	// Stop and remove any existing container named "traefik" so we can start a fresh one.
+	existingIdBytes, _ := exec.Command("docker", "ps", "-q", "-f", "name=traefik").Output()
+	if existingId := strings.TrimSpace(string(existingIdBytes)); existingId != "" {
+		if verbose {
+			fmt.Println("Existing Traefik container does not support REST provider — stopping it to reinitialize...")
+		}
+		exec.Command("docker", "stop", existingId).Run() //nolint:errcheck
+		exec.Command("docker", "rm", existingId).Run()   //nolint:errcheck
+	}
+
+	if err := os.MkdirAll(traefikConfig, 0755); err != nil {
 		return false, fmt.Errorf("failed to create ingress config directory: %w", err)
 	}
 
-	// Create Caddyfile with email and modify admin listener
-	caddyfile := `
-		{
-			email info@bitswan.space
-			admin 0.0.0.0:2019
-		}`
+	// Create acme directory for Let's Encrypt certificate storage
+	acmeDir := traefikConfig + "/acme"
+	if err := os.MkdirAll(acmeDir, 0700); err != nil {
+		return false, fmt.Errorf("failed to create acme directory: %w", err)
+	}
 
-	caddyfilePath := caddyConfig + "/Caddyfile"
-	if err := os.WriteFile(caddyfilePath, []byte(caddyfile), 0755); err != nil {
-		return false, fmt.Errorf("failed to write Caddyfile: %w", err)
+	// Create Traefik static config enabling REST provider, entrypoints, and ACME
+	acmeEmail := os.Getenv("BITSWAN_ACME_EMAIL")
+	if acmeEmail == "" {
+		acmeEmail = "noreply@bitswan.space"
+	}
+	traefikStaticConfig := fmt.Sprintf(`entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+api:
+  insecure: true
+providers:
+  rest:
+    insecure: true
+  docker:
+    exposedByDefault: false
+    network: bitswan_network
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: %s
+      storage: /acme/acme.json
+      httpChallenge:
+        entryPoint: web
+`, acmeEmail)
+
+	traefikConfigFilePath := traefikConfig + "/traefik.yml"
+	if err := os.WriteFile(traefikConfigFilePath, []byte(traefikStaticConfig), 0755); err != nil {
+		return false, fmt.Errorf("failed to write traefik.yml: %w", err)
 	}
 
 	// For docker-compose, use HOST_HOME if available (docker-compose runs on host)
 	// Convert container path to host path for volume mounts
 	hostHomeDir := os.Getenv("HOST_HOME")
-	caddyConfigForCompose := caddyConfig
-	if hostHomeDir != "" && homeDir != hostHomeDir && strings.HasPrefix(caddyConfig, homeDir) {
+	traefikConfigForCompose := traefikConfig
+	if hostHomeDir != "" && homeDir != hostHomeDir && strings.HasPrefix(traefikConfig, homeDir) {
 		// Replace container home with host home for docker-compose volume paths
-		caddyConfigForCompose = strings.Replace(caddyConfig, homeDir, hostHomeDir, 1)
-		
+		traefikConfigForCompose = strings.Replace(traefikConfig, homeDir, hostHomeDir, 1)
+
 		// Ensure directories exist on host before docker-compose tries to mount them
-		// Create the directories on the host if they don't exist
-		if err := os.MkdirAll(caddyConfigForCompose, 0755); err != nil {
+		if err := os.MkdirAll(traefikConfigForCompose, 0755); err != nil {
 			return false, fmt.Errorf("failed to create ingress config directory on host: %w", err)
 		}
-		if err := os.MkdirAll(caddyConfigForCompose+"/data", 0755); err != nil {
-			return false, fmt.Errorf("failed to create ingress data directory on host: %w", err)
-		}
-		if err := os.MkdirAll(caddyConfigForCompose+"/config", 0755); err != nil {
-			return false, fmt.Errorf("failed to create ingress config subdirectory on host: %w", err)
-		}
-		if err := os.MkdirAll(caddyConfigForCompose+"/certs", 0755); err != nil {
+		if err := os.MkdirAll(traefikConfigForCompose+"/certs", 0755); err != nil {
 			return false, fmt.Errorf("failed to create ingress certs directory on host: %w", err)
 		}
-		
-		// Also create/ensure Caddyfile exists on host
-		caddyfilePathHost := caddyConfigForCompose + "/Caddyfile"
-		if _, err := os.Stat(caddyfilePathHost); os.IsNotExist(err) {
-			if err := os.WriteFile(caddyfilePathHost, []byte(caddyfile), 0755); err != nil {
-				return false, fmt.Errorf("failed to write Caddyfile on host: %w", err)
+		if err := os.MkdirAll(traefikConfigForCompose+"/acme", 0700); err != nil {
+			return false, fmt.Errorf("failed to create ingress acme directory on host: %w", err)
+		}
+
+		// Also create/ensure traefik.yml exists on host
+		traefikConfigFilePathHost := traefikConfigForCompose + "/traefik.yml"
+		if _, err := os.Stat(traefikConfigFilePathHost); os.IsNotExist(err) {
+			if err := os.WriteFile(traefikConfigFilePathHost, []byte(traefikStaticConfig), 0755); err != nil {
+				return false, fmt.Errorf("failed to write traefik.yml on host: %w", err)
 			}
 		}
 	}
 
-	caddyDockerCompose, err := dockercompose.CreateCaddyDockerComposeFile(caddyConfigForCompose)
+	traefikDockerCompose, err := dockercompose.CreateTraefikDockerComposeFile(traefikConfigForCompose)
 	if err != nil {
 		return false, fmt.Errorf("failed to create ingress docker-compose file: %w", err)
 	}
 
-	caddyDockerComposePath := caddyConfig + "/docker-compose.yml"
-	if err := os.WriteFile(caddyDockerComposePath, []byte(caddyDockerCompose), 0755); err != nil {
+	traefikDockerComposePath := traefikConfig + "/docker-compose.yml"
+	if err := os.WriteFile(traefikDockerComposePath, []byte(traefikDockerCompose), 0755); err != nil {
 		return false, fmt.Errorf("failed to write ingress docker-compose file: %w", err)
 	}
 
@@ -198,97 +230,192 @@ func initIngress(verbose bool) (bool, error) {
 	}
 	defer os.Chdir(originalDir)
 
-	if err := os.Chdir(caddyConfig); err != nil {
+	if err := os.Chdir(traefikConfig); err != nil {
 		return false, fmt.Errorf("failed to change directory to ingress config: %w", err)
 	}
 
-	caddyDockerComposeCom := exec.Command("docker", "compose", "-p", caddyProjectName, "up", "-d")
+	traefikDockerComposeCom := exec.Command("docker", "compose", "-p", traefikProjectName, "up", "-d")
 
 	// Create certs directory if it doesn't exist
-	if _, err := os.Stat(caddyCertsDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(caddyCertsDir, 0740); err != nil {
+	if _, err := os.Stat(traefikCertsDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(traefikCertsDir, 0740); err != nil {
 			return false, fmt.Errorf("failed to create ingress certs directory: %w", err)
 		}
 	}
 
-	if err := runCommandVerbose(caddyDockerComposeCom, verbose); err != nil {
+	if err := util.RunCommandVerbose(traefikDockerComposeCom, verbose); err != nil {
 		return false, fmt.Errorf("failed to start ingress: %w", err)
 	}
 
-	// wait 5s to make sure Caddy is up
+	// wait 5s to make sure Traefik is up
 	time.Sleep(5 * time.Second)
-	if err := caddyapi.InitCaddy(); err != nil {
+	if err := traefikapi.InitTraefik(); err != nil {
 		return false, fmt.Errorf("failed to init ingress: %w", err)
 	}
 
 	return true, nil
 }
 
-// runCommandVerbose runs a command with optional verbose output
-func runCommandVerbose(cmd *exec.Cmd, verbose bool) error {
-	var stdoutBuf, stderrBuf bytes.Buffer
-
-		if verbose {
-		// Set up pipes for real-time streaming
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			return fmt.Errorf("failed to create stdout pipe: %w", err)
-		}
-
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			return fmt.Errorf("failed to create stderr pipe: %w", err)
-		}
-
-		// Create multi-writers to both stream and capture output
-		stdoutWriter := io.MultiWriter(os.Stdout, &stdoutBuf)
-		stderrWriter := io.MultiWriter(os.Stderr, &stderrBuf)
-
-		// Start the command
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("failed to start command: %w", err)
-		}
-
-		// Copy stdout and stderr in separate goroutines
-		var wg sync.WaitGroup
-		wg.Add(2)
-
-		go func() {
-			defer wg.Done()
-			io.Copy(stdoutWriter, stdoutPipe)
-		}()
-
-		go func() {
-			defer wg.Done()
-			io.Copy(stderrWriter, stderrPipe)
-		}()
-
-		// Wait for all output to be processed
-		wg.Wait()
-
-		// Wait for command to complete
-		err = cmd.Wait()
-		if err != nil {
-			// Include captured output in error message
-			fullOutput := stdoutBuf.String() + stderrBuf.String()
-			return fmt.Errorf("%w\nOutput:\n%s", err, fullOutput)
-		}
-		return nil
-	} else {
-		// Not verbose, just capture output for potential error reporting
-		cmd.Stdout = &stdoutBuf
-		cmd.Stderr = &stderrBuf
-
-		err := cmd.Run()
-
-		// If command failed, return error with output
-		if err != nil {
-			fullOutput := stdoutBuf.String() + stderrBuf.String()
-			return fmt.Errorf("%w\nOutput:\n%s", err, fullOutput)
-		}
-
-		return nil
+// parseJWTToken extracts workspace ID or workspace name from a JWT token
+// JWT format: header.payload.signature
+// We decode the payload (base64) and extract workspace-id or workspace-name from the claims
+// Returns workspace ID if found, otherwise workspace name
+func parseJWTToken(tokenString string) (workspaceID string, workspaceName string, err error) {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("invalid JWT token format")
 	}
+
+	// Decode the payload (second part)
+	payload := parts[1]
+	// Add padding if needed
+	if len(payload)%4 != 0 {
+		payload += strings.Repeat("=", 4-len(payload)%4)
+	}
+
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode JWT payload: %w", err)
+	}
+
+	// Parse JSON payload
+	var claims map[string]interface{}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return "", "", fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	// Try to extract workspace-id first
+	if id, ok := claims["workspace-id"].(string); ok {
+		workspaceID = id
+	}
+	// Also try workspace_id (snake_case)
+	if id, ok := claims["workspace_id"].(string); ok && workspaceID == "" {
+		workspaceID = id
+	}
+
+	// Try to extract workspace-name
+	if name, ok := claims["workspace-name"].(string); ok {
+		workspaceName = name
+	}
+	// Also try workspace_name (snake_case)
+	if name, ok := claims["workspace_name"].(string); ok && workspaceName == "" {
+		workspaceName = name
+	}
+
+	if workspaceID == "" && workspaceName == "" {
+		return "", "", fmt.Errorf("neither workspace-id nor workspace-name found in JWT token")
+	}
+
+	return workspaceID, workspaceName, nil
+}
+
+// removeRouteFromIngress removes a route from the ingress proxy by hostname
+func removeRouteFromIngress(hostname string) error {
+	return traefikapi.RemoveRoute(hostname)
+}
+
+// addRouteToIngress is a helper function that adds a route to the ingress proxy
+// It can be called directly from workspace_init or from the HTTP handler
+func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
+	if req.Hostname == "" {
+		return fmt.Errorf("hostname is required")
+	}
+
+	if req.Upstream == "" {
+		return fmt.Errorf("upstream is required")
+	}
+
+	// Check for workspace name in request first (direct specification)
+	var workspaceName string
+	if req.WorkspaceName != "" {
+		workspaceName = req.WorkspaceName
+	} else {
+		// Fall back to JWT token parsing for backward compatibility
+		if jwtToken == "" {
+			jwtToken = req.Secret
+		}
+
+		if jwtToken != "" {
+			workspaceID, workspaceNameFromToken, err := parseJWTToken(jwtToken)
+			if err != nil {
+				// Non-fatal - we can still add the route without workspace name
+				// Just continue without workspace name
+				_ = err // Acknowledge the error but don't fail
+			} else {
+				// If we got workspace name directly from token, use it
+				if workspaceNameFromToken != "" {
+					workspaceName = workspaceNameFromToken
+				} else if workspaceID != "" {
+					// Otherwise, look up workspace name from workspace ID
+					var lookupErr error
+					workspaceName, lookupErr = findWorkspaceNameByID(workspaceID)
+					if lookupErr != nil {
+						return fmt.Errorf("failed to find workspace by ID: %w", lookupErr)
+					}
+				}
+			}
+		}
+	}
+
+	// Determine cert resolver: use ACME for real domains, nothing for localhost (mkcert handles it)
+	certResolver := ""
+	if !req.Mkcert && req.CertsDir == "" && !strings.HasSuffix(req.Hostname, ".localhost") {
+		certResolver = "letsencrypt"
+	}
+
+	// If workspace name is specified, set up routes in both platform traefik and workspace sub-traefik
+	if workspaceName != "" {
+		// Get workspace sub-traefik URL
+		workspaceTraefikURL := traefikapi.GetWorkspaceTraefikBaseURL(workspaceName)
+
+		// Add plain HTTP reverse proxy route at workspace sub-traefik: hostname -> upstream
+		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, workspaceTraefikURL); err != nil {
+			return fmt.Errorf("failed to add route to workspace sub-traefik: %w", err)
+		}
+
+		// Handle certificate generation and installation for platform traefik only
+		// Platform traefik handles TLS termination and proxies to workspace sub-traefik
+		if req.Mkcert {
+			// Generate and install certificates for the specific hostname (installs to platform traefik)
+			if err := traefikapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
+				return fmt.Errorf("failed to generate and install certificates: %w", err)
+			}
+		} else if req.CertsDir != "" {
+			// Install certificates from directory and set up TLS policies
+			if err := traefikapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
+				return fmt.Errorf("failed to install certificates from directory: %w", err)
+			}
+		}
+
+		// Add reverse proxy route at platform traefik: https://hostname -> workspace sub-traefik (with TLS)
+		// The platform traefik proxies to the workspace sub-traefik at port 80.
+		// This explicit Host() route (vs. the Docker-label HostRegexp) causes Traefik to
+		// proactively obtain a Let's Encrypt cert for this specific hostname.
+		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
+		if err := traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, "", certResolver); err != nil {
+			return fmt.Errorf("failed to add route to platform traefik: %w", err)
+		}
+	} else {
+		// No workspace name, add route to global/platform traefik only
+		// Handle certificate generation and installation
+		if req.Mkcert {
+			// Generate and install certificates for the specific hostname
+			if err := traefikapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
+				return fmt.Errorf("failed to generate and install certificates: %w", err)
+			}
+		} else if req.CertsDir != "" {
+			// Install certificates from directory and set up TLS policies
+			if err := traefikapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
+				return fmt.Errorf("failed to install certificates from directory: %w", err)
+			}
+		}
+
+		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, "", certResolver); err != nil {
+			return fmt.Errorf("failed to add route: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // handleIngressAddRoute handles POST /ingress/add-route
@@ -304,48 +431,11 @@ func (s *Server) handleIngressAddRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Hostname == "" {
-		writeJSONError(w, "hostname is required", http.StatusBadRequest)
-		return
-	}
+	// Check for JWT token in header for backward compatibility
+	jwtToken := r.Header.Get("BITSWAN_AUTOMATION_SERVER_DAEMON_TOKEN")
 
-	if req.Upstream == "" {
-		writeJSONError(w, "upstream is required", http.StatusBadRequest)
-		return
-	}
-
-	// Handle certificate generation and installation
-	if req.Mkcert {
-		// Extract domain from hostname
-		parts := strings.Split(req.Hostname, ".")
-		if len(parts) < 2 {
-			writeJSONError(w, "invalid hostname format: must contain at least one dot", http.StatusBadRequest)
-			return
-		}
-		domain := strings.Join(parts[1:], ".")
-
-		// Generate certificate for the specific hostname
-		if err := caddyapi.GenerateAndInstallCertsForHostname(req.Hostname, domain); err != nil {
-			writeJSONError(w, "failed to generate and install certificates: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Install TLS policies for the specific hostname
-		if err := caddyapi.InstallTLSCertsForHostname(req.Hostname, domain, "default"); err != nil {
-			writeJSONError(w, "failed to install TLS policies: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	} else if req.CertsDir != "" {
-		// Install certificates from directory
-		caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-		if err := caddyapi.InstallCertsFromDir(req.CertsDir, req.Hostname, caddyConfig); err != nil {
-			writeJSONError(w, "failed to install certificates from directory: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	if err := caddyapi.AddRoute(req.Hostname, req.Upstream); err != nil {
-		writeJSONError(w, "failed to add route: "+err.Error(), http.StatusInternalServerError)
+	if err := addRouteToIngress(req, jwtToken); err != nil {
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -364,7 +454,7 @@ func (s *Server) handleIngressListRoutes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	routes, err := caddyapi.ListRoutes()
+	routes, err := traefikapi.ListRoutes()
 	if err != nil {
 		writeJSONError(w, "failed to list routes: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -379,18 +469,12 @@ func (s *Server) handleIngressListRoutes(w http.ResponseWriter, r *http.Request)
 			hostnames = append(hostnames, match.Host...)
 		}
 
-		// Extract upstream from route handle
+		// Extract upstream from route handle (traefik returns flat reverse_proxy at top level)
 		var upstreams []string
 		for _, handle := range route.Handle {
-			if handle.Handler == "subroute" {
-				for _, subRoute := range handle.Routes {
-					for _, subHandle := range subRoute.Handle {
-						if subHandle.Handler == "reverse_proxy" {
-							for _, upstream := range subHandle.Upstreams {
-								upstreams = append(upstreams, upstream.Dial)
-							}
-						}
-					}
+			if handle.Handler == "reverse_proxy" {
+				for _, upstream := range handle.Upstreams {
+					upstreams = append(upstreams, upstream.Dial)
 				}
 			}
 		}
@@ -425,7 +509,7 @@ func (s *Server) handleIngressRemoveRoute(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := caddyapi.RemoveRoute(hostname); err != nil {
+	if err := traefikapi.RemoveRoute(hostname); err != nil {
 		writeJSONError(w, "failed to remove route: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -437,4 +521,3 @@ func (s *Server) handleIngressRemoveRoute(w http.ResponseWriter, r *http.Request
 		Message: fmt.Sprintf("Removed route: %s", hostname),
 	})
 }
-

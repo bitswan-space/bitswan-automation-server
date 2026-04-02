@@ -161,17 +161,21 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 
 	// Step 4: Deploy automation
 	fmt.Println("\n[4/8] Deploying automation...")
-	if err := deployAutomation(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID, checksum); err != nil {
+	deployTaskID, err := deployAutomation(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID, checksum)
+	if err != nil {
 		cleanupWorkspace(workspaceName)
 		return fmt.Errorf("failed to deploy automation: %w", err)
 	}
 	fmt.Println("✓ Automation deployed")
+	if deployTaskID != "" {
+		fmt.Printf("  Deploy task ID: %s\n", deployTaskID)
+	}
 	// Give deployment a moment to start
 	time.Sleep(5 * time.Second)
 
 	// Step 5: Wait for deployment and test endpoint
 	fmt.Println("\n[5/8] Waiting for deployment to be ready...")
-	endpointURL, err := waitForDeployment(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID)
+	endpointURL, err := waitForDeployment(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID, deployTaskID)
 	if err != nil {
 		cleanupWorkspace(workspaceName)
 		return fmt.Errorf("failed to wait for deployment: %w", err)
@@ -925,7 +929,8 @@ func waitForImageReady(gitopsURL, secret, workspaceName, expectedTag string) err
 	return fmt.Errorf("image did not become ready within timeout")
 }
 
-func deployAutomation(gitopsURL, secret, workspaceName, deploymentID, checksum string) error {
+// deployAutomation sends a deploy request and returns the task ID from the 202 response.
+func deployAutomation(gitopsURL, secret, workspaceName, deploymentID, checksum string) (string, error) {
 	// Create form data
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -940,7 +945,7 @@ func deployAutomation(gitopsURL, secret, workspaceName, deploymentID, checksum s
 	url = automations.TransformURLForDaemon(url, workspaceName)
 	req, err := httpReq.NewRequest("POST", url, &body)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -949,26 +954,67 @@ func deployAutomation(gitopsURL, secret, workspaceName, deploymentID, checksum s
 	// Send request with localhost resolution
 	resp, err := httpReq.ExecuteRequestWithLocalhostResolution(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		bodyBytes, _ := io.ReadAll(resp.Body)
 		// Try to parse error details
 		var errorResp struct {
 			Detail string `json:"detail"`
 		}
 		if json.Unmarshal(bodyBytes, &errorResp) == nil && errorResp.Detail != "" {
-			return fmt.Errorf("deploy failed with status %d: %s", resp.StatusCode, errorResp.Detail)
+			return "", fmt.Errorf("deploy failed with status %d: %s", resp.StatusCode, errorResp.Detail)
 		}
-		return fmt.Errorf("deploy failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("deploy failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	return nil
+	// Extract task_id from 202 response so waitForDeployment can poll deploy-status.
+	var deployResp struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(bodyBytes, &deployResp); err == nil {
+		return deployResp.TaskID, nil
+	}
+	return "", nil
 }
 
-func waitForDeployment(gitopsURL, secret, workspaceName, deploymentID string) (string, error) {
+// checkDeployStatus polls /automations/deploy-status/{taskID} and returns the status
+// string and error message (if failed). Returns ("", "") if the endpoint is not available
+// or the task is not found.
+func checkDeployStatus(gitopsURL, secret, workspaceName, taskID string) (status, errMsg string) {
+	if taskID == "" {
+		return "", ""
+	}
+	statusURL := fmt.Sprintf("%s/automations/deploy-status/%s", gitopsURL, taskID)
+	statusURL = automations.TransformURLForDaemon(statusURL, workspaceName)
+	req, err := httpReq.NewRequest("GET", statusURL, nil)
+	if err != nil {
+		return "", ""
+	}
+	req.Header.Set("Authorization", "Bearer "+secret)
+	resp, err := httpReq.ExecuteRequestWithLocalhostResolution(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return "", ""
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	var task struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(bodyBytes, &task); err != nil {
+		return "", ""
+	}
+	return task.Status, task.Error
+}
+
+func waitForDeployment(gitopsURL, secret, workspaceName, deploymentID, taskID string) (string, error) {
 	// Increase timeout to 10 minutes (300 attempts * 2 seconds) for CI environments
 	// where deployments may take longer to become ready
 	maxAttempts := 300
@@ -1012,6 +1058,13 @@ func waitForDeployment(gitopsURL, secret, workspaceName, deploymentID string) (s
 		// Log response status
 		if attempt%5 == 0 || attempt < 3 {
 			fmt.Printf("  Response: %d %s\n", resp.StatusCode, resp.Status)
+		}
+
+		// Periodically check the deploy task status to fail fast on errors.
+		if taskID != "" && attempt%10 == 0 && attempt > 0 {
+			if deployStatus, deployErr := checkDeployStatus(gitopsURL, secret, workspaceName, taskID); deployStatus == "failed" {
+				return "", fmt.Errorf("deployment failed (docker-compose error): %s", deployErr)
+			}
 		}
 
 		if resp.StatusCode == http.StatusOK {
