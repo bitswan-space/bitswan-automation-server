@@ -247,10 +247,23 @@ certificatesResolvers:
 		return false, fmt.Errorf("failed to start ingress: %w", err)
 	}
 
-	// wait 5s to make sure Traefik is up
-	time.Sleep(5 * time.Second)
-	if err := traefikapi.InitTraefik(); err != nil {
-		return false, fmt.Errorf("failed to init ingress: %w", err)
+	// Wait for Traefik to become fully ready. The API port may start accepting
+	// connections before the REST provider handler is registered, causing 405
+	// responses during the brief startup window. Retry with backoff.
+	const maxRetries = 12
+	const retryDelay = 3 * time.Second
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(retryDelay)
+		if lastErr = traefikapi.InitTraefik(); lastErr == nil {
+			break
+		}
+		if verbose {
+			fmt.Printf("Waiting for Traefik REST provider to be ready (attempt %d/%d): %v\n", i+1, maxRetries, lastErr)
+		}
+	}
+	if lastErr != nil {
+		return false, fmt.Errorf("failed to init ingress: %w", lastErr)
 	}
 
 	return true, nil
