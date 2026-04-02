@@ -314,8 +314,9 @@ func removeRouteFromIngress(hostname string) error {
 	return traefikapi.RemoveRoute(hostname)
 }
 
-// addRouteToIngress is a helper function that adds a route to the ingress proxy
-// It can be called directly from workspace_init or from the HTTP handler
+// addRouteToIngress is a helper function that adds a route to the global Traefik ingress proxy.
+// It can be called directly from workspace_init or from the HTTP handler.
+// All routes go to the single global Traefik instance, mirroring how Caddy was used.
 func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 	if req.Hostname == "" {
 		return fmt.Errorf("hostname is required")
@@ -325,94 +326,26 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 		return fmt.Errorf("upstream is required")
 	}
 
-	// Check for workspace name in request first (direct specification)
-	var workspaceName string
-	if req.WorkspaceName != "" {
-		workspaceName = req.WorkspaceName
-	} else {
-		// Fall back to JWT token parsing for backward compatibility
-		if jwtToken == "" {
-			jwtToken = req.Secret
-		}
-
-		if jwtToken != "" {
-			workspaceID, workspaceNameFromToken, err := parseJWTToken(jwtToken)
-			if err != nil {
-				// Non-fatal - we can still add the route without workspace name
-				// Just continue without workspace name
-				_ = err // Acknowledge the error but don't fail
-			} else {
-				// If we got workspace name directly from token, use it
-				if workspaceNameFromToken != "" {
-					workspaceName = workspaceNameFromToken
-				} else if workspaceID != "" {
-					// Otherwise, look up workspace name from workspace ID
-					var lookupErr error
-					workspaceName, lookupErr = findWorkspaceNameByID(workspaceID)
-					if lookupErr != nil {
-						return fmt.Errorf("failed to find workspace by ID: %w", lookupErr)
-					}
-				}
-			}
-		}
-	}
-
-	// Determine cert resolver: use ACME for real domains, nothing for localhost (mkcert handles it)
+	// Determine cert resolver: use ACME for real domains, nothing for .localhost (mkcert handles it)
 	certResolver := ""
 	if !req.Mkcert && req.CertsDir == "" && !strings.HasSuffix(req.Hostname, ".localhost") {
 		certResolver = "letsencrypt"
 	}
 
-	// If workspace name is specified, set up routes in both platform traefik and workspace sub-traefik
-	if workspaceName != "" {
-		// Get workspace sub-traefik URL
-		workspaceTraefikURL := traefikapi.GetWorkspaceTraefikBaseURL(workspaceName)
+	// Handle certificate generation/installation before registering the route
+	if req.Mkcert {
+		if err := traefikapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
+			return fmt.Errorf("failed to generate and install certificates: %w", err)
+		}
+	} else if req.CertsDir != "" {
+		if err := traefikapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
+			return fmt.Errorf("failed to install certificates from directory: %w", err)
+		}
+	}
 
-		// Add plain HTTP reverse proxy route at workspace sub-traefik: hostname -> upstream
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, workspaceTraefikURL); err != nil {
-			return fmt.Errorf("failed to add route to workspace sub-traefik: %w", err)
-		}
-
-		// Handle certificate generation and installation for platform traefik only
-		// Platform traefik handles TLS termination and proxies to workspace sub-traefik
-		if req.Mkcert {
-			// Generate and install certificates for the specific hostname (installs to platform traefik)
-			if err := traefikapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
-				return fmt.Errorf("failed to generate and install certificates: %w", err)
-			}
-		} else if req.CertsDir != "" {
-			// Install certificates from directory and set up TLS policies
-			if err := traefikapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
-				return fmt.Errorf("failed to install certificates from directory: %w", err)
-			}
-		}
-
-		// Add reverse proxy route at platform traefik: https://hostname -> workspace sub-traefik (with TLS)
-		// The platform traefik proxies to the workspace sub-traefik at port 80.
-		// This explicit Host() route (vs. the Docker-label HostRegexp) causes Traefik to
-		// proactively obtain a Let's Encrypt cert for this specific hostname.
-		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, "", certResolver); err != nil {
-			return fmt.Errorf("failed to add route to platform traefik: %w", err)
-		}
-	} else {
-		// No workspace name, add route to global/platform traefik only
-		// Handle certificate generation and installation
-		if req.Mkcert {
-			// Generate and install certificates for the specific hostname
-			if err := traefikapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
-				return fmt.Errorf("failed to generate and install certificates: %w", err)
-			}
-		} else if req.CertsDir != "" {
-			// Install certificates from directory and set up TLS policies
-			if err := traefikapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
-				return fmt.Errorf("failed to install certificates from directory: %w", err)
-			}
-		}
-
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, "", certResolver); err != nil {
-			return fmt.Errorf("failed to add route: %w", err)
-		}
+	// Add route directly to global Traefik: hostname -> upstream
+	if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, "", certResolver); err != nil {
+		return fmt.Errorf("failed to add route: %w", err)
 	}
 
 	return nil
