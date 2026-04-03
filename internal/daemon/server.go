@@ -61,9 +61,18 @@ func NewServer(version string) *Server {
 	}
 }
 
-// authMiddleware wraps a handler with bearer token authentication
+// authMiddleware wraps a handler with bearer token authentication.
+// Requests arriving over the Unix socket (RemoteAddr is empty or "@")
+// are trusted and skip token verification — access is gated by the
+// socket file permissions.
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Unix socket connections have an empty or "@" RemoteAddr
+		if r.RemoteAddr == "" || r.RemoteAddr == "@" {
+			next(w, r)
+			return
+		}
+
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			http.Error(w, `{"error": "missing Authorization header"}`, http.StatusUnauthorized)

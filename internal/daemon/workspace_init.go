@@ -1,27 +1,27 @@
 package daemon
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/docker"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
+	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
+	"github.com/bitswan-space/bitswan-workspaces/internal/util"
 )
 
 // runWorkspaceInit runs the workspace init logic with stdout already redirected.
@@ -56,6 +56,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	workspaceName := fs.Args()[0]
 	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
+	var err error
 
 	if _, err := os.Stat(bitswanConfig); os.IsNotExist(err) {
 		if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
@@ -64,27 +65,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	}
 
 	// Init bitswan network
-	networkName := "bitswan_network"
-	exists, err := checkNetworkExists(networkName)
-	if err != nil {
-		return fmt.Errorf("error checking network: %w", err)
-	}
-
-	if exists {
-		fmt.Printf("Network '%s' exists\n", networkName)
-	} else {
-		createDockerNetworkCom := exec.Command("docker", "network", "create", "bitswan_network")
-		fmt.Println("Creating BitSwan Docker network...")
-		if err := runCommandVerbose(createDockerNetworkCom, *verbose); err != nil {
-			if err.Error() == "exit status 1" {
-				fmt.Println("BitSwan Docker network already exists!")
-			} else {
-				fmt.Printf("Failed to create BitSwan Docker network: %s\n", err.Error())
-			}
-		} else {
-			fmt.Println("BitSwan Docker network created!")
-		}
-	}
+	docker.EnsureDockerNetwork("bitswan_network", *verbose)
 
 	var oauthConfig *oauth.Config
 	if *oauthConfigFile != "" {
@@ -95,27 +76,12 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		fmt.Println("OAuth config read successfully!")
 	}
 
-	// Init shared Caddy if not exists - call initIngress directly to avoid recursion
-	client := &http.Client{
-		Timeout: 2 * time.Second,
+	// Ensure the global ingress proxy is running.
+	// initIngress is idempotent: it detects Caddy or Traefik and returns early if already running.
+	if _, err := initIngress(*verbose); err != nil {
+		return fmt.Errorf("failed to initialize ingress: %w", err)
 	}
-	resp, err := client.Get("http://localhost:2019")
-	caddy_running := true
-	if err != nil {
-		caddy_running = false
-	} else {
-		defer resp.Body.Close()
-	}
-
-	if !caddy_running {
-		_, err := initIngress(*verbose)
-		if err != nil {
-			return fmt.Errorf("failed to initialize Caddy: %w", err)
-		}
-		fmt.Println("Ingress proxy is ready!")
-	} else {
-		fmt.Println("A running instance of Caddy with admin found")
-	}
+	fmt.Println("Ingress proxy is ready!")
 
 	// Handle --local flag
 	if *local && (*setHosts || *mkCerts) {
@@ -131,14 +97,32 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	}
 
 	// Handle certificate generation and installation
-	if *mkCerts {
-		if err := caddyapi.GenerateAndInstallCerts(*domain); err != nil {
-			return fmt.Errorf("error generating and installing certificates: %w", err)
-		}
-	} else if *certsDir != "" {
-		caddyConfig := bitswanConfig + "caddy"
-		if err := caddyapi.InstallCertsFromDir(*certsDir, *domain, caddyConfig); err != nil {
-			return fmt.Errorf("error installing certificates from directory: %w", err)
+	if *mkCerts || *certsDir != "" {
+		ingressType := DetectIngressType()
+		switch ingressType {
+		case IngressCaddy:
+			if *mkCerts {
+				if err := caddyapi.GenerateAndInstallCerts(*domain); err != nil {
+					return fmt.Errorf("error generating and installing certificates: %w", err)
+				}
+			} else if *certsDir != "" {
+				caddyCfg := bitswanConfig + "caddy"
+				if err := caddyapi.InstallCertsFromDir(*certsDir, *domain, caddyCfg); err != nil {
+					return fmt.Errorf("error installing certificates from directory: %w", err)
+				}
+			}
+		case IngressTraefik:
+			if *mkCerts {
+				// Generate wildcard cert for *.domain so subdomains (gitops, editor, automations) are covered
+				wildcardHostname := "*." + *domain
+				if err := traefikapi.InstallTLSCerts(wildcardHostname, true, ""); err != nil {
+					return fmt.Errorf("error installing wildcard certificates: %w", err)
+				}
+			} else if *certsDir != "" {
+				if err := traefikapi.InstallTLSCerts(*domain, false, *certsDir); err != nil {
+					return fmt.Errorf("error installing certificates from directory: %w", err)
+				}
+			}
 		}
 	}
 
@@ -198,7 +182,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			// Use su to switch to user1000 for git operations
 			// Escape the paths for shell safety
 			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git clone %q %q", clonePath, gitopsWorkspace)) //nolint:gosec
-			if err := runCommandVerbose(com, *verbose); err != nil {
+			if err := util.RunCommandVerbose(com, *verbose); err != nil {
 				return fmt.Errorf("failed to clone local repository: %w", err)
 			}
 			fmt.Println("Local repository cloned!")
@@ -257,10 +241,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 				if checkBranchCmd.Run() == nil {
 					// Branch exists in remote, checkout it
 					checkoutCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout -b %s origin/%s", gitopsWorkspace, *workspaceBranch, *workspaceBranch)) //nolint:gosec
-					if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+					if err := util.RunCommandVerbose(checkoutCom, *verbose); err != nil {
 						// Try just checking out if branch already exists locally
 						checkoutCom = exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout %s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
-						if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+						if err := util.RunCommandVerbose(checkoutCom, *verbose); err != nil {
 							fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
 							fmt.Printf("Continuing with the default branch...\n")
 						} else {
@@ -338,7 +322,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
 
 			fmt.Println("Cloning remote repository...")
-			if err := runCommandVerbose(com, *verbose); err != nil {
+			if err := util.RunCommandVerbose(com, *verbose); err != nil {
 				return fmt.Errorf("failed to clone remote repository: %w", err)
 			}
 			fmt.Println("Remote repository cloned!")
@@ -351,7 +335,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			if *workspaceBranch != "" {
 				fmt.Printf("Checking out branch '%s'...\n", *workspaceBranch)
 				checkoutCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git checkout %s", gitopsWorkspace, *workspaceBranch)) //nolint:gosec
-				if err := runCommandVerbose(checkoutCom, *verbose); err != nil {
+				if err := util.RunCommandVerbose(checkoutCom, *verbose); err != nil {
 					fmt.Printf("Warning: Failed to checkout branch '%s': %v\n", *workspaceBranch, err)
 					fmt.Printf("Continuing with the default branch...\n")
 				} else {
@@ -373,7 +357,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		com := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s init", gitopsWorkspace)) //nolint:gosec
 		fmt.Println("Initializing git in workspace...")
 
-		if err := runCommandVerbose(com, *verbose); err != nil {
+		if err := util.RunCommandVerbose(com, *verbose); err != nil {
 			return fmt.Errorf("failed to init git in workspace: %w", err)
 		}
 
@@ -392,7 +376,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	worktreeAddCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("git -C %s worktree add --orphan -b %s %s", gitopsWorkspace, workspaceName, gitopsWorktree)) //nolint:gosec
 
 	fmt.Println("Setting up GitOps worktree...")
-	if err := runCommandVerbose(worktreeAddCom, *verbose); err != nil {
+	if err := util.RunCommandVerbose(worktreeAddCom, *verbose); err != nil {
 		return fmt.Errorf("failed to create GitOps worktree: %w", err)
 	}
 
@@ -402,14 +386,14 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 		// Create empty commit as user1000
 		emptyCommitCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git commit --allow-empty -m 'Initial commit'", gitopsWorktree)) //nolint:gosec
-		if err := runCommandVerbose(emptyCommitCom, *verbose); err != nil {
+		if err := util.RunCommandVerbose(emptyCommitCom, *verbose); err != nil {
 			return fmt.Errorf("failed to create empty commit: %w", err)
 		}
 
 		if isLocalPath {
 			// For local paths, just push directly without SSH setup as user1000
 			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git push -u origin %s", gitopsWorktree, workspaceName)) //nolint:gosec
-			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
+			if err := util.RunCommandVerbose(setUpstreamCom, *verbose); err != nil {
 				return fmt.Errorf("failed to set upstream: %w", err)
 			}
 
@@ -424,12 +408,12 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 				// Update in both the main workspace repo and the gitops worktree (they share the same remote config)
 				// Update in main workspace repo
 				updateRemoteCmd := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git remote set-url origin %s", gitopsWorkspace, remoteURLForGitOps)) //nolint:gosec
-				if err := runCommandVerbose(updateRemoteCmd, *verbose); err != nil {
+				if err := util.RunCommandVerbose(updateRemoteCmd, *verbose); err != nil {
 					fmt.Printf("Warning: Failed to update remote URL to mount point in main repo: %v\n", err)
 				}
 				// Also update in gitops worktree explicitly (though they share .git, being explicit helps)
 				updateRemoteCmdWorktree := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", fmt.Sprintf("cd %s && git remote set-url origin %s", gitopsWorktree, remoteURLForGitOps)) //nolint:gosec
-				if err := runCommandVerbose(updateRemoteCmdWorktree, *verbose); err != nil {
+				if err := util.RunCommandVerbose(updateRemoteCmdWorktree, *verbose); err != nil {
 					fmt.Printf("Warning: Failed to update remote URL to mount point in worktree: %v\n", err)
 				} else {
 					fmt.Printf("Remote URL updated to mount point successfully\n")
@@ -460,7 +444,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			}
 
 			setUpstreamCom := exec.Command("su", "-s", "/bin/sh", "user1000", "-c", sshCmd) //nolint:gosec
-			if err := runCommandVerbose(setUpstreamCom, *verbose); err != nil {
+			if err := util.RunCommandVerbose(setUpstreamCom, *verbose); err != nil {
 				return fmt.Errorf("failed to set upstream: %w", err)
 			}
 		}
@@ -475,7 +459,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	// Only the gitops worktree needs to be owned by user1000 for the GitOps container.
 	fmt.Println("Fixing ownership of gitops worktree...")
 	chownGitopsCmd := exec.Command("chown", "-R", "1000:1000", gitopsWorktree)
-	if err := runCommandVerbose(chownGitopsCmd, *verbose); err != nil {
+	if err := util.RunCommandVerbose(chownGitopsCmd, *verbose); err != nil {
 		return fmt.Errorf("failed to fix ownership of gitops directory: %w", err)
 	}
 	fmt.Println("Ownership fixed successfully!")
@@ -539,16 +523,27 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	// Install TLS certificates and policies if certificates were provided
-	if *mkCerts || *certsDir != "" {
-		if err := caddyapi.InstallTLSCerts(workspaceName, *domain); err != nil {
-			return fmt.Errorf("failed to install caddy certs: %w", err)
-		}
+	// Register GitOps service route via the daemon's ingress abstraction.
+	// addRouteToIngress detects the ingress type and handles certs + routing.
+	gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
+	gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
+	if err := addRouteToIngress(IngressAddRouteRequest{
+		Hostname:      gitopsHostname,
+		Upstream:      gitopsUpstream,
+		Mkcert:        *mkCerts,
+		CertsDir:      *certsDir,
+		WorkspaceName: workspaceName,
+	}, ""); err != nil {
+		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}
 
-	// Register GitOps service
-	if err := caddyapi.RegisterServiceWithCaddy("gitops", workspaceName, *domain, fmt.Sprintf("%s-gitops:8079", workspaceName)); err != nil {
-		return fmt.Errorf("failed to register GitOps service: %w", err)
+	// Install wildcard TLS policies for the workspace domain (Caddy needs this
+	// so all subdomains — gitops, editor, automations — are covered by the same cert).
+	// Must be done AFTER per-hostname cert registration to avoid being overwritten.
+	if (*mkCerts || *certsDir != "") && DetectIngressType() == IngressCaddy {
+		if err := caddyapi.InstallTLSCerts(workspaceName, *domain); err != nil {
+			return fmt.Errorf("failed to install TLS certificates: %w", err)
+		}
 	}
 
 	err = ensureExamples(bitswanConfig, *verbose)
@@ -670,7 +665,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	dockerComposeCom := exec.Command("docker", "compose", "-p", projectName, "up", "-d", "--pull", "missing")
 
 	fmt.Println("Launching BitSwan Workspace services...")
-	if err := runCommandVerbose(dockerComposeCom, true); err != nil {
+	if err := util.RunCommandVerbose(dockerComposeCom, true); err != nil {
 		return fmt.Errorf("failed to start docker-compose: %w", err)
 	}
 
@@ -694,6 +689,19 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		// Enable the editor service
 		if err := editorService.Enable(token, bitswanEditorImage, *domain, oauthConfig, true); err != nil {
 			return fmt.Errorf("failed to enable editor service: %w", err)
+		}
+
+		// Register editor route via the ingress abstraction
+		editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
+		editorUpstream := fmt.Sprintf("%s-editor:9999", workspaceName)
+		if err := addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      editorHostname,
+			Upstream:      editorUpstream,
+			Mkcert:        *mkCerts,
+			CertsDir:      *certsDir,
+			WorkspaceName: workspaceName,
+		}, ""); err != nil {
+			return fmt.Errorf("failed to register Editor service: %w", err)
 		}
 
 		// Start the editor container
@@ -734,45 +742,11 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 // Helper functions moved from cmd/init.go
 
-type DockerNetwork struct {
-	Name      string `json:"Name"`
-	ID        string `json:"ID"`
-	CreatedAt string `json:"CreatedAt"`
-	Driver    string `json:"Driver"`
-	IPv6      string `json:"IPv6"`
-	Internal  string `json:"Internal"`
-	Labels    string `json:"Labels"`
-	Scope     string `json:"Scope"`
-}
-
 type RepositoryInfo struct {
 	Hostname string
 	Org      string
 	Repo     string
 	IsSSH    bool
-}
-
-func checkNetworkExists(networkName string) (bool, error) {
-	cmd := exec.Command("docker", "network", "ls", "--format=json")
-	output, err := cmd.Output()
-	if err != nil {
-		return false, fmt.Errorf("error running docker command: %v", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
-	for _, line := range lines {
-		var network DockerNetwork
-		if err := json.Unmarshal([]byte(line), &network); err != nil {
-			return false, fmt.Errorf("error parsing JSON: %v", err)
-		}
-
-		if network.Name == networkName {
-			return true, nil
-		}
-	}
-
-	return false, nil
 }
 
 func ensureExamples(bitswanConfig string, verbose bool) error {
@@ -789,7 +763,7 @@ func ensureExamples(bitswanConfig string, verbose bool) error {
 		}
 
 		cmd := exec.Command("git", "clone", repoURL, targetDir)
-		if err := runCommandVerbose(cmd, verbose); err != nil {
+		if err := util.RunCommandVerbose(cmd, verbose); err != nil {
 			return fmt.Errorf("failed to clone repository: %w", err)
 		}
 
@@ -814,7 +788,7 @@ func updateExamples(bitswanConfig string, verbose bool) error {
 	cmd := exec.Command("git", "-c", fmt.Sprintf("safe.directory=%s", repoPath), "pull")
 	cmd.Dir = repoPath
 
-	if err := runCommandVerbose(cmd, verbose); err != nil {
+	if err := util.RunCommandVerbose(cmd, verbose); err != nil {
 		return fmt.Errorf("failed to update repository: %w", err)
 	}
 
@@ -854,7 +828,7 @@ func setHostsFile(workspaceName, domain string, noIde bool) error {
 	for _, entry := range hostsEntries {
 		cmdStr := "echo '" + entry + "' | sudo tee -a /etc/hosts"
 		addHostsCom := exec.Command("sh", "-c", cmdStr)
-		if err := runCommandVerbose(addHostsCom, false); err != nil {
+		if err := util.RunCommandVerbose(addHostsCom, false); err != nil {
 			return fmt.Errorf("unable to write into '/etc/hosts'. \n Please add the records manually")
 		}
 	}
