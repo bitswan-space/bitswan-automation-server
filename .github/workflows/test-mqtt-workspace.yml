@@ -162,54 +162,49 @@ jobs:
           
       - name: Initialize ingress
         run: |
-          # Initialize ingress (this sets up Caddy)
+          # Initialize ingress (auto-detects and starts Traefik or Caddy)
           sudo ./bitswan ingress init || true
-          # Wait for Caddy to be ready
-          echo "Waiting for Caddy to be ready..."
+          # Wait for ingress proxy to be ready
+          echo "Waiting for ingress proxy to be ready..."
           for i in {1..30}; do
-            if docker ps | grep -q caddy; then
-              echo "Caddy is running!"
+            if docker ps | grep -qE "traefik|caddy"; then
+              echo "Ingress proxy is running!"
+              docker ps | grep -E "traefik|caddy"
               break
             fi
             if [ $i -eq 30 ]; then
-              echo "Caddy failed to start"
-              docker ps -a | grep caddy || echo "No Caddy container found"
+              echo "Ingress proxy failed to start"
+              docker ps -a | grep -E "traefik|caddy" || echo "No ingress container found"
               exit 1
             fi
-            echo "Waiting for Caddy... ($i/30)"
+            echo "Waiting for ingress... ($i/30)"
             sleep 1
           done
           
       - name: Set up MQTT ingress route
         run: |
-          
-          # Add ingress route for MQTT WSS through Caddy
+          # Add ingress route for MQTT WSS through the ingress proxy
           # This allows connecting via wss://mqtt.bitswan.localhost
           ./bitswan ingress add-route mqtt.bitswan.localhost aoc-emqx:8084 --mkcert || true
-          
-          # Wait for Caddy to reload and pick up the route
-          echo "Waiting for Caddy to reload route configuration..."
+
+          # Wait for ingress to pick up the route
+          echo "Waiting for ingress to reload route configuration..."
           sleep 5
-          
-          # Verify Caddy is still running
-          if ! docker ps | grep -q caddy; then
-            echo "Error: Caddy container stopped after adding route"
-            docker ps -a | grep caddy
+
+          # Verify ingress is still running
+          if ! docker ps | grep -qE "traefik|caddy"; then
+            echo "Error: Ingress container stopped after adding route"
+            docker ps -a | grep -E "traefik|caddy"
             exit 1
           fi
-          
-          # Debug: Verify Caddy can reach EMQX
-          echo "Testing Caddy -> EMQX connectivity..."
-          docker exec caddy ping -c 2 aoc-emqx || echo "Ping test failed (ping might not be available in Caddy container)"
-          docker exec caddy nc -zv aoc-emqx 8084 || docker exec caddy sh -c "timeout 2 sh -c '</dev/tcp/aoc-emqx/8084' || echo 'TCP test failed'" || echo "TCP connectivity test failed"
-          
-          # Debug: Check Caddy routes
-          echo "Checking Caddy routes..."
-          curl -s http://localhost:2019/config/apps/http/servers/srv0/routes | jq -r '.[] | select(.match[0].host[]? | contains("mqtt")) | "Route: \(.match[0].host[])"' || echo "Could not list Caddy routes"
-          
-          # Debug: Check Caddy logs for errors
-          echo "Recent Caddy logs (errors):"
-          docker logs caddy --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
+
+          # Debug: Check ingress routes
+          echo "Checking ingress routes..."
+          ./bitswan ingress list-routes 2>/dev/null || echo "Could not list ingress routes"
+
+          # Debug: Check ingress logs for errors
+          echo "Recent ingress logs (errors):"
+          docker logs traefik --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || docker logs caddy --tail 50 2>&1 | grep -i "error\|fail\|502\|bad gateway" || echo "No errors found in recent logs"
           
           # Debug: Check if route is accessible
           echo "Testing DNS resolution..."
@@ -303,8 +298,8 @@ jobs:
             docker logs bitswan-automation-server-daemon --tail 100 || echo "Could not get daemon logs"
             echo "=== EMQX logs ==="
             docker logs aoc-emqx --tail 50 || echo "Could not get EMQX logs"
-            echo "=== Caddy logs ==="
-            docker logs caddy --tail 50 || echo "Could not get Caddy logs"
+            echo "=== Ingress logs ==="
+            docker logs traefik --tail 50 2>/dev/null || docker logs caddy --tail 50 2>/dev/null || echo "Could not get ingress logs"
             exit 1
           }
           # Cleanup after test

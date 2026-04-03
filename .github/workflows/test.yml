@@ -116,6 +116,13 @@ jobs:
       - name: Build bitswan binary
         run: go build -o bitswan ./main.go
 
+      - name: Build gitops image from source
+        run: |
+          # Clone the gitops repo and build a fresh image so integration tests
+          # use code that talks to the daemon socket (not Caddy directly).
+          git clone --depth 1 https://github.com/bitswan-space/bitswan-gitops.git /tmp/bitswan-gitops
+          docker build -t bitswan/gitops-local:latest /tmp/bitswan-gitops
+
       - name: Initialize daemon
         run: |
           sudo ./bitswan automation-server-daemon init
@@ -126,11 +133,62 @@ jobs:
           # Verify daemon is running
           ./bitswan automation-server-daemon status || exit 1
 
-      - name: Run init test
+      - name: "Test 1: Init with Traefik (default)"
         timeout-minutes: 20
         run: |
-          ./bitswan _test init --gitops-image bitswan/gitops-staging:sha256_d73677c490bffb72d47ded8726d19618d309794b2d2c43292b80c4ce1da2d236 --no-remove || exit 1
-          # Cleanup after test
+          echo "=== Testing with Traefik (default ingress) ==="
+          ./bitswan _test init --gitops-image bitswan/gitops-local:latest --no-remove || exit 1
+          ./bitswan _test cleanup || true
+
+      - name: "Test 2: Init with Caddy (backward compat)"
+        timeout-minutes: 20
+        run: |
+          echo "=== Testing with Caddy (backward compatibility) ==="
+          # Rebuild gitops image (previous test cleanup deletes it)
+          docker build -t bitswan/gitops-local:latest /tmp/bitswan-gitops
+          # Stop Traefik so a fresh Caddy can be started
+          docker rm -f traefik 2>/dev/null || true
+          docker compose -p bitswan-traefik down 2>/dev/null || true
+          sudo rm -rf ~/.config/bitswan/traefik
+          # Force Caddy via --type flag
+          ./bitswan ingress init --type caddy -v || exit 1
+          # Verify Caddy is running
+          docker ps | grep caddy || { echo "ERROR: Caddy not running"; exit 1; }
+          echo "Caddy is running, running init test..."
+          ./bitswan _test init --gitops-image bitswan/gitops-local:latest --no-remove || exit 1
+          ./bitswan _test cleanup || true
+
+      - name: "Test 3: Migrate Caddy to Traefik and re-test"
+        timeout-minutes: 20
+        run: |
+          echo "=== Testing migration from Caddy to Traefik ==="
+          # Rebuild gitops image (previous test cleanup deletes it)
+          docker build -t bitswan/gitops-local:latest /tmp/bitswan-gitops
+          # Ensure Caddy is running with some routes
+          docker rm -f traefik 2>/dev/null || true
+          docker compose -p bitswan-traefik down 2>/dev/null || true
+          sudo rm -rf ~/.config/bitswan/traefik
+          # Start Caddy if not already running
+          if ! docker ps | grep -q caddy; then
+            sudo ./bitswan ingress init || true
+          fi
+          # Add a test route to Caddy to verify it survives migration
+          ./bitswan ingress add-route migration-test.bitswan.localhost localhost:9999 || true
+          # Verify route exists before migration
+          echo "Routes before migration:"
+          ./bitswan ingress list-routes || true
+          # Run migration
+          ./bitswan ingress migrate -v || exit 1
+          # Verify Traefik is now running
+          if ! docker ps | grep -q traefik; then
+            echo "ERROR: Traefik should be running after migration"
+            exit 1
+          fi
+          # Verify route survived migration
+          echo "Routes after migration:"
+          ./bitswan ingress list-routes || true
+          # Run full init test with Traefik after migration
+          ./bitswan _test init --gitops-image bitswan/gitops-local:latest --no-remove || exit 1
           ./bitswan _test cleanup || true
 
       - name: Run update test
