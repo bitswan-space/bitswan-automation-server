@@ -10,6 +10,7 @@ import (
 
 func newInitCmd() *cobra.Command {
 	var verbose bool
+	var ingressType string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -23,7 +24,7 @@ func newInitCmd() *cobra.Command {
 				os.Exit(1)
 			}
 
-			result, err := client.InitIngress(verbose)
+			result, err := client.InitIngress(verbose, ingressType)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
@@ -35,6 +36,7 @@ func newInitCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
+	cmd.Flags().StringVar(&ingressType, "type", "", "Force ingress type: 'caddy' or 'traefik' (default: auto-detect)")
 
 	return cmd
 }
