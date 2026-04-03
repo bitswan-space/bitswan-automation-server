@@ -15,6 +15,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
 )
 
 // Compose represents docker-compose structure for parsing
@@ -120,14 +121,29 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "Image removal process completed.")
 
-	// 5. Remove caddy files (before removing workspace folder so metadata is available)
+	// 5. Remove ingress records (before removing workspace folder so metadata is available)
 	// Run in background - don't wait for it to complete since it's not critical
-	fmt.Fprintln(writer, "Removing caddy files (running in background)...")
+	fmt.Fprintln(writer, "Removing ingress records (running in background)...")
 	go func() {
-		// Run Caddy deletion in background - don't block main deletion process
-		caddyapi.DeleteCaddyRecordsWithWriter(workspaceName, writer)
+		ingressType := DetectIngressType()
+		switch ingressType {
+		case IngressCaddy:
+			caddyapi.DeleteCaddyRecordsWithWriter(workspaceName, writer)
+		case IngressTraefik:
+			traefikapi.DeleteTraefikRecordsWithWriter(workspaceName, writer)
+			// Also stop workspace sub-traefik if it exists
+			containerName := fmt.Sprintf("%s__traefik", workspaceName)
+			traefikProjectName := fmt.Sprintf("bitswan-%s-traefik", workspaceName)
+			stopCmd := exec.Command("docker", "compose", "-p", traefikProjectName, "down")
+			stopCmd.Stdout = writer
+			stopCmd.Stderr = writer
+			if err := stopCmd.Run(); err != nil {
+				// Try force remove
+				exec.Command("docker", "rm", "-f", containerName).Run()
+			}
+		}
 	}()
-	// Continue immediately - don't wait for Caddy cleanup
+	// Continue immediately - don't wait for ingress cleanup
 
 	// 6. Remove the gitops folder
 	workspaceDir := filepath.Join(workspacesFolder, workspaceName)
