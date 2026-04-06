@@ -254,7 +254,7 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 		"version": "3.8",
 		"services": map[string]interface{}{
 			"traefik": map[string]interface{}{
-				"image":          "traefik:v3.3",
+				"image":          "traefik:v3.6",
 				"restart":        "always",
 				"container_name": "traefik",
 				"ports":          []string{"80:80", "443:443", "9080:8080"},
@@ -304,7 +304,7 @@ func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain 
 	// Build Docker labels so the global Traefik auto-discovers this sub-traefik
 	// and creates a HostRegexp routing rule for all {workspace}-*.{domain} hostnames.
 	serviceMap := map[string]interface{}{
-		"image":          "traefik:v3.3",
+		"image":          "traefik:v3.6",
 		"restart":        "always",
 		"container_name": containerName,
 		"networks":       traefikNetworks,

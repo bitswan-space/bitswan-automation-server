@@ -110,6 +110,8 @@ func (s *Server) handleIngress(w http.ResponseWriter, r *http.Request) {
 		s.handleIngressType(w, r)
 	case path == "migrate":
 		s.handleIngressMigrate(w, r)
+	case path == "update":
+		s.handleIngressUpdate(w, r)
 	default:
 		writeJSONError(w, "not found", http.StatusNotFound)
 	}
@@ -146,6 +148,30 @@ func (s *Server) handleIngressMigrate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "Successfully migrated from Caddy to Traefik",
+	})
+}
+
+// handleIngressUpdate handles POST /ingress/update — updates the ingress proxy to the latest version
+func (s *Server) handleIngressUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Verbose bool `json:"verbose"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	if err := UpdateIngress(req.Verbose); err != nil {
+		writeJSONError(w, "update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Successfully updated ingress proxy",
 	})
 }
 
@@ -807,6 +833,183 @@ func MigrateCaddyToTraefik(verbose bool) error {
 	}
 
 	fmt.Printf("Migration complete: %d routes migrated from Caddy to Traefik\n", len(exported))
+	return nil
+}
+
+// UpdateIngress updates the ingress proxy to the latest version.
+// It exports routes, stops the container, regenerates config, restarts, and re-adds routes.
+func UpdateIngress(verbose bool) error {
+	ingressType := DetectIngressType()
+
+	switch ingressType {
+	case IngressTraefik:
+		return updateTraefik(verbose)
+	case IngressCaddy:
+		return updateCaddy(verbose)
+	}
+
+	return fmt.Errorf("no ingress proxy detected")
+}
+
+// updateTraefik updates the Traefik proxy to the latest version
+func updateTraefik(verbose bool) error {
+	// Step 1: Export existing routes
+	fmt.Println("Exporting routes from Traefik...")
+	routes, err := traefikapi.ListRoutes()
+	if err != nil {
+		return fmt.Errorf("failed to list Traefik routes: %w", err)
+	}
+
+	type routeExport struct {
+		hostname string
+		upstream string
+	}
+	var exported []routeExport
+	for _, route := range routes {
+		var hostname, upstream string
+		for _, match := range route.Match {
+			if len(match.Host) > 0 {
+				hostname = match.Host[0]
+			}
+		}
+		for _, handle := range route.Handle {
+			if handle.Handler == "reverse_proxy" {
+				for _, u := range handle.Upstreams {
+					upstream = u.Dial
+				}
+			}
+		}
+		if hostname != "" && upstream != "" {
+			exported = append(exported, routeExport{hostname: hostname, upstream: upstream})
+		}
+	}
+
+	if verbose {
+		fmt.Printf("Exported %d routes from Traefik\n", len(exported))
+	}
+
+	// Step 2: Stop Traefik
+	fmt.Println("Stopping Traefik...")
+	stopCmd := exec.Command("docker", "compose", "-p", "bitswan-traefik", "down")
+	homeDir := os.Getenv("HOME")
+	traefikConfig := homeDir + "/.config/bitswan/traefik"
+	stopCmd.Dir = traefikConfig
+	if err := util.RunCommandVerbose(stopCmd, verbose); err != nil {
+		// Try force remove if compose down fails
+		exec.Command("docker", "rm", "-f", "traefik").Run()
+	}
+
+	// Step 3: Pull latest image and regenerate config
+	fmt.Println("Pulling latest Traefik image...")
+	pullCmd := exec.Command("docker", "pull", "traefik:v3.6")
+	if err := util.RunCommandVerbose(pullCmd, verbose); err != nil {
+		fmt.Printf("Warning: failed to pull latest image: %v\n", err)
+	}
+
+	// Step 4: Start Traefik with new config
+	fmt.Println("Starting Traefik...")
+	if _, err := initTraefikIngress(verbose); err != nil {
+		return fmt.Errorf("failed to start Traefik: %w", err)
+	}
+
+	// Step 5: Re-add routes
+	fmt.Println("Restoring routes to Traefik...")
+	for _, route := range exported {
+		certResolver := ""
+		if !strings.HasSuffix(route.hostname, ".localhost") {
+			certResolver = "letsencrypt"
+		}
+		if err := traefikapi.AddRouteWithTraefik(route.hostname, route.upstream, "", certResolver); err != nil {
+			fmt.Printf("Warning: failed to restore route %s -> %s: %v\n", route.hostname, route.upstream, err)
+		} else if verbose {
+			fmt.Printf("Restored route: %s -> %s\n", route.hostname, route.upstream)
+		}
+	}
+
+	fmt.Printf("Update complete: %d routes restored\n", len(exported))
+	return nil
+}
+
+// updateCaddy updates the Caddy proxy to the latest version
+func updateCaddy(verbose bool) error {
+	// Step 1: Export existing routes
+	fmt.Println("Exporting routes from Caddy...")
+	routes, err := caddyapi.ListRoutes()
+	if err != nil {
+		return fmt.Errorf("failed to list Caddy routes: %w", err)
+	}
+
+	type routeExport struct {
+		hostname string
+		upstream string
+	}
+	var exported []routeExport
+	for _, route := range routes {
+		var hostname, upstream string
+		for _, match := range route.Match {
+			if len(match.Host) > 0 {
+				hostname = match.Host[0]
+			}
+		}
+		for _, handle := range route.Handle {
+			if handle.Handler == "reverse_proxy" {
+				for _, u := range handle.Upstreams {
+					upstream = u.Dial
+				}
+			}
+			for _, subRoute := range handle.Routes {
+				for _, subHandle := range subRoute.Handle {
+					if subHandle.Handler == "reverse_proxy" {
+						for _, u := range subHandle.Upstreams {
+							upstream = u.Dial
+						}
+					}
+				}
+			}
+		}
+		if hostname != "" && upstream != "" {
+			exported = append(exported, routeExport{hostname: hostname, upstream: upstream})
+		}
+	}
+
+	if verbose {
+		fmt.Printf("Exported %d routes from Caddy\n", len(exported))
+	}
+
+	// Step 2: Stop Caddy
+	fmt.Println("Stopping Caddy...")
+	stopCmd := exec.Command("docker", "compose", "-p", "bitswan-caddy", "down")
+	homeDir := os.Getenv("HOME")
+	caddyConfig := homeDir + "/.config/bitswan/caddy"
+	stopCmd.Dir = caddyConfig
+	if err := util.RunCommandVerbose(stopCmd, verbose); err != nil {
+		exec.Command("docker", "rm", "-f", "caddy").Run()
+	}
+
+	// Step 3: Pull latest image
+	fmt.Println("Pulling latest Caddy image...")
+	pullCmd := exec.Command("docker", "pull", "caddy:2.9")
+	if err := util.RunCommandVerbose(pullCmd, verbose); err != nil {
+		fmt.Printf("Warning: failed to pull latest image: %v\n", err)
+	}
+
+	// Step 4: Start Caddy with new config
+	fmt.Println("Starting Caddy...")
+	if _, err := initCaddyIngress(verbose); err != nil {
+		return fmt.Errorf("failed to start Caddy: %w", err)
+	}
+
+	// Step 5: Re-add routes
+	fmt.Println("Restoring routes to Caddy...")
+	for _, route := range exported {
+		if err := caddyapi.AddRoute(route.hostname, route.upstream); err != nil {
+			fmt.Printf("Warning: failed to restore route %s -> %s: %v\n", route.hostname, route.upstream, err)
+		} else if verbose {
+			fmt.Printf("Restored route: %s -> %s\n", route.hostname, route.upstream)
+		}
+	}
+
+	fmt.Printf("Update complete: %d routes restored\n", len(exported))
 	return nil
 }
 
