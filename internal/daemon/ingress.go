@@ -684,6 +684,27 @@ func addRouteCaddy(req IngressAddRouteRequest) error {
 	return caddyapi.AddRoute(req.Hostname, req.Upstream)
 }
 
+// isValidForLetsEncrypt checks if a hostname is valid for Let's Encrypt certificate issuance.
+// Returns false for:
+// - Hostnames without a dot (not a valid FQDN)
+// - Hostnames ending in .localhost
+// - Hostnames containing invalid DNS characters like "__"
+func isValidForLetsEncrypt(hostname string) bool {
+	// Must have at least one dot to be a valid FQDN
+	if !strings.Contains(hostname, ".") {
+		return false
+	}
+	// .localhost domains can't get public certificates
+	if strings.HasSuffix(hostname, ".localhost") {
+		return false
+	}
+	// Double underscore is invalid in DNS names
+	if strings.Contains(hostname, "__") {
+		return false
+	}
+	return true
+}
+
 // isWorkspaceTraefikRunning checks if a workspace sub-traefik container is running.
 func isWorkspaceTraefikRunning(workspaceName string) bool {
 	containerName := fmt.Sprintf("%s__traefik", workspaceName)
@@ -696,7 +717,7 @@ func isWorkspaceTraefikRunning(workspaceName string) bool {
 // Otherwise, adds the route directly to the platform traefik (single-tier).
 func addRouteTraefik(req IngressAddRouteRequest, workspaceName string) error {
 	certResolver := ""
-	if !req.Mkcert && req.CertsDir == "" && !strings.HasSuffix(req.Hostname, ".localhost") {
+	if !req.Mkcert && req.CertsDir == "" && isValidForLetsEncrypt(req.Hostname) {
 		certResolver = "letsencrypt"
 	}
 
@@ -822,7 +843,7 @@ func MigrateCaddyToTraefik(verbose bool) error {
 	fmt.Println("Migrating routes to Traefik...")
 	for _, route := range exported {
 		certResolver := ""
-		if !strings.HasSuffix(route.hostname, ".localhost") {
+		if isValidForLetsEncrypt(route.hostname) {
 			certResolver = "letsencrypt"
 		}
 		if err := traefikapi.AddRouteWithTraefik(route.hostname, route.upstream, "", certResolver); err != nil {
@@ -916,7 +937,7 @@ func updateTraefik(verbose bool) error {
 	fmt.Println("Restoring routes to Traefik...")
 	for _, route := range exported {
 		certResolver := ""
-		if !strings.HasSuffix(route.hostname, ".localhost") {
+		if isValidForLetsEncrypt(route.hostname) {
 			certResolver = "letsencrypt"
 		}
 		if err := traefikapi.AddRouteWithTraefik(route.hostname, route.upstream, "", certResolver); err != nil {
