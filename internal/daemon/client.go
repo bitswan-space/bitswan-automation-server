@@ -115,6 +115,17 @@ func (c *Client) doStreamingRequest(req *http.Request) (*http.Response, error) {
 	return streamingClient.Do(req)
 }
 
+// doLongRunningRequest performs an HTTP request with a longer timeout for operations
+// that may take a while (e.g., migrations, container operations)
+func (c *Client) doLongRunningRequest(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	longRunningClient := &http.Client{
+		Transport: c.httpClient.Transport,
+		Timeout:   2 * time.Minute,
+	}
+	return longRunningClient.Do(req)
+}
+
 // Ping checks if the daemon is running
 func (c *Client) Ping() error {
 	req, err := http.NewRequest("GET", "http://unix/ping", nil)
@@ -772,7 +783,43 @@ func (c *Client) MigrateIngress(verbose bool) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.doRequest(req)
+	// Use longer timeout for migration as it involves stopping Caddy,
+	// starting Traefik, and re-adding routes
+	resp, err := c.doLongRunningRequest(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errResp ErrorResponse
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return fmt.Errorf("%s", errResp.Error)
+		}
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// UpdateIngress updates the ingress proxy to the latest version, preserving all routes
+func (c *Client) UpdateIngress(verbose bool) error {
+	reqBody := map[string]bool{"verbose": verbose}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", "http://unix/ingress/update", strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Use longer timeout for update as it involves stopping container,
+	// pulling image, starting container, and re-adding routes
+	resp, err := c.doLongRunningRequest(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
