@@ -77,6 +77,15 @@ type MQTTCredentials struct {
 	URL      string // Full URL with protocol (e.g., wss://host:port)
 }
 
+// BackupBucketResponse contains S3 credentials and bucket name for workspace backups
+type BackupBucketResponse struct {
+	BucketName  string `json:"bucket_name"`
+	S3Endpoint  string `json:"s3_endpoint"`
+	AccessKey   string `json:"access_key"`
+	SecretKey   string `json:"secret_key"`
+	Region      string `json:"region"`
+}
+
 // AOCClient handles AOC API interactions
 type AOCClient struct {
 	config *config.AutomationServerConfig
@@ -235,6 +244,28 @@ func (c *AOCClient) RegisterWorkspace(workspaceName string, editorURL *string, d
 	}
 
 	return workspaceResponse.Id, nil
+}
+
+// CreateBackupBucket asks AOC to create an S3 backup bucket for a workspace
+func (c *AOCClient) CreateBackupBucket(workspaceId string) (*BackupBucketResponse, error) {
+	resp, err := c.sendRequest("POST", fmt.Sprintf("%s/api/automation_server/workspaces/%s/backups/create-bucket/", c.settings.AOCUrl, workspaceId), nil)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("failed to create backup bucket: %s - %s", resp.Status, string(body))
+	}
+
+	var result BackupBucketResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+
+	return &result, nil
 }
 
 // SyncWorkspaceList syncs the workspace list with AOC

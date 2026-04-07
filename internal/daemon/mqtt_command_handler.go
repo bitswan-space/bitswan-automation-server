@@ -16,23 +16,25 @@ import (
 
 // WorkspaceCreateRequest represents a workspace create request from MQTT
 type WorkspaceCreateRequest struct {
-	RequestID          string `json:"request-id"`
-	Name               string `json:"name"`
-	Remote             string `json:"remote,omitempty"`
-	Branch             string `json:"branch,omitempty"`
-	Domain             string `json:"domain,omitempty"`
-	CertsDir           string `json:"certs-dir,omitempty"`
-	Verbose            bool   `json:"verbose,omitempty"`
-	MkCerts            bool   `json:"mkcerts,omitempty"`
-	NoIde              bool   `json:"no-ide,omitempty"`
-	SetHosts           bool   `json:"set-hosts,omitempty"`
-	Local              bool   `json:"local,omitempty"`
-	GitopsImage        string `json:"gitops-image,omitempty"`
-	EditorImage        string `json:"editor-image,omitempty"`
-	GitopsDevSourceDir string `json:"gitops-dev-source-dir,omitempty"`
-	OauthConfigFile    string `json:"oauth-config,omitempty"`
-	NoOauth            bool   `json:"no-oauth,omitempty"`
-	SshPort            string `json:"ssh-port,omitempty"`
+	RequestID              string `json:"request-id"`
+	Name                   string `json:"name"`
+	Remote                 string `json:"remote,omitempty"`
+	Branch                 string `json:"branch,omitempty"`
+	Domain                 string `json:"domain,omitempty"`
+	CertsDir               string `json:"certs-dir,omitempty"`
+	Verbose                bool   `json:"verbose,omitempty"`
+	MkCerts                bool   `json:"mkcerts,omitempty"`
+	NoIde                  bool   `json:"no-ide,omitempty"`
+	SetHosts               bool   `json:"set-hosts,omitempty"`
+	Local                  bool   `json:"local,omitempty"`
+	GitopsImage            string `json:"gitops-image,omitempty"`
+	EditorImage            string `json:"editor-image,omitempty"`
+	GitopsDevSourceDir     string `json:"gitops-dev-source-dir,omitempty"`
+	OauthConfigFile        string `json:"oauth-config,omitempty"`
+	NoOauth                bool   `json:"no-oauth,omitempty"`
+	SshPort                string `json:"ssh-port,omitempty"`
+	Staging                bool   `json:"staging,omitempty"`
+	EnableWorkspaceBackups bool   `json:"enableWorkspaceBackups,omitempty"`
 }
 
 // WorkspaceDeleteRequest represents a workspace delete request from MQTT
@@ -121,6 +123,9 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	}
 	if req.SshPort != "" {
 		args = append(args, "--ssh-port", req.SshPort)
+	}
+	if req.Staging {
+		args = append(args, "--staging")
 	}
 	args = append(args, req.Name)
 
@@ -259,6 +264,16 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 				fmt.Printf("Warning: Failed to sync workspace list after creation: %v\n", err)
 			} else {
 				fmt.Printf("Synced workspace list after creation of '%s'\n", req.Name)
+			}
+
+			// Enable workspace backups if requested
+			if req.EnableWorkspaceBackups {
+				p.publishLog(req.RequestID, "info", "Configuring workspace backups...")
+				if err := enableWorkspaceBackups(req.Name, p, req.RequestID); err != nil {
+					p.publishLog(req.RequestID, "warn", fmt.Sprintf("Failed to enable workspace backups: %v", err))
+				} else {
+					p.publishLog(req.RequestID, "info", "Workspace backups configured successfully")
+				}
 			}
 		}
 	}()
@@ -411,7 +426,7 @@ func (p *MQTTPublisher) handleWorkspaceDelete(client mqtt.Client, msg mqtt.Messa
 			// The frontend is waiting for this result and connections might be lost after sync
 			p.publishResult(req.RequestID, true, fmt.Sprintf("Workspace '%s' (ID: %s) deleted successfully", workspaceName, req.ID), "")
 			fmt.Printf("Success result published for request %s\n", req.RequestID)
-			
+
 			// Now publish the log message (less critical)
 			p.publishLog(req.RequestID, "info", fmt.Sprintf("Workspace '%s' (ID: %s) deleted successfully", workspaceName, req.ID))
 
