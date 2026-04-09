@@ -10,9 +10,10 @@ import (
 
 func newSelectCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "select <workspace>",
-		Short: "Select a workspace for activation",
-		Args:  cobra.ExactArgs(1),
+		Use:               "select <workspace>",
+		Short:             "Select a workspace for activation",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: validWorkspaceArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workspace := args[0]
 

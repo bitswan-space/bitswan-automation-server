@@ -17,11 +17,12 @@ type MetadataOpen struct {
 
 func newOpenCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:          "open",
-		Short:        "Open the editor for a workspace",
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
-		RunE:         runOpenCmd,
+		Use:               "open",
+		Short:             "Open the editor for a workspace",
+		Args:              cobra.ExactArgs(1),
+		SilenceUsage:      true,
+		ValidArgsFunction: validWorkspaceArgs,
+		RunE:              runOpenCmd,
 	}
 }
 

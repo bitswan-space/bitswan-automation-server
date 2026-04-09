@@ -9,11 +9,12 @@ import (
 )
 
 func newRemoveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "remove <workspace-name> [workspace-name...]",
-		Short:        "bitswan workspace remove",
-		Args:         cobra.MinimumNArgs(1),
-		SilenceUsage: true,
+	cmd := &cobra.Command{
+		Use:               "remove <workspace-name> [workspace-name...]",
+		Short:             "bitswan workspace remove",
+		Args:              cobra.MinimumNArgs(1),
+		SilenceUsage:      true,
+		ValidArgsFunction: validWorkspaceArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workspaceNames := args
 
@@ -58,5 +59,6 @@ func newRemoveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
 }
 
