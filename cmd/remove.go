@@ -14,7 +14,7 @@ func newRemoveCmd() *cobra.Command {
 		Short:             "bitswan workspace remove",
 		Args:              cobra.MinimumNArgs(1),
 		SilenceUsage:      true,
-		ValidArgsFunction: validWorkspaceArgs,
+		ValidArgsFunction: validWorkspaceArgsMulti,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workspaceNames := args
 
