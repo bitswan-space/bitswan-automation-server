@@ -164,7 +164,7 @@ func (e *EditorService) SaveDockerCompose(content string) error {
 }
 
 // Enable enables the Editor service for the workspace
-func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, trustCA bool) error {
+func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, trustCA bool, devConfig *EditorDevConfig) error {
 	// Check if already enabled
 	if e.IsEnabled() {
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", e.WorkspaceName)
@@ -232,7 +232,7 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 	}
 
 	// Generate docker-compose content
-	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA)
+	dockerComposeContent, err := e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA, devConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}

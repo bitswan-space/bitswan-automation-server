@@ -798,7 +798,7 @@ func (s *Server) enableEditorService(req ServiceEnableRequest) error {
 		}
 	}
 
-	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, req.TrustCA); err != nil {
+	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, req.TrustCA, nil); err != nil {
 		return err
 	}
 
