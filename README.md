@@ -59,6 +59,7 @@ mv bitswan ~/bin/
 
 #Add to PATH if using ~/bin (add this to your ~/.bashrc or ~/.zshrc)
 export PATH="$HOME/bin:$PATH"
+
 ```
 
 # Starting the automation server daemon
