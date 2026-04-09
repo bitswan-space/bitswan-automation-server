@@ -1,0 +1,70 @@
+Starting nuke script...
+This script will clean up Docker containers, networks, and local config.
+
+============================================================
+STEP: Finding and removing Docker containers matching 'test1*'
+============================================================
+No containers matching 'test1*' found
+
+============================================================
+STEP: Removing bitswan-automation-server-daemon container
+Command: docker rm -f bitswan-automation-server-daemon
+============================================================
+Output:
+Error response from daemon: No such container: bitswan-automation-server-daemon
+
+✓ Success: Removing bitswan-automation-server-daemon container
+
+============================================================
+STEP: Removing caddy container
+Command: docker rm -f caddy
+============================================================
+Output:
+Error response from daemon: No such container: caddy
+
+✓ Success: Removing caddy container
+
+============================================================
+STEP: Removing traefik container
+Command: docker rm -f traefik
+============================================================
+Output:
+Error response from daemon: No such container: traefik
+
+✓ Success: Removing traefik container
+
+============================================================
+STEP: Finding and removing Docker networks matching 'bitswan_*'
+============================================================
+Found 1 network(s) to remove: 9820e309c944
+
+============================================================
+STEP: Removing network 9820e309c944
+Command: docker network rm 9820e309c944
+============================================================
+Output:
+9820e309c944
+
+✓ Success: Removing network 9820e309c944
+
+============================================================
+STEP: Removing local config directory: /home/john/.config/bitswan
+============================================================
+✗ Error removing directory: [Errno 13] Permission denied: 'docker-publish-dockserver.yml'
+Attempting with sudo...
+
+============================================================
+STEP: Removing /home/john/.config/bitswan with sudo
+Command: sudo rm -rf /home/john/.config/bitswan
+============================================================
+✓ Success: Removing /home/john/.config/bitswan with sudo
+
+============================================================
+STEP: Building the project
+============================================================
+Found existing ./bitswan (timestamp: Fri Apr  3 11:58:26 2026)
+
+============================================================
+STEP: Building the project with 'make build'
+Command: make build
+============================================================
