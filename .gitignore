@@ -12,10 +12,3 @@ completions/
 
 # for Intellij PyCharm IDE
 /.idea/
-
-# local dev artefacts
-claudesession
-output.log
-simulate_completion.sh
-test_real_completion.sh
-traefik_gpt_staged.txt
