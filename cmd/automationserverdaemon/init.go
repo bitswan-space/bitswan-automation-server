@@ -95,6 +95,7 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		runningOutput, err := checkRunningCmd.Output()
 		if err == nil && len(runningOutput) > 0 {
 			fmt.Println("Automation server daemon is already running")
+			installCompletions()
 			return nil
 		}
 
