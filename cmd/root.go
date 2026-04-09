@@ -63,6 +63,7 @@ func newRootCmd(version string) *cobra.Command {
 	cmd.AddCommand(automationserverdaemon.NewAutomationServerDaemonCmd())     // automation server daemon subcommand
 	cmd.AddCommand(automation.NewAutomationCmd())                             // automation subcommand
 	cmd.AddCommand(test.NewTestCmd())                                         // _test subcommand (hidden)
+	cmd.AddCommand(newCompletionCmd())                                        // completion subcommand
 
 	// Set the version for the daemon server
 	automationserverdaemon.SetVersion(version)
