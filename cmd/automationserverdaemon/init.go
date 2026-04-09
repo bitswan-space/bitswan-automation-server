@@ -1,10 +1,13 @@
 package automationserverdaemon
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -103,7 +106,12 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return startDaemonContainer("Starting automation server daemon container...", "Automation server daemon started successfully")
+	if err := startDaemonContainer("Starting automation server daemon container...", "Automation server daemon started successfully"); err != nil {
+		return err
+	}
+
+	installCompletions()
+	return nil
 }
 
 // startDaemonContainer sets up and starts the daemon container with the current binary
@@ -259,6 +267,124 @@ func startDaemonContainer(startMessage, successMessage string) error {
 
 	fmt.Println(successMessage)
 	return nil
+}
+
+// installCompletions installs shell completions for the real user (handles sudo).
+// It detects the user's login shell from /etc/passwd and writes the completion
+// file to the appropriate user-level directory, then prints a source hint.
+func installCompletions() {
+	homeDir, err := config.GetRealUserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Completions: could not determine home directory: %v\n", err)
+		return
+	}
+
+	shell := getRealUserLoginShell()
+
+	// Resolve the binary path so the exec call works regardless of cwd.
+	binaryPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Completions: could not resolve binary path: %v\n", err)
+		return
+	}
+	binaryPath, _ = filepath.EvalSymlinks(binaryPath)
+
+	// Build the environment for the subprocess: override HOME/SHELL so that
+	// "bitswan completion install" writes to the real user's directories.
+	env := os.Environ()
+	env = setEnv(env, "HOME", homeDir)
+	env = setEnv(env, "SHELL", shell)
+	// Clear XDG overrides that might point to root's dirs under sudo.
+	env = unsetEnv(env, "XDG_DATA_HOME")
+	env = unsetEnv(env, "XDG_CONFIG_HOME")
+
+	var out bytes.Buffer
+	installCmd := exec.Command(binaryPath, "completion", "install")
+	installCmd.Env = env
+	installCmd.Stdout = &out
+	installCmd.Stderr = &out
+
+	if err := installCmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Completions: install failed: %v\n%s", err, out.String())
+		return
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		fmt.Println(line)
+	}
+
+	// Print a source hint for bash so the user gets completions in the current session too.
+	if filepath.Base(shell) == "bash" {
+		completionFile := filepath.Join(homeDir, ".local", "share", "bash-completion", "completions", "bitswan")
+		fmt.Printf("  Run to activate now: source %q\n", completionFile)
+	}
+}
+
+// getRealUserLoginShell returns the login shell of the real user (handles sudo).
+func getRealUserLoginShell() string {
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser == "" {
+		// Not running under sudo — $SHELL is reliable.
+		if s := os.Getenv("SHELL"); s != "" {
+			return s
+		}
+		if u, err := user.Current(); err == nil {
+			sudoUser = u.Username
+		}
+	}
+
+	if sudoUser != "" {
+		if shell := shellFromPasswd(sudoUser); shell != "" {
+			return shell
+		}
+	}
+
+	if s := os.Getenv("SHELL"); s != "" {
+		return s
+	}
+	return "/bin/bash"
+}
+
+// shellFromPasswd reads the login shell for username from /etc/passwd.
+func shellFromPasswd(username string) string {
+	f, err := os.Open("/etc/passwd")
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Split(scanner.Text(), ":")
+		if len(fields) >= 7 && fields[0] == username {
+			return fields[6]
+		}
+	}
+	return ""
+}
+
+// setEnv replaces or appends KEY=value in an environment slice.
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+// unsetEnv removes all entries with the given key from an environment slice.
+func unsetEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // checkNetworkExists checks if a Docker network exists
