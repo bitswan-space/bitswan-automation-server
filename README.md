@@ -33,34 +33,16 @@ Before installation, make sure you have installed `Docker` and `Docker compose`.
 - [Docker](https://docs.docker.com/engine/install/)
 
 # Installation
-## Linux / WSL
-```
-curl -Lo bitswan https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=linux&arch=amd64 && chmod +x bitswan
-```
-## MacOS (Apple Sillicon M1+)
-```
-curl -Lo bitswan https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=darwin&arch=arm64 && chmod +x bitswan
-```
-## MacOS (Intel-based)
-```
-curl -Lo bitswan https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=darwin&arch=amd64 && chmod +x bitswan
+## Linux / WSL / macOS
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/bitswan-space/bitswan-automation-server/main/install.sh | bash
 ```
 
-Move the binary to a directory in your PATH
-
-```
-sudo mv bitswan /usr/local/bin/bitswan
-```
-
-Alternatively, if you don't have sudo access or prefer a local installation:
-
-```
-mkdir -p ~/bin
-mv bitswan ~/bin/
-
-#Add to PATH if using ~/bin (add this to your ~/.bashrc or ~/.zshrc)
-export PATH="$HOME/bin:$PATH"
-```
+This script:
+- Detects your OS and architecture
+- Downloads the latest bitswan binary and installs it to `/usr/local/bin`
+- Installs shell completions for your current shell (bash, zsh, or fish)
 
 # Starting the automation server daemon
 
