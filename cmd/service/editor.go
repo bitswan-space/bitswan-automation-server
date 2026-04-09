@@ -8,6 +8,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
+	"github.com/bitswan-space/bitswan-workspaces/internal/services"
 	"github.com/spf13/cobra"
 )
 
@@ -21,13 +22,13 @@ func NewEditorCmd() *cobra.Command {
 		},
 	}
 
-	// Add enable/disable/status subcommands
 	cmd.AddCommand(newEditorEnableCmd())
 	cmd.AddCommand(newEditorDisableCmd())
 	cmd.AddCommand(newEditorStatusCmd())
 	cmd.AddCommand(newEditorStartCmd())
 	cmd.AddCommand(newEditorStopCmd())
 	cmd.AddCommand(newEditorUpdateCmd())
+	cmd.AddCommand(newEditorInstallCopilotCmd())
 
 	return cmd
 }
@@ -329,6 +330,36 @@ func newEditorUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().BoolVar(&trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
+	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+
+	return cmd
+}
+
+func newEditorInstallCopilotCmd() *cobra.Command {
+	var workspace string
+
+	cmd := &cobra.Command{
+		Use:   "install-copilot",
+		Short: "Install GitHub Copilot extensions into the running editor",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var err error
+			if workspace == "" {
+				cfg := config.NewAutomationServerConfig()
+				workspace, err = cfg.GetActiveWorkspace()
+				if err != nil || workspace == "" {
+					fmt.Fprintf(os.Stderr, "Error: no active workspace configured. Use --workspace flag or run 'bitswan workspace select <workspace>'\n")
+					os.Exit(1)
+				}
+			}
+
+			svc, err := services.NewEditorService(workspace)
+			if err != nil {
+				return fmt.Errorf("failed to initialize editor service: %w", err)
+			}
+			return svc.InstallCopilot()
+		},
+	}
+
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
 
 	return cmd

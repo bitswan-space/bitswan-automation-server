@@ -730,3 +730,27 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 	fmt.Printf("Editor docker-compose regenerated for workspace '%s'\n", e.WorkspaceName)
 	return nil
 }
+
+// InstallCopilot installs GitHub Copilot extensions into the running editor container.
+func (e *EditorService) InstallCopilot() error {
+	if !e.IsContainerRunning() {
+		return fmt.Errorf("editor container is not running")
+	}
+
+	containerName := fmt.Sprintf("%s-editor-bitswan-editor-1", e.WorkspaceName)
+
+	extensions := []string{"GitHub.copilot", "GitHub.copilot-chat"}
+	for _, ext := range extensions {
+		fmt.Printf("Installing %s...\n", ext)
+		cmd := exec.Command("docker", "exec", containerName,
+			"code-server", "--install-extension", ext, "--force")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to install %s: %w", ext, err)
+		}
+	}
+
+	fmt.Println("Copilot extensions installed. Reload the editor to activate.")
+	return nil
+}
