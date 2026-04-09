@@ -1,30 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Detect OS
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-case "$OS" in
-    linux|darwin) ;;
-    *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
-esac
+# ---------------------------------------------------------------------------
+# Detect whether we are running locally (bash install.sh from the repo)
+# or being piped from curl. When run as a file, BASH_SOURCE[0] is the
+# script path; when piped into bash it is empty or "bash".
+# ---------------------------------------------------------------------------
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "bash" && -f "${BASH_SOURCE[0]}" ]]; then
+    SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+fi
 
-# Detect architecture
-ARCH=$(uname -m)
-case "$ARCH" in
-    x86_64)        ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
-esac
-
-DOWNLOAD_URL="https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=${OS}&arch=${ARCH}"
-
-echo "Downloading bitswan for ${OS}/${ARCH}..."
+LOCAL_MODE=false
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/Makefile" && -f "$SCRIPT_DIR/main.go" ]]; then
+    LOCAL_MODE=true
+fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-curl -fsSL -o "$TMP/bitswan" "$DOWNLOAD_URL"
-chmod +x "$TMP/bitswan"
+if [[ "$LOCAL_MODE" == true ]]; then
+    echo "Local mode: building bitswan with 'make build'..."
+    make -C "$SCRIPT_DIR" build
+    cp "$SCRIPT_DIR/bitswan" "$TMP/bitswan"
+    chmod +x "$TMP/bitswan"
+else
+    # Detect OS and architecture for remote download
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "$OS" in
+        linux|darwin) ;;
+        *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+    esac
+
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        x86_64)        ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+    esac
+
+    DOWNLOAD_URL="https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=${OS}&arch=${ARCH}"
+
+    echo "Downloading bitswan for ${OS}/${ARCH}..."
+    curl -fsSL -o "$TMP/bitswan" "$DOWNLOAD_URL"
+    chmod +x "$TMP/bitswan"
+fi
 
 # Install binary — prefer /usr/local/bin, fall back to ~/.local/bin
 if [ -w "/usr/local/bin" ]; then
