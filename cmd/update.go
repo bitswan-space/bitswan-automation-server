@@ -58,5 +58,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
 
+	cmd.ValidArgsFunction = validWorkspaceArgs
+
 	return cmd
 }
