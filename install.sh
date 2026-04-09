@@ -25,7 +25,6 @@ if [[ "$LOCAL_MODE" == true ]]; then
     cp "$SCRIPT_DIR/bitswan" "$TMP/bitswan"
     chmod +x "$TMP/bitswan"
 else
-    # Detect OS and architecture for remote download
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     case "$OS" in
         linux|darwin) ;;
@@ -39,10 +38,9 @@ else
         *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
     esac
 
-    DOWNLOAD_URL="https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=${OS}&arch=${ARCH}"
-
     echo "Downloading bitswan for ${OS}/${ARCH}..."
-    curl -fsSL -o "$TMP/bitswan" "$DOWNLOAD_URL"
+    curl -fsSL -o "$TMP/bitswan" \
+        "https://deployment-management-backend.bitswan-devops-1.bswn.io/public/automation/latest?os=${OS}&arch=${ARCH}"
     chmod +x "$TMP/bitswan"
 fi
 
@@ -61,45 +59,9 @@ else
     echo "Note: ensure $INSTALL_DIR is in your PATH"
 fi
 
-BITSWAN="$INSTALL_DIR/bitswan"
-echo "Installed bitswan to $BITSWAN"
+echo "Installed bitswan to $INSTALL_DIR/bitswan"
 
-# Install shell completions
-install_bash_completion() {
-    local dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
-    mkdir -p "$dir"
-    "$BITSWAN" completion bash > "$dir/bitswan"
-    echo "Bash completions installed to $dir/bitswan"
-    echo "  Restart your shell or run: source \"$dir/bitswan\""
-}
-
-install_zsh_completion() {
-    local dir="${HOME}/.zsh/completions"
-    mkdir -p "$dir"
-    "$BITSWAN" completion zsh > "$dir/_bitswan"
-    echo "Zsh completions installed to $dir/_bitswan"
-    echo "  Ensure the following is in your ~/.zshrc (add if missing):"
-    echo "    fpath=(~/.zsh/completions \$fpath)"
-    echo "    autoload -Uz compinit && compinit"
-}
-
-install_fish_completion() {
-    local dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
-    mkdir -p "$dir"
-    "$BITSWAN" completion fish > "$dir/bitswan.fish"
-    echo "Fish completions installed to $dir/bitswan.fish"
-}
-
-SHELL_NAME=$(basename "${SHELL:-bash}")
-case "$SHELL_NAME" in
-    bash) install_bash_completion ;;
-    zsh)  install_zsh_completion ;;
-    fish) install_fish_completion ;;
-    *)
-        echo "Shell '$SHELL_NAME' not recognised; skipping completions."
-        echo "Install manually with: bitswan completion --help"
-        ;;
-esac
+"$INSTALL_DIR/bitswan" completion install
 
 echo ""
 echo "bitswan installed successfully! Run 'bitswan --help' to get started."
