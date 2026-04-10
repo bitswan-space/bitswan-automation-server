@@ -35,6 +35,8 @@ type ServiceEnableRequest struct {
 	PgAdminImage   string                 `json:"pgadmin_image,omitempty"`
 	MinioImage       string                 `json:"minio_image,omitempty"`
 	CodingAgentImage string                 `json:"coding_agent_image,omitempty"`
+	DevMode          bool                   `json:"dev_mode,omitempty"`
+	SourceDir        string                 `json:"source_dir,omitempty"`
 }
 
 // ServiceDisableRequest represents the request to disable a service
@@ -986,7 +988,6 @@ func (s *Server) handleCodingAgentEnableLocal(w http.ResponseWriter, req Service
 }
 
 func (s *Server) enableCodingAgentService(req ServiceEnableRequest) error {
-	// Delegate to the gitops server's ensure endpoint — single path for starting the agent.
 	metadata, err := config.GetWorkspaceMetadata(req.Workspace)
 	if err != nil {
 		return fmt.Errorf("failed to read workspace metadata: %w", err)
@@ -995,11 +996,29 @@ func (s *Server) enableCodingAgentService(req ServiceEnableRequest) error {
 	gitopsURL := fmt.Sprintf("http://%s-gitops:8079", req.Workspace)
 	ensureURL := gitopsURL + "/worktrees/coding-agent/ensure"
 
-	httpReq, err := http.NewRequest("POST", ensureURL, nil)
+	// Build request body with options
+	bodyMap := map[string]interface{}{}
+	if req.CodingAgentImage != "" {
+		bodyMap["image"] = req.CodingAgentImage
+	}
+	if req.DevMode {
+		bodyMap["dev_mode"] = true
+	}
+	if req.SourceDir != "" {
+		bodyMap["source_dir"] = req.SourceDir
+	}
+
+	bodyBytes, err := json.Marshal(bodyMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", ensureURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+metadata.GitopsSecret)
+	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
