@@ -892,6 +892,15 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	if couchdbImage, ok := options["couchdb_image"].(string); ok {
 		reqBody.CouchDBImage = couchdbImage
 	}
+	if codingAgentImage, ok := options["coding_agent_image"].(string); ok {
+		reqBody.CodingAgentImage = codingAgentImage
+	}
+	if devMode, ok := options["dev_mode"].(bool); ok {
+		reqBody.DevMode = devMode
+	}
+	if sourceDir, ok := options["source_dir"].(string); ok {
+		reqBody.SourceDir = sourceDir
+	}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -1572,6 +1581,9 @@ func (c *Client) UpdateService(serviceType, workspace string, options map[string
 	}
 	if couchdbImage, ok := options["couchdb_image"].(string); ok {
 		reqBody.CouchDBImage = couchdbImage
+	}
+	if codingAgentImage, ok := options["coding_agent_image"].(string); ok {
+		reqBody.CodingAgentImage = codingAgentImage
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

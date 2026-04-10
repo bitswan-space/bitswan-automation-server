@@ -36,8 +36,19 @@ func NewCodingAgentService(workspaceName string) (*CodingAgentService, error) {
 	}, nil
 }
 
+// CodingAgentDevConfig holds dev mode configuration
+type CodingAgentDevConfig struct {
+	DevMode   bool
+	SourceDir string // path to bitswan-agent source directory
+}
+
 // CreateDockerCompose generates a docker-compose-coding-agent.yml file for Coding Agent
 func (c *CodingAgentService) CreateDockerCompose(gitopsAgentSecret, codingAgentImage, domain string) (string, error) {
+	return c.CreateDockerComposeWithDevMode(gitopsAgentSecret, codingAgentImage, domain, nil)
+}
+
+// CreateDockerComposeWithDevMode generates docker-compose with optional dev mode support
+func (c *CodingAgentService) CreateDockerComposeWithDevMode(gitopsAgentSecret, codingAgentImage, domain string, devConfig *CodingAgentDevConfig) (string, error) {
 	// For docker-compose files, use HOST_HOME if available (docker-compose runs on host)
 	// Convert container path to host path for volume mounts
 	homeDir := os.Getenv("HOME")
@@ -75,17 +86,32 @@ func (c *CodingAgentService) CreateDockerCompose(gitopsAgentSecret, codingAgentI
 		envVars = append(envVars, "EDITOR_SSH_PUBLIC_KEY="+sshPubKey)
 	}
 
+	volumes := []string{
+		gitopsPath + "/workspace/worktrees:/workspace/worktrees:z",
+		gitopsPath + "/coding-agent-home:/home/agent:z",
+		gitopsPath + "/coding-agent-sessions:/var/log/agent-sessions:z",
+	}
+
+	// Dev mode: mount source files directly into the container
+	if devConfig != nil && devConfig.DevMode && devConfig.SourceDir != "" {
+		srcDir := devConfig.SourceDir
+		// Convert to host path if needed
+		if homeDir != hostHomeDir && strings.HasPrefix(srcDir, homeDir) {
+			srcDir = strings.Replace(srcDir, homeDir, hostHomeDir, 1)
+		}
+		volumes = append(volumes,
+			srcDir+"/agent-session-wrapper:/usr/local/bin/agent-session-wrapper:z",
+			srcDir+"/AGENTS-inside-container.md:/AGENTS.md:z",
+		)
+	}
+
 	bitswanCodingAgent := map[string]interface{}{
 		"image":    codingAgentImage,
 		"restart":  "always",
 		"hostname": workspaceName + "-coding-agent",
 		"networks": []string{"bitswan_network"},
 		"environment": envVars,
-		"volumes": []string{
-			gitopsPath + "/workspace/worktrees:/workspace/worktrees:z",
-			gitopsPath + "/coding-agent-home:/home/agent:z",
-			gitopsPath + "/coding-agent-sessions:/var/log/agent-sessions:z",
-		},
+		"volumes":  volumes,
 	}
 
 	// Construct the docker-compose data structure
