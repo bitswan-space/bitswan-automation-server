@@ -86,6 +86,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
 			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DIR=/workspace",
+			"BITSWAN_WORKSPACE_NAME=" + workspaceName,
 		},
 		"volumes": []string{
 			gitopsPath + "/workspace:/workspace/workspace:z",
