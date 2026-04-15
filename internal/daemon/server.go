@@ -168,6 +168,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Docs endpoint (unauthenticated - public access)
 	mux.HandleFunc("/api-docs", s.handleDocs)
 
+	// VPN admin web pages (served on this mux, routed via ingress)
+	// External page: OAuth-protected by the ingress proxy (not by daemon auth)
+	mux.HandleFunc("/vpn-admin", s.handleVPNAdminExternal)
+	mux.HandleFunc("/vpn-admin/", s.handleVPNAdminExternal)
+	// Internal page: only reachable via VPN Traefik
+	mux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
+	mux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
+
 	return mux
 }
 
