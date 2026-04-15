@@ -316,17 +316,12 @@ func CreateVPNTraefikDockerComposeFile(traefikPath string) (string, error) {
 	return buf.String(), nil
 }
 
-// CreateCoreDNSDockerComposeFile creates a docker-compose file for the VPN DNS server.
-// It resolves *.bswn.internal to the VPN Traefik container so VPN clients
-// can access internal services via the fake TLD.
-// vpnPath: path to VPN config directory (Corefile will be written here)
-// vpnTraefikIP: IP address of the VPN Traefik on bitswan_vpn_network
-func CreateCoreDNSDockerComposeFile(vpnPath string, vpnTraefikIP string) (string, error) {
+// WriteCorefile writes the CoreDNS Corefile to the local VPN config directory.
+// localVpnPath: daemon-local path (e.g., /root/.config/bitswan/vpn)
+func WriteCorefile(localVpnPath string, vpnTraefikIP string) error {
 	if vpnTraefikIP == "" {
 		vpnTraefikIP = "10.8.0.3"
 	}
-
-	// Write Corefile
 	corefile := fmt.Sprintf(`bswn.internal {
     template IN A {
         answer "{{ .Name }} 60 IN A %s"
@@ -338,15 +333,16 @@ func CreateCoreDNSDockerComposeFile(vpnPath string, vpnTraefikIP string) (string
     cache 30
 }
 `, vpnTraefikIP)
-
-	corefilePath := filepath.Join(vpnPath, "Corefile")
-	if err := os.MkdirAll(vpnPath, 0700); err != nil {
-		return "", fmt.Errorf("failed to create VPN config dir: %w", err)
+	corefilePath := filepath.Join(localVpnPath, "Corefile")
+	if err := os.MkdirAll(localVpnPath, 0700); err != nil {
+		return fmt.Errorf("failed to create VPN config dir: %w", err)
 	}
-	if err := os.WriteFile(corefilePath, []byte(corefile), 0644); err != nil {
-		return "", fmt.Errorf("failed to write Corefile: %w", err)
-	}
+	return os.WriteFile(corefilePath, []byte(corefile), 0644)
+}
 
+// CreateCoreDNSDockerComposeFile creates a docker-compose file for the VPN DNS server.
+// hostVpnPath: host path for volume mounts (e.g., /home/ubuntu/.config/bitswan/vpn)
+func CreateCoreDNSDockerComposeFile(hostVpnPath string) (string, error) {
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",
 		"services": map[string]interface{}{
@@ -357,7 +353,7 @@ func CreateCoreDNSDockerComposeFile(vpnPath string, vpnTraefikIP string) (string
 				"command":        "-conf /etc/coredns/Corefile",
 				"networks":       []string{"bitswan_vpn_network"},
 				"volumes": []string{
-					vpnPath + "/Corefile:/etc/coredns/Corefile:ro",
+					hostVpnPath + "/Corefile:/etc/coredns/Corefile:ro",
 				},
 			},
 		},
