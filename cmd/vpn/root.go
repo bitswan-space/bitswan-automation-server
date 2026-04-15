@@ -74,7 +74,12 @@ The server name is set during 'bitswan automation-server-daemon init'
 				return fmt.Errorf("automation server not initialized — run 'bitswan automation-server-daemon init' first")
 			}
 			if serverConfig.Slug == "" {
-				return fmt.Errorf("automation server has no name — this should have been set during init")
+				randomName := config.GenerateRandomName()
+				if err := cfg.SetNameAndSlug(randomName); err != nil {
+					return fmt.Errorf("failed to generate server name: %w", err)
+				}
+				serverConfig, _ = cfg.LoadConfig()
+				fmt.Printf("Generated server name: %s\n", randomName)
 			}
 			internalDomain := serverConfig.InternalDomain()
 
