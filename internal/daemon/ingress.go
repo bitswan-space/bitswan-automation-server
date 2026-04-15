@@ -678,10 +678,13 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 		return fmt.Errorf("no ingress proxy detected")
 	}
 
-	// VPN enabled — dispatch to external, internal, or both
+	// VPN enabled — dispatch to external, internal, or both.
+	// Empty IngressTarget means the caller hasn't been updated for VPN yet,
+	// so default to external-only (safe default — internal routes must be
+	// explicitly requested).
 	target := req.IngressTarget
 	if target == "" {
-		target = "both"
+		target = "external"
 	}
 
 	var errs []error
