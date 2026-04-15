@@ -75,6 +75,16 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
 	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
 
+	// Docker compose volume mounts need host paths, not daemon container paths.
+	// HOST_HOME maps the daemon's /root to the actual host home dir.
+	hostHome := os.Getenv("HOST_HOME")
+	hostVpnPath := vpnPath
+	hostVpnTraefikPath := vpnTraefikPath
+	if hostHome != "" {
+		hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
+		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
+	}
+
 	// 1. Initialize WireGuard server config (idempotent — skips if already done)
 	mgr := vpnManager()
 	if !mgr.IsInitialized() {
@@ -88,7 +98,7 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 	docker.EnsureDockerNetwork("bitswan_vpn_network", true)
 
 	// 3. Start WireGuard container
-	wgCompose, err := dockercompose.CreateWireGuardDockerComposeFile(vpnPath, 51820)
+	wgCompose, err := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to generate WireGuard compose: %v", err), http.StatusInternalServerError)
 		return
@@ -112,7 +122,7 @@ providers:
 	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
 
 	// 5. Start VPN Traefik container
-	vpnTraefikCompose, err := dockercompose.CreateVPNTraefikDockerComposeFile(vpnTraefikPath)
+	vpnTraefikCompose, err := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to generate VPN Traefik compose: %v", err), http.StatusInternalServerError)
 		return
@@ -122,8 +132,12 @@ providers:
 		return
 	}
 
-	// 6. Start CoreDNS
-	corednsCompose, err := dockercompose.CreateCoreDNSDockerComposeFile(vpnPath, "")
+	// 6. Write Corefile (locally) and start CoreDNS
+	if err := dockercompose.WriteCorefile(vpnPath, ""); err != nil {
+		http.Error(w, fmt.Sprintf("failed to write Corefile: %v", err), http.StatusInternalServerError)
+		return
+	}
+	corednsCompose, err := dockercompose.CreateCoreDNSDockerComposeFile(hostVpnPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to generate CoreDNS compose: %v", err), http.StatusInternalServerError)
 		return
