@@ -1,10 +1,10 @@
 package vpn
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -311,42 +311,15 @@ func (m *Manager) removePeerFromServerConfig(publicKey string) error {
 }
 
 func generateKeyPair() (privateKey, publicKey string, err error) {
-	// Try using wg command if available
-	privCmd := exec.Command("wg", "genkey")
-	privOut, err := privCmd.Output()
-	if err == nil {
-		priv := strings.TrimSpace(string(privOut))
-		pubCmd := exec.Command("wg", "pubkey")
-		pubCmd.Stdin = strings.NewReader(priv)
-		pubOut, err := pubCmd.Output()
-		if err == nil {
-			return priv, strings.TrimSpace(string(pubOut)), nil
-		}
-	}
-
-	// Fallback: generate Curve25519 keypair manually
-	var private [32]byte
-	if _, err := rand.Read(private[:]); err != nil {
-		return "", "", err
-	}
-	// Clamp private key per Curve25519 spec
-	private[0] &= 248
-	private[31] &= 127
-	private[31] |= 64
-
-	priv := base64.StdEncoding.EncodeToString(private[:])
-
-	// Compute public key via Curve25519 scalar multiplication
-	// For simplicity, shell out to wg pubkey if available, otherwise error
-	pubCmd := exec.Command("wg", "pubkey")
-	pubCmd.Stdin = strings.NewReader(priv)
-	pubOut, err := pubCmd.Output()
+	// Pure Go X25519 key generation via crypto/ecdh — no wg binary needed
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		return "", "", fmt.Errorf("wg command not available for key generation: %w", err)
+		return "", "", fmt.Errorf("failed to generate X25519 key: %w", err)
 	}
 
-	return priv, strings.TrimSpace(string(pubOut)), nil
-}
+	privBytes := key.Bytes()
+	pubBytes := key.PublicKey().Bytes()
 
-// Silence unused import warning
-var _ = net.ParseCIDR
+	return base64.StdEncoding.EncodeToString(privBytes),
+		base64.StdEncoding.EncodeToString(pubBytes), nil
+}
