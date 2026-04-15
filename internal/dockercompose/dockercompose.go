@@ -275,6 +275,46 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 	return buf.String(), nil
 }
 
+// CreateVPNTraefikDockerComposeFile creates a docker-compose file for the VPN-internal Traefik.
+// It has no host ports — only reachable from VPN clients via the WireGuard server.
+// traefikPath: path to the VPN traefik config directory (e.g., ~/.config/bitswan/traefik-vpn)
+func CreateVPNTraefikDockerComposeFile(traefikPath string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik-vpn": map[string]interface{}{
+				"image":          "traefik:v3.6",
+				"restart":        "always",
+				"container_name": "traefik-vpn",
+				// No host ports — only reachable from VPN subnet
+				"networks": []string{"bitswan_network", "bitswan_vpn_network"},
+				"volumes":  traefikVolumes,
+			},
+		},
+		"networks": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
+				"external": true,
+			},
+			"bitswan_vpn_network": map[string]interface{}{
+				"external": true,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
 // CreateWorkspaceTraefikDockerComposeFile creates a docker-compose file for workspace sub-traefik.
 // workspaceName: name of the workspace (used for container name)
 // traefikPath: path to traefik config directory
