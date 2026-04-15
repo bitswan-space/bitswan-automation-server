@@ -130,6 +130,14 @@ use 'bitswan vpn invite' to generate a magic link instead.`,
 			}
 			userID := u.Username
 
+			// Get the server slug for the filename
+			cfg := config.NewAutomationServerConfig()
+			serverConfig, _ := cfg.LoadConfig()
+			slug := "wireguard"
+			if serverConfig != nil && serverConfig.Slug != "" {
+				slug = serverConfig.Slug
+			}
+
 			client := getDaemonClient()
 			body := fmt.Sprintf(`{"user_id": %q}`, userID)
 			req, err := http.NewRequest("POST", "http://daemon/vpn/credentials", strings.NewReader(body))
@@ -143,7 +151,7 @@ use 'bitswan vpn invite' to generate a magic link instead.`,
 			}
 			defer resp.Body.Close()
 
-			outPath := "wireguard.conf"
+			outPath := slug + ".conf"
 			f, err := os.Create(outPath)
 			if err != nil {
 				return fmt.Errorf("failed to create %s: %w", outPath, err)
@@ -152,7 +160,7 @@ use 'bitswan vpn invite' to generate a magic link instead.`,
 			io.Copy(f, resp.Body)
 
 			fmt.Printf("VPN config written to %s\n\n", outPath)
-			printConnectionGuide(outPath)
+			printConnectionGuide(outPath, slug)
 			return nil
 		},
 	}
@@ -300,7 +308,7 @@ func newRevokeCmd() *cobra.Command {
 	}
 }
 
-func printConnectionGuide(confPath string) {
+func printConnectionGuide(confPath, slug string) {
 	fmt.Println("=== WireGuard Connection Guide ===")
 	fmt.Println()
 	fmt.Println("--- Linux ---")
@@ -311,14 +319,14 @@ func printConnectionGuide(confPath string) {
 	fmt.Println("    Arch:           sudo pacman -S wireguard-tools")
 	fmt.Println()
 	fmt.Printf("  Copy the config and start the tunnel:\n")
-	fmt.Printf("    sudo cp %s /etc/wireguard/wg0.conf\n", confPath)
-	fmt.Println("    sudo wg-quick up wg0")
+	fmt.Printf("    sudo cp %s /etc/wireguard/%s.conf\n", confPath, slug)
+	fmt.Printf("    sudo wg-quick up %s\n", slug)
 	fmt.Println()
 	fmt.Println("  To connect automatically on boot:")
-	fmt.Println("    sudo systemctl enable --now wg-quick@wg0")
+	fmt.Printf("    sudo systemctl enable --now wg-quick@%s\n", slug)
 	fmt.Println()
 	fmt.Println("  To disconnect:")
-	fmt.Println("    sudo wg-quick down wg0")
+	fmt.Printf("    sudo wg-quick down %s\n", slug)
 	fmt.Println()
 	fmt.Println("  Check connection status:")
 	fmt.Println("    sudo wg show")
@@ -332,8 +340,8 @@ func printConnectionGuide(confPath string) {
 	fmt.Println()
 	fmt.Println("  Option 2: Command line (Homebrew)")
 	fmt.Println("    brew install wireguard-tools")
-	fmt.Printf("    sudo cp %s /etc/wireguard/wg0.conf\n", confPath)
-	fmt.Println("    sudo wg-quick up wg0")
+	fmt.Printf("    sudo cp %s /etc/wireguard/%s.conf\n", confPath, slug)
+	fmt.Printf("    sudo wg-quick up %s\n", slug)
 	fmt.Println()
 	fmt.Println("--- Windows ---")
 	fmt.Println()
