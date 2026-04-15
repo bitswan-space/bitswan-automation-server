@@ -1110,6 +1110,47 @@ func (s *Server) handleIngressListRoutes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	target := r.URL.Query().Get("target")
+
+	// If requesting VPN internal routes, query the VPN Traefik directly
+	if target == "internal" && IsVPNEnabled() {
+		vpnURL := os.Getenv("BITSWAN_VPN_TRAEFIK_HOST")
+		if vpnURL == "" {
+			vpnURL = "http://traefik-vpn:8080"
+		}
+		routes, err := traefikapi.ListRoutesWithTraefik(vpnURL)
+		if err != nil {
+			writeJSONError(w, "failed to list VPN routes: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var routeInfos []RouteInfo
+		for _, route := range routes {
+			var hostnames []string
+			for _, match := range route.Match {
+				hostnames = append(hostnames, match.Host...)
+			}
+			var upstreams []string
+			for _, handle := range route.Handle {
+				if handle.Handler == "reverse_proxy" {
+					for _, upstream := range handle.Upstreams {
+						upstreams = append(upstreams, upstream.Dial)
+					}
+				}
+			}
+			if len(hostnames) > 0 && len(upstreams) > 0 {
+				routeInfos = append(routeInfos, RouteInfo{
+					ID:       route.ID,
+					Hostname: hostnames[0],
+					Upstream: upstreams[0],
+					Terminal: route.Terminal,
+				})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(IngressListRoutesResponse{Routes: routeInfos})
+		return
+	}
+
 	ingressType := DetectIngressType()
 	var routeInfos []RouteInfo
 
