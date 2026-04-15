@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,6 +45,11 @@ type IngressAddRouteRequest struct {
 	CertsDir      string `json:"certs_dir,omitempty"`
 	Secret        string `json:"secret,omitempty"`
 	WorkspaceName string `json:"workspace_name,omitempty"`
+	// IngressTarget controls which ingress receives the route when VPN is enabled.
+	// "external" = internet-facing Traefik only
+	// "internal" = VPN Traefik only
+	// "both" or "" = both (default, backward compatible)
+	IngressTarget string `json:"ingress_target,omitempty"`
 }
 
 // IngressAddRouteResponse represents the response from adding a route
@@ -635,9 +641,21 @@ func resolveWorkspaceName(req IngressAddRouteRequest, jwtToken string) string {
 	return ""
 }
 
+// IsVPNEnabled checks whether VPN mode is active.
+func IsVPNEnabled() bool {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(homeDir, ".config", "bitswan", "vpn", "enabled"))
+	return err == nil
+}
+
 // addRouteToIngress adds a route using whichever ingress is running.
 // For Traefik with a workspace name, it sets up two-tier routing
 // (platform traefik → workspace sub-traefik → container).
+// When VPN is enabled, routes are dispatched to external Traefik,
+// VPN Traefik, or both based on req.IngressTarget.
 func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 	if req.Hostname == "" {
 		return fmt.Errorf("hostname is required")
@@ -648,15 +666,59 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 
 	ingressType := DetectIngressType()
 
-	switch ingressType {
-	case IngressCaddy:
-		return addRouteCaddy(req)
-	case IngressTraefik:
-		workspaceName := resolveWorkspaceName(req, jwtToken)
-		return addRouteTraefik(req, workspaceName)
+	if !IsVPNEnabled() {
+		// No VPN — single ingress, ignore IngressTarget
+		switch ingressType {
+		case IngressCaddy:
+			return addRouteCaddy(req)
+		case IngressTraefik:
+			workspaceName := resolveWorkspaceName(req, jwtToken)
+			return addRouteTraefik(req, workspaceName)
+		}
+		return fmt.Errorf("no ingress proxy detected")
 	}
 
-	return fmt.Errorf("no ingress proxy detected")
+	// VPN enabled — dispatch to external, internal, or both
+	target := req.IngressTarget
+	if target == "" {
+		target = "both"
+	}
+
+	var errs []error
+
+	if target == "external" || target == "both" {
+		switch ingressType {
+		case IngressCaddy:
+			if err := addRouteCaddy(req); err != nil {
+				errs = append(errs, fmt.Errorf("external ingress: %w", err))
+			}
+		case IngressTraefik:
+			workspaceName := resolveWorkspaceName(req, jwtToken)
+			if err := addRouteTraefik(req, workspaceName); err != nil {
+				errs = append(errs, fmt.Errorf("external ingress: %w", err))
+			}
+		}
+	}
+
+	if target == "internal" || target == "both" {
+		if err := addRouteVPNTraefik(req); err != nil {
+			errs = append(errs, fmt.Errorf("vpn ingress: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("%v", errs)
+	}
+	return nil
+}
+
+// addRouteVPNTraefik adds a route to the VPN-internal Traefik instance.
+func addRouteVPNTraefik(req IngressAddRouteRequest) error {
+	vpnTraefikURL := os.Getenv("BITSWAN_VPN_TRAEFIK_HOST")
+	if vpnTraefikURL == "" {
+		vpnTraefikURL = "http://traefik-vpn:8080"
+	}
+	return traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, vpnTraefikURL)
 }
 
 // addRouteCaddy adds a route to Caddy
