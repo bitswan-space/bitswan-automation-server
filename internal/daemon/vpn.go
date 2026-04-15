@@ -133,3 +133,37 @@ func (s *Server) handleVPNListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(users)
 }
+
+func (s *Server) handleVPNMagicLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		CreatedBy string `json:"created_by"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if body.CreatedBy == "" {
+		body.CreatedBy = "admin"
+	}
+
+	store := magicLinkStore()
+	token, err := store.Create(body.CreatedBy)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to create magic link: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	domain := os.Getenv("BITSWAN_GITOPS_DOMAIN")
+	claimURL := fmt.Sprintf("https://vpn-admin.%s/vpn-admin/claim/%s", domain, token)
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"token":     token,
+		"claim_url": claimURL,
+		"expires":   "1 hour",
+	})
+}
