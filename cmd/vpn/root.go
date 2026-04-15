@@ -25,6 +25,7 @@ func NewVPNCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newInitCmd())
+	cmd.AddCommand(newDestroyCmd())
 	cmd.AddCommand(newBootstrapCmd())
 	cmd.AddCommand(newInviteCmd())
 	cmd.AddCommand(newStatusCmd())
@@ -112,6 +113,36 @@ The server name is set during 'bitswan automation-server-daemon init'
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "Public hostname or IP for VPN connections (auto-detected if omitted)")
 
 	return cmd
+}
+
+func newDestroyCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "destroy",
+		Short: "Tear down VPN infrastructure",
+		Long:  "Stop and remove all VPN containers (WireGuard, VPN Traefik, CoreDNS) and delete VPN config.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := getDaemonClient()
+			req, err := http.NewRequest("POST", "http://daemon/vpn/destroy", nil)
+			if err != nil {
+				return err
+			}
+			resp, err := client.DoRequest(req)
+			if err != nil {
+				return fmt.Errorf("failed to destroy VPN: %w", err)
+			}
+			defer resp.Body.Close()
+
+			var result map[string]interface{}
+			json.NewDecoder(resp.Body).Decode(&result)
+			fmt.Println(result["message"])
+			if errs, ok := result["errors"].([]interface{}); ok {
+				for _, e := range errs {
+					fmt.Printf("  Warning: %v\n", e)
+				}
+			}
+			return nil
+		},
+	}
 }
 
 func newBootstrapCmd() *cobra.Command {

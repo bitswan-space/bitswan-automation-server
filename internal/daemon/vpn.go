@@ -15,9 +15,31 @@ import (
 )
 
 // dockerComposeUp runs docker compose up -d with the given compose content.
+// dockerComposeUp writes the compose content to a file and runs docker compose up -d.
 func dockerComposeUp(projectName, composeContent, workDir string) error {
-	cmd := exec.Command("docker", "compose", "-p", projectName, "-f", "/dev/stdin", "up", "-d")
-	cmd.Stdin = strings.NewReader(composeContent)
+	composePath := filepath.Join(workDir, "docker-compose.yaml")
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return fmt.Errorf("failed to create dir %s: %w", workDir, err)
+	}
+	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
+		return fmt.Errorf("failed to write compose file: %w", err)
+	}
+	cmd := exec.Command("docker", "compose", "-p", projectName, "-f", composePath, "up", "-d")
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %s", err, string(out))
+	}
+	return nil
+}
+
+// dockerComposeDown stops and removes containers for a compose project.
+func dockerComposeDown(projectName, workDir string) error {
+	composePath := filepath.Join(workDir, "docker-compose.yaml")
+	if _, err := os.Stat(composePath); os.IsNotExist(err) {
+		return nil // nothing to tear down
+	}
+	cmd := exec.Command("docker", "compose", "-p", projectName, "-f", composePath, "down", "--remove-orphans")
 	cmd.Dir = workDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -54,11 +76,13 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
 	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
 
-	// 1. Initialize WireGuard server config
+	// 1. Initialize WireGuard server config (idempotent — skips if already done)
 	mgr := vpnManager()
-	if err := mgr.Init(body.Endpoint); err != nil {
-		http.Error(w, fmt.Sprintf("failed to initialize VPN: %v", err), http.StatusInternalServerError)
-		return
+	if !mgr.IsInitialized() {
+		if err := mgr.Init(body.Endpoint); err != nil {
+			http.Error(w, fmt.Sprintf("failed to initialize VPN: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// 2. Create bitswan_vpn_network
@@ -236,5 +260,47 @@ func (s *Server) handleVPNMagicLink(w http.ResponseWriter, r *http.Request) {
 		"token":     token,
 		"claim_url": claimURL,
 		"expires":   "1 hour",
+	})
+}
+
+func (s *Server) handleVPNDestroy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	homeDir, _ := os.UserHomeDir()
+	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
+	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
+
+	var errors []string
+
+	// Stop containers
+	if err := dockerComposeDown("coredns-vpn", vpnPath); err != nil {
+		errors = append(errors, fmt.Sprintf("coredns: %v", err))
+	}
+	if err := dockerComposeDown("traefik-vpn", vpnTraefikPath); err != nil {
+		errors = append(errors, fmt.Sprintf("traefik-vpn: %v", err))
+	}
+	if err := dockerComposeDown("wireguard", vpnPath); err != nil {
+		errors = append(errors, fmt.Sprintf("wireguard: %v", err))
+	}
+
+	// Remove config
+	os.RemoveAll(vpnPath)
+	os.RemoveAll(vpnTraefikPath)
+
+	if len(errors) > 0 {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":   "partial",
+			"message":  "VPN destroyed with some errors",
+			"errors":   errors,
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "destroyed",
+		"message": "VPN infrastructure removed. Containers stopped, config deleted.",
 	})
 }
