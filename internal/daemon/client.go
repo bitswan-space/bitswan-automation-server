@@ -740,6 +740,32 @@ func (c *Client) ListIngressRoutes() (*IngressListRoutesResponse, error) {
 	return &result, nil
 }
 
+// ListVPNIngressRoutes lists all routes in the VPN-internal ingress proxy.
+func (c *Client) ListVPNIngressRoutes() (*IngressListRoutesResponse, error) {
+	req, err := http.NewRequest("GET", "http://unix/ingress/list-routes?target=internal", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result IngressListRoutesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
 // RemoveIngressRoute removes a route from the ingress proxy
 func (c *Client) RemoveIngressRoute(hostname string) error {
 	req, err := http.NewRequest("DELETE", fmt.Sprintf("http://unix/ingress/remove-route/%s", hostname), nil)
