@@ -315,6 +315,58 @@ func CreateVPNTraefikDockerComposeFile(traefikPath string) (string, error) {
 	return buf.String(), nil
 }
 
+// CreateWireGuardDockerComposeFile creates a docker-compose file for the WireGuard VPN server.
+// vpnPath: path to VPN config directory (e.g., ~/.config/bitswan/vpn)
+// listenPort: UDP port for WireGuard (default 51820)
+func CreateWireGuardDockerComposeFile(vpnPath string, listenPort int) (string, error) {
+	if listenPort == 0 {
+		listenPort = 51820
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"wireguard": map[string]interface{}{
+				"image":          "linuxserver/wireguard:latest",
+				"restart":        "always",
+				"container_name": "wireguard",
+				"cap_add":        []string{"NET_ADMIN", "SYS_MODULE"},
+				"ports":          []string{fmt.Sprintf("%d:%d/udp", listenPort, listenPort)},
+				"networks":       []string{"bitswan_network", "bitswan_vpn_network"},
+				"environment": []string{
+					"PUID=1000",
+					"PGID=1000",
+				},
+				"volumes": []string{
+					vpnPath + ":/config:z",
+					"/lib/modules:/lib/modules:ro",
+				},
+				"sysctls": []string{
+					"net.ipv4.conf.all.src_valid_mark=1",
+					"net.ipv4.ip_forward=1",
+				},
+			},
+		},
+		"networks": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
+				"external": true,
+			},
+			"bitswan_vpn_network": map[string]interface{}{
+				"external": true,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
 // CreateWorkspaceTraefikDockerComposeFile creates a docker-compose file for workspace sub-traefik.
 // workspaceName: name of the workspace (used for container name)
 // traefikPath: path to traefik config directory
