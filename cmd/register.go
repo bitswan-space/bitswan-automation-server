@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -65,10 +66,29 @@ func newRegisterCmd() *cobra.Command {
 			}
 
 			// Update the server name from AOC (replaces the random name from init)
+			cfg := config.NewAutomationServerConfig()
 			if serverInfo.Name != "" {
-				cfg := config.NewAutomationServerConfig()
 				if err := cfg.SetNameAndSlug(serverInfo.Name); err != nil {
 					fmt.Printf("Warning: failed to update server name: %v\n", err)
+				}
+			}
+
+			// Try to set platform domain from existing workspaces
+			serverCfg, _ := cfg.LoadConfig()
+			if serverCfg != nil && serverCfg.Domain == "" {
+				homeDir, _ := os.UserHomeDir()
+				workspacesDir := homeDir + "/.config/bitswan/workspaces"
+				if entries, err := os.ReadDir(workspacesDir); err == nil {
+					for _, entry := range entries {
+						if !entry.IsDir() {
+							continue
+						}
+						if meta, err := config.GetWorkspaceMetadata(entry.Name()); err == nil && meta.Domain != "" {
+							cfg.SetDomain(meta.Domain)
+							fmt.Printf("Platform domain set to: %s\n", meta.Domain)
+							break
+						}
+					}
 				}
 			}
 

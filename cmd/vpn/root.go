@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -47,6 +48,7 @@ func getDaemonClient() *daemon.Client {
 
 func newInitCmd() *cobra.Command {
 	var endpoint string
+	var domain string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -82,6 +84,28 @@ The server name is set during 'bitswan automation-server-daemon init'
 				serverConfig, _ = cfg.LoadConfig()
 				fmt.Printf("Generated server name: %s\n", randomName)
 			}
+
+			// Resolve platform domain
+			if domain != "" {
+				// Flag provided — save to config
+				if err := cfg.SetDomain(domain); err != nil {
+					return fmt.Errorf("failed to save domain: %w", err)
+				}
+				serverConfig, _ = cfg.LoadConfig()
+			} else if serverConfig.Domain == "" {
+				// Try to find domain from an existing workspace
+				foundDomain := findDomainFromWorkspaces()
+				if foundDomain != "" {
+					fmt.Printf("Detected domain from existing workspace: %s\n", foundDomain)
+					if err := cfg.SetDomain(foundDomain); err != nil {
+						return fmt.Errorf("failed to save domain: %w", err)
+					}
+					serverConfig, _ = cfg.LoadConfig()
+				} else {
+					return fmt.Errorf("no domain configured. Use --domain or register with AOC first")
+				}
+			}
+
 			internalDomain := serverConfig.InternalDomain()
 
 			client := getDaemonClient()
@@ -116,6 +140,7 @@ The server name is set during 'bitswan automation-server-daemon init'
 	}
 
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "Public hostname or IP for VPN connections (auto-detected if omitted)")
+	cmd.Flags().StringVar(&domain, "domain", "", "Platform domain (e.g., sandbox.bitswan.ai) — auto-detected from workspaces if omitted")
 
 	return cmd
 }
@@ -392,6 +417,29 @@ func printConnectionGuide(confPath, slug string) {
 	fmt.Println()
 	fmt.Println("  If you can ping the gateway, your VPN is working and you can")
 	fmt.Println("  access the editor, gitops, and dev automations through the VPN.")
+}
+
+// findDomainFromWorkspaces scans existing workspace metadata for a domain.
+func findDomainFromWorkspaces() string {
+	homeDir, _ := os.UserHomeDir()
+	workspacesDir := filepath.Join(homeDir, ".config", "bitswan", "workspaces")
+	entries, err := os.ReadDir(workspacesDir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		meta, err := config.GetWorkspaceMetadata(entry.Name())
+		if err != nil {
+			continue
+		}
+		if meta.Domain != "" {
+			return meta.Domain
+		}
+	}
+	return ""
 }
 
 func detectPublicIP() (string, error) {
