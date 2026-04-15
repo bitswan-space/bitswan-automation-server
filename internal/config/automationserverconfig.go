@@ -33,6 +33,7 @@ type Config struct {
 	ActiveWorkspace            string                             `toml:"active_workspace"`
 	Name                       string                             `toml:"name,omitempty"`
 	Slug                       string                             `toml:"slug,omitempty"`
+	Domain                     string                             `toml:"domain,omitempty"`
 	AutomationOperationsCenter AutomationOperationsCenterSettings `toml:"aoc"`
 	LocalServer                LocalServerSettings                `toml:"local_server"`
 }
@@ -164,6 +165,16 @@ func (m *AutomationServerConfig) SetNameAndSlug(name string) error {
 	}
 	config.Name = name
 	config.Slug = Slugify(name)
+	return m.SaveConfig(config)
+}
+
+// SetDomain sets the platform-level domain (e.g., sandbox.bitswan.ai).
+func (m *AutomationServerConfig) SetDomain(domain string) error {
+	config, err := m.LoadConfig()
+	if err != nil {
+		config = &Config{}
+	}
+	config.Domain = domain
 	return m.SaveConfig(config)
 }
 
