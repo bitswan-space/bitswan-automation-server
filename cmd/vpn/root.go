@@ -97,8 +97,13 @@ The server name is set during 'bitswan automation-server-daemon init'
 			}
 			defer resp.Body.Close()
 
+			respBody, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("VPN init failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+			}
+
 			var result map[string]string
-			json.NewDecoder(resp.Body).Decode(&result)
+			json.Unmarshal(respBody, &result)
 			fmt.Println(result["message"])
 			fmt.Println()
 			fmt.Printf("Automation server: %s (slug: %s)\n", serverConfig.Name, serverConfig.Slug)
