@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/docker"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
 	"github.com/bitswan-space/bitswan-workspaces/internal/vpn"
@@ -145,6 +146,40 @@ providers:
 	if err := dockerComposeUp("coredns-vpn", corednsCompose, vpnPath); err != nil {
 		http.Error(w, fmt.Sprintf("failed to start CoreDNS: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// 7. Register VPN admin routes on both ingresses
+	domain := os.Getenv("BITSWAN_GITOPS_DOMAIN")
+	if domain == "" {
+		domain = "bswn.internal"
+	}
+
+	// Load config for internal domain
+	cfg := config.NewAutomationServerConfig()
+	serverConfig, _ := cfg.LoadConfig()
+	internalDomain := "bswn.internal"
+	if serverConfig != nil {
+		internalDomain = serverConfig.InternalDomain()
+	}
+
+	// External admin page: vpn-admin.{domain} → daemon:8080
+	externalAdminReq := IngressAddRouteRequest{
+		Hostname:      "vpn-admin." + domain,
+		Upstream:      "bitswan-automation-server-daemon:8080",
+		IngressTarget: "external",
+	}
+	if err := addRouteToIngress(externalAdminReq, ""); err != nil {
+		fmt.Printf("Warning: failed to register external VPN admin route: %v\n", err)
+	}
+
+	// Internal admin page: vpn-admin.{internalDomain} → daemon:8080
+	internalAdminReq := IngressAddRouteRequest{
+		Hostname:      "vpn-admin." + internalDomain,
+		Upstream:      "bitswan-automation-server-daemon:8080",
+		IngressTarget: "internal",
+	}
+	if err := addRouteToIngress(internalAdminReq, ""); err != nil {
+		fmt.Printf("Warning: failed to register internal VPN admin route: %v\n", err)
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{
