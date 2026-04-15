@@ -149,18 +149,14 @@ providers:
 	}
 
 	// 7. Register VPN admin routes on both ingresses
-	domain := os.Getenv("BITSWAN_GITOPS_DOMAIN")
-	if domain == "" {
-		domain = "bswn.internal"
-	}
-
-	// Load config for internal domain
 	cfg := config.NewAutomationServerConfig()
 	serverConfig, _ := cfg.LoadConfig()
-	internalDomain := "bswn.internal"
-	if serverConfig != nil {
-		internalDomain = serverConfig.InternalDomain()
+	if serverConfig == nil || serverConfig.Domain == "" {
+		http.Error(w, "No domain configured. Register with AOC first or set domain in automation_server_config.toml.", http.StatusBadRequest)
+		return
 	}
+	domain := serverConfig.Domain
+	internalDomain := serverConfig.InternalDomain()
 
 	// External admin page: vpn-admin.{domain} → daemon:8080
 	externalAdminReq := IngressAddRouteRequest{
