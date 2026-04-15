@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -49,14 +50,30 @@ func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Initialize WireGuard VPN for the platform",
-		Long:  "Sets up the WireGuard server, VPN network, and VPN Traefik. All workspaces will use this VPN.",
+		Long: `Sets up the WireGuard server, VPN DNS, and VPN Traefik.
+All workspaces will use this VPN.
+
+Internal services use a fake TLD: <workspace>.<server-slug>.bswn.internal
+The server name is set during 'bitswan automation-server-daemon init'
+(random Docker-style name) or when registering with the AOC.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if endpoint == "" {
 				return fmt.Errorf("--endpoint is required (e.g., vpn.example.com or 203.0.113.1)")
 			}
 
+			// Load existing config to get the server slug
+			cfg := config.NewAutomationServerConfig()
+			serverConfig, err := cfg.LoadConfig()
+			if err != nil {
+				return fmt.Errorf("automation server not initialized — run 'bitswan automation-server-daemon init' first")
+			}
+			if serverConfig.Slug == "" {
+				return fmt.Errorf("automation server has no name — this should have been set during init")
+			}
+			internalDomain := serverConfig.InternalDomain()
+
 			client := getDaemonClient()
-			body := fmt.Sprintf(`{"endpoint": %q}`, endpoint)
+			body := fmt.Sprintf(`{"endpoint": %q, "internal_domain": %q}`, endpoint, internalDomain)
 			req, err := http.NewRequest("POST", "http://daemon/vpn/init", strings.NewReader(body))
 			if err != nil {
 				return err
@@ -71,6 +88,10 @@ func newInitCmd() *cobra.Command {
 			var result map[string]string
 			json.NewDecoder(resp.Body).Decode(&result)
 			fmt.Println(result["message"])
+			fmt.Println()
+			fmt.Printf("Automation server: %s (slug: %s)\n", serverConfig.Name, serverConfig.Slug)
+			fmt.Printf("Internal domain:   *.%s\n", internalDomain)
+			fmt.Printf("Workspace URLs:    <workspace>.%s\n", internalDomain)
 			fmt.Println()
 			fmt.Println("Next step: run 'bitswan vpn bootstrap' to generate your admin VPN config.")
 			return nil

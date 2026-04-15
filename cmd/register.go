@@ -64,6 +64,14 @@ func newRegisterCmd() *cobra.Command {
 				return fmt.Errorf("failed to save configuration: %w", err)
 			}
 
+			// Update the server name from AOC (replaces the random name from init)
+			if serverInfo.Name != "" {
+				cfg := config.NewAutomationServerConfig()
+				if err := cfg.SetNameAndSlug(serverInfo.Name); err != nil {
+					fmt.Printf("Warning: failed to update server name: %v\n", err)
+				}
+			}
+
 			fmt.Printf("✅ Successfully registered automation server '%s' with ID: %s\n", serverInfo.Name, serverInfo.AutomationServerId)
 			fmt.Println("Access token, AOC URL, and Automation server ID have been saved to ~/.config/bitswan/automation_server_config.toml.")
 

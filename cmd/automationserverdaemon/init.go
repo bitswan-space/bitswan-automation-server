@@ -86,6 +86,19 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Generate a random name for the automation server if none exists
+	serverConfig, _ := cfg.LoadConfig()
+	if serverConfig != nil && serverConfig.Name == "" {
+		randomName := config.GenerateRandomName()
+		if err := cfg.SetNameAndSlug(randomName); err != nil {
+			fmt.Printf("Warning: failed to save server name: %v\n", err)
+		} else {
+			fmt.Printf("Automation server name: %s (slug: %s)\n", randomName, config.Slugify(randomName))
+		}
+	} else if serverConfig != nil && serverConfig.Name != "" {
+		fmt.Printf("Automation server: %s (%s)\n", serverConfig.Name, serverConfig.Slug)
+	}
+
 	// Check if container already exists
 	checkCmd := exec.Command("docker", "ps", "-a", "--filter", "name=bitswan-automation-server-daemon", "--format", "{{.Names}}")
 	output, err := checkCmd.Output()
