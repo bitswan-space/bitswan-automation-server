@@ -58,7 +58,13 @@ The server name is set during 'bitswan automation-server-daemon init'
 (random Docker-style name) or when registering with the AOC.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if endpoint == "" {
-				return fmt.Errorf("--endpoint is required (e.g., vpn.example.com or 203.0.113.1)")
+				// Auto-detect public IP
+				detected, err := detectPublicIP()
+				if err != nil {
+					return fmt.Errorf("could not detect public IP (use --endpoint to set manually): %w", err)
+				}
+				endpoint = detected
+				fmt.Printf("Detected public IP: %s\n", endpoint)
 			}
 
 			// Load existing config to get the server slug
@@ -98,7 +104,7 @@ The server name is set during 'bitswan automation-server-daemon init'
 		},
 	}
 
-	cmd.Flags().StringVar(&endpoint, "endpoint", "", "Public hostname or IP for VPN connections (required)")
+	cmd.Flags().StringVar(&endpoint, "endpoint", "", "Public hostname or IP for VPN connections (auto-detected if omitted)")
 
 	return cmd
 }
@@ -337,4 +343,21 @@ func printConnectionGuide(confPath string) {
 	fmt.Println()
 	fmt.Println("  If you can ping the gateway, your VPN is working and you can")
 	fmt.Println("  access the editor, gitops, and dev automations through the VPN.")
+}
+
+func detectPublicIP() (string, error) {
+	resp, err := http.Get("https://api.ipify.org")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	ip := strings.TrimSpace(string(body))
+	if ip == "" {
+		return "", fmt.Errorf("empty response from IP detection service")
+	}
+	return ip, nil
 }
