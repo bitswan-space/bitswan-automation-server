@@ -94,16 +94,36 @@ func runInitCmd(cmd *cobra.Command, args []string) error {
 		checkRunningCmd := exec.Command("docker", "ps", "--filter", "name=bitswan-automation-server-daemon", "--format", "{{.Names}}")
 		runningOutput, err := checkRunningCmd.Output()
 		if err == nil && len(runningOutput) > 0 {
-			fmt.Println("Automation server daemon is already running")
-			installCompletions()
-			return nil
-		}
-
-		// Container exists but is not running, remove it first
-		fmt.Println("Removing existing stopped container...")
-		removeCmd := exec.Command("docker", "rm", "bitswan-automation-server-daemon")
-		if err := removeCmd.Run(); err != nil {
-			return fmt.Errorf("failed to remove existing container: %w", err)
+			// Container is running — but if ~/.config/bitswan was deleted the bind
+			// mount inside the container will be stale (inode with 0 links) and any
+			// directory creation inside it will fail with ENOENT.  Detect this by
+			// checking whether the host directory still exists; if not, stop and
+			// remove the container so it is re-created with a fresh bind mount below.
+			homeDir, hdErr := config.GetRealUserHomeDir()
+			if hdErr == nil {
+				bitswanConfig := filepath.Join(homeDir, ".config", "bitswan")
+				if _, statErr := os.Stat(bitswanConfig); os.IsNotExist(statErr) {
+					fmt.Println("Detected missing ~/.config/bitswan — recreating daemon container to refresh bind mounts...")
+					exec.Command("docker", "stop", "bitswan-automation-server-daemon").Run()
+					exec.Command("docker", "rm", "bitswan-automation-server-daemon").Run()
+					// Fall through to startDaemonContainer below.
+				} else {
+					fmt.Println("Automation server daemon is already running")
+					installCompletions()
+					return nil
+				}
+			} else {
+				fmt.Println("Automation server daemon is already running")
+				installCompletions()
+				return nil
+			}
+		} else {
+			// Container exists but is not running, remove it first
+			fmt.Println("Removing existing stopped container...")
+			removeCmd := exec.Command("docker", "rm", "bitswan-automation-server-daemon")
+			if err := removeCmd.Run(); err != nil {
+				return fmt.Errorf("failed to remove existing container: %w", err)
+			}
 		}
 	}
 
