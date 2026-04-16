@@ -32,7 +32,7 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		mgr := vpnManager()
-		users, _ := mgr.ListClients()
+		users, _ := mgr.ListDevices()
 		if len(users) > 0 {
 			http.Error(w, "bootstrap already completed — use a magic link instead", http.StatusForbidden)
 			return
@@ -42,7 +42,7 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		if email == "" {
 			email = "admin"
 		}
-		conf, err := mgr.GenerateClient(email)
+		conf, err := mgr.GenerateClient(email, "web")
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to generate credentials: %v", err), http.StatusInternalServerError)
 			return
@@ -81,7 +81,7 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		mgr := vpnManager()
-		conf, err := mgr.GenerateClient(email)
+		conf, err := mgr.GenerateClient(email, "web")
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to generate credentials: %v", err), http.StatusInternalServerError)
 			return
@@ -145,9 +145,9 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 
 	case r.URL.Path == "/vpn-admin-internal/api/users":
 		mgr := vpnManager()
-		users, _ := mgr.ListClients()
+		users, _ := mgr.ListDevices()
 		if users == nil {
-			users = []vpn.VPNUser{}
+			users = []vpn.VPNDevice{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(users)
@@ -160,7 +160,7 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		}
 		userID := strings.TrimPrefix(r.URL.Path, "/vpn-admin-internal/api/revoke/")
 		mgr := vpnManager()
-		if err := mgr.RevokeClient(userID); err != nil {
+		if err := mgr.RevokeDevice(userID); err != nil {
 			http.Error(w, fmt.Sprintf("failed to revoke: %v", err), http.StatusInternalServerError)
 			return
 		}
