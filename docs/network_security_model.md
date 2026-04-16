@@ -61,10 +61,16 @@ Gitops, editor, and coding-agent are on `bitswan_network` ONLY. They cannot dire
 
 **Tested by:** `test_gitops_least_privilege`, `test_management_cannot_reach_containers`.
 
-### P4: Selenium Isolation
-Testing containers on `bitswan_external_testing` have internet access but CANNOT reach any internal container (no DNS resolution, no L3 connectivity).
+### P4: Selenium Testing Isolation
+When stage networks are enabled, Selenium testing containers are placed on `{workspace}-dev` — the same network as dev automations. This means:
+- Selenium CAN reach dev services directly (same network, realistic testing)
+- Selenium CANNOT reach staging or production services (different network)
+- Selenium CANNOT reach other workspaces (different network)
+- Selenium CANNOT reach management plane (different network)
 
-**Tested by:** `test_selenium_full_isolation`.
+Without stage networks (backward compat), Selenium uses the `bitswan_external_testing` isolated bridge.
+
+**Tested by:** `pentest_selenium` — verifies Selenium can HTTP to dev services but cannot reach staging/production.
 
 ### P5: Same-Stage Connectivity
 Containers within the same stage CAN communicate (e.g., dev app reaches dev postgres via DNS).
