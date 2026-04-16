@@ -67,6 +67,16 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	// Init bitswan network
 	docker.EnsureDockerNetwork("bitswan_network", *verbose)
 
+	// Create per-workspace stage networks for isolation
+	stageNetworks := []string{
+		workspaceName + "-dev",
+		workspaceName + "-staging",
+		workspaceName + "-production",
+	}
+	for _, net := range stageNetworks {
+		docker.EnsureDockerNetwork(net, *verbose)
+	}
+
 	var oauthConfig *oauth.Config
 	if *oauthConfigFile != "" {
 		oauthConfig, err = oauth.GetInitOauthConfig(*oauthConfigFile)

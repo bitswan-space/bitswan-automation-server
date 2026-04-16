@@ -93,6 +93,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
+			"BITSWAN_STAGE_NETWORKS=true",
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
 		},
 	}

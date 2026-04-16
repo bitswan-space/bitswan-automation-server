@@ -507,8 +507,13 @@ providers:
 		}
 	}
 
-	// No stage networks — just bitswan_network for backward compatibility
-	traefikDockerCompose, err := dockercompose.CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikConfigForCompose, domain, nil)
+	// Pass per-workspace stage networks so sub-Traefik can route to containers on each stage network
+	stageNetworks := []string{
+		workspaceName + "-dev",
+		workspaceName + "-staging",
+		workspaceName + "-production",
+	}
+	traefikDockerCompose, err := dockercompose.CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikConfigForCompose, domain, stageNetworks)
 	if err != nil {
 		return false, fmt.Errorf("failed to create workspace traefik docker-compose file: %w", err)
 	}
