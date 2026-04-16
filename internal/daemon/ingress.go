@@ -258,6 +258,9 @@ func initCaddyIngress(verbose bool) (bool, error) {
 		return false, nil
 	}
 
+	if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
+		return false, fmt.Errorf("failed to create bitswan config directory: %w", err)
+	}
 	if err := os.MkdirAll(caddyConfig, 0755); err != nil {
 		return false, fmt.Errorf("failed to create ingress config directory: %w", err)
 	}
@@ -355,6 +358,9 @@ func initTraefikIngress(verbose bool) (bool, error) {
 		exec.Command("docker", "rm", existingId).Run()
 	}
 
+	if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
+		return false, fmt.Errorf("failed to create bitswan config directory: %w", err)
+	}
 	if err := os.MkdirAll(traefikConfig, 0755); err != nil {
 		return false, fmt.Errorf("failed to create ingress config directory: %w", err)
 	}

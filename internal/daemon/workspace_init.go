@@ -58,10 +58,8 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	bitswanConfig := os.Getenv("HOME") + "/.config/bitswan/"
 	var err error
 
-	if _, err := os.Stat(bitswanConfig); os.IsNotExist(err) {
-		if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
-			return fmt.Errorf("failed to create BitSwan config directory: %w", err)
-		}
+	if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
+		return fmt.Errorf("failed to create BitSwan config directory: %w", err)
 	}
 
 	// Init bitswan network
