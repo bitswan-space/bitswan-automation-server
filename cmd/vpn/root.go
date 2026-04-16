@@ -30,7 +30,7 @@ func NewVPNCmd() *cobra.Command {
 	cmd.AddCommand(newBootstrapCmd())
 	cmd.AddCommand(newInviteCmd())
 	cmd.AddCommand(newStatusCmd())
-	cmd.AddCommand(newListUsersCmd())
+	cmd.AddCommand(newListDevicesCmd())
 	cmd.AddCommand(newRevokeCmd())
 
 	return cmd
@@ -176,22 +176,32 @@ func newDestroyCmd() *cobra.Command {
 }
 
 func newBootstrapCmd() *cobra.Command {
-	return &cobra.Command{
+	var deviceName string
+
+	cmd := &cobra.Command{
 		Use:   "bootstrap",
 		Short: "Generate your VPN config (first admin)",
 		Long: `Generate a WireGuard VPN configuration for yourself as the first administrator.
 
-This is only for initial setup. To give VPN access to other users,
-use 'bitswan vpn invite' to generate a magic link instead.`,
+Use --device to name this device (e.g., "laptop", "desktop").
+You can run bootstrap multiple times with different device names.
+
+To give VPN access to other users, use 'bitswan vpn invite' instead.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Use system username as the user ID
 			u, err := user.Current()
 			if err != nil {
 				return fmt.Errorf("failed to get current user: %w", err)
 			}
 			userID := u.Username
+			if deviceName == "" {
+				hostname, _ := os.Hostname()
+				if hostname != "" {
+					deviceName = hostname
+				} else {
+					deviceName = "default"
+				}
+			}
 
-			// Get the server slug for the filename
 			cfg := config.NewAutomationServerConfig()
 			serverConfig, _ := cfg.LoadConfig()
 			slug := "wireguard"
@@ -200,7 +210,7 @@ use 'bitswan vpn invite' to generate a magic link instead.`,
 			}
 
 			client := getDaemonClient()
-			body := fmt.Sprintf(`{"user_id": %q}`, userID)
+			body := fmt.Sprintf(`{"user_id": %q, "device_name": %q}`, userID, deviceName)
 			req, err := http.NewRequest("POST", "http://daemon/vpn/credentials", strings.NewReader(body))
 			if err != nil {
 				return err
@@ -220,11 +230,15 @@ use 'bitswan vpn invite' to generate a magic link instead.`,
 			defer f.Close()
 			io.Copy(f, resp.Body)
 
-			fmt.Printf("VPN config written to %s\n\n", outPath)
+			fmt.Printf("VPN config written to %s (device: %s/%s)\n\n", outPath, userID, deviceName)
 			printConnectionGuide(outPath, slug)
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&deviceName, "device", "", "Device name (e.g., 'laptop', 'phone') — defaults to hostname")
+
+	return cmd
 }
 
 func newInviteCmd() *cobra.Command {
@@ -310,10 +324,10 @@ func newStatusCmd() *cobra.Command {
 	}
 }
 
-func newListUsersCmd() *cobra.Command {
+func newListDevicesCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list-users",
-		Short: "List VPN users",
+		Use:   "list-devices",
+		Short: "List all VPN devices",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := getDaemonClient()
 			req, _ := http.NewRequest("GET", "http://daemon/vpn/users", nil)
@@ -323,18 +337,19 @@ func newListUsersCmd() *cobra.Command {
 			}
 			defer resp.Body.Close()
 
-			var users []map[string]string
-			json.NewDecoder(resp.Body).Decode(&users)
+			var devices []map[string]string
+			json.NewDecoder(resp.Body).Decode(&devices)
 
-			if len(users) == 0 {
-				fmt.Println("No VPN users.")
+			if len(devices) == 0 {
+				fmt.Println("No VPN devices.")
 				return nil
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "USER\tIP\tPUBLIC KEY")
-			for _, u := range users {
-				fmt.Fprintf(w, "%s\t%s\t%s\n", u["id"], u["ip"], u["public_key"])
+			fmt.Fprintln(w, "DEVICE ID\tUSER\tDEVICE\tIP\tISSUED")
+			for _, d := range devices {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					d["device_id"], d["user_id"], d["device_name"], d["ip"], d["issued_at"])
 			}
 			w.Flush()
 			return nil
@@ -344,14 +359,14 @@ func newListUsersCmd() *cobra.Command {
 
 func newRevokeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "revoke <user>",
-		Short: "Revoke VPN access for a user",
-		Long:  "Revoke a user's VPN access. Use 'bitswan vpn list-users' to see user IDs.",
+		Use:   "revoke <user/device>",
+		Short: "Revoke a VPN device",
+		Long:  "Revoke a specific device's VPN access. Use 'bitswan vpn list-devices' to see device IDs.\nFormat: user/device (e.g., admin/laptop)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			userID := args[0]
+			deviceID := args[0]
 			client := getDaemonClient()
-			body := fmt.Sprintf(`{"user_id": %q}`, userID)
+			body := fmt.Sprintf(`{"device_id": %q}`, deviceID)
 			req, err := http.NewRequest("POST", "http://daemon/vpn/revoke", strings.NewReader(body))
 			if err != nil {
 				return err
@@ -363,7 +378,7 @@ func newRevokeCmd() *cobra.Command {
 			}
 			defer resp.Body.Close()
 
-			fmt.Printf("Revoked VPN access for %s\n", userID)
+			fmt.Printf("Revoked VPN device %s\n", deviceID)
 			return nil
 		},
 	}

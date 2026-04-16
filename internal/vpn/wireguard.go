@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,11 +24,14 @@ const (
 	usersDirName = "users"
 )
 
-// VPNUser represents a registered VPN user.
-type VPNUser struct {
-	ID        string `json:"id" yaml:"id"`
-	PublicKey string `json:"public_key" yaml:"public_key"`
-	IP        string `json:"ip" yaml:"ip"`
+// VPNDevice represents a single device registered to a user.
+type VPNDevice struct {
+	DeviceID   string `json:"device_id" yaml:"device_id"`     // unique: {user_id}/{device_name}
+	UserID     string `json:"user_id" yaml:"user_id"`
+	DeviceName string `json:"device_name" yaml:"device_name"` // e.g., "laptop", "phone"
+	PublicKey  string `json:"public_key" yaml:"public_key"`
+	IP         string `json:"ip" yaml:"ip"`
+	IssuedAt   string `json:"issued_at" yaml:"issued_at"`
 }
 
 // Manager handles WireGuard server and client configuration.
@@ -101,8 +105,10 @@ PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING 
 	return os.WriteFile(filepath.Join(m.baseDir, "enabled"), []byte("true\n"), 0644)
 }
 
-// GenerateClient creates a new VPN client and returns the client .conf content.
-func (m *Manager) GenerateClient(userID string) ([]byte, error) {
+// GenerateClient creates a new VPN device for a user and returns the client .conf content.
+// userID: the user (e.g., email or username)
+// deviceName: the device label (e.g., "laptop", "phone")
+func (m *Manager) GenerateClient(userID, deviceName string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -110,9 +116,9 @@ func (m *Manager) GenerateClient(userID string) ([]byte, error) {
 		return nil, fmt.Errorf("VPN not initialized")
 	}
 
-	userDir := filepath.Join(m.baseDir, usersDirName, userID)
-	if _, err := os.Stat(userDir); err == nil {
-		return nil, fmt.Errorf("user %s already exists", userID)
+	deviceDir := filepath.Join(m.baseDir, usersDirName, userID, deviceName)
+	if _, err := os.Stat(deviceDir); err == nil {
+		return nil, fmt.Errorf("device %s/%s already exists", userID, deviceName)
 	}
 
 	// Read server metadata
@@ -137,16 +143,19 @@ func (m *Manager) GenerateClient(userID string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Save client info
-	os.MkdirAll(userDir, 0700)
-	user := VPNUser{
-		ID:        userID,
-		PublicKey: clientPub,
-		IP:        clientIP,
+	// Save device info
+	os.MkdirAll(deviceDir, 0700)
+	device := VPNDevice{
+		DeviceID:   userID + "/" + deviceName,
+		UserID:     userID,
+		DeviceName: deviceName,
+		PublicKey:  clientPub,
+		IP:         clientIP,
+		IssuedAt:   fmt.Sprintf("%s", time.Now().UTC().Format(time.RFC3339)),
 	}
-	userBytes, _ := yaml.Marshal(user)
-	os.WriteFile(filepath.Join(userDir, "user.yaml"), userBytes, 0644)
-	os.WriteFile(filepath.Join(userDir, "private.key"), []byte(clientPriv), 0600)
+	deviceBytes, _ := yaml.Marshal(device)
+	os.WriteFile(filepath.Join(deviceDir, "device.yaml"), deviceBytes, 0644)
+	os.WriteFile(filepath.Join(deviceDir, "private.key"), []byte(clientPriv), 0600)
 
 	// Build client config
 	clientConf := fmt.Sprintf(`[Interface]
@@ -161,7 +170,7 @@ AllowedIPs = %s
 PersistentKeepalive = 25
 `, clientPriv, clientIP, DNSServer, serverPub, serverEndpoint, ListenPort, VPNSubnet)
 
-	os.WriteFile(filepath.Join(userDir, "client.conf"), []byte(clientConf), 0600)
+	os.WriteFile(filepath.Join(deviceDir, "client.conf"), []byte(clientConf), 0600)
 
 	// Add peer to server config
 	if err := m.addPeerToServerConfig(clientPub, clientIP); err != nil {
@@ -171,34 +180,48 @@ PersistentKeepalive = 25
 	return []byte(clientConf), nil
 }
 
-// RevokeClient removes a VPN client.
-func (m *Manager) RevokeClient(userID string) error {
+// RevokeDevice removes a single VPN device.
+// deviceID is "userID/deviceName" (e.g., "admin/laptop").
+func (m *Manager) RevokeDevice(deviceID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	userDir := filepath.Join(m.baseDir, usersDirName, userID)
-	userFile := filepath.Join(userDir, "user.yaml")
+	deviceDir := filepath.Join(m.baseDir, usersDirName, deviceID)
+	deviceFile := filepath.Join(deviceDir, "device.yaml")
 
-	data, err := os.ReadFile(userFile)
+	data, err := os.ReadFile(deviceFile)
 	if err != nil {
-		return fmt.Errorf("user %s not found", userID)
+		return fmt.Errorf("device %s not found", deviceID)
 	}
-	var user VPNUser
-	yaml.Unmarshal(data, &user)
+	var device VPNDevice
+	yaml.Unmarshal(data, &device)
 
 	// Remove peer from server config
-	if err := m.removePeerFromServerConfig(user.PublicKey); err != nil {
+	if err := m.removePeerFromServerConfig(device.PublicKey); err != nil {
 		return err
 	}
 
-	// Delete user directory
-	return os.RemoveAll(userDir)
+	// Delete device directory
+	if err := os.RemoveAll(deviceDir); err != nil {
+		return err
+	}
+
+	// Clean up empty user directory
+	userDir := filepath.Dir(deviceDir)
+	entries, _ := os.ReadDir(userDir)
+	if len(entries) == 0 {
+		os.Remove(userDir)
+	}
+
+	return nil
 }
 
-// ListClients returns all registered VPN users.
-func (m *Manager) ListClients() ([]VPNUser, error) {
+// ListDevices returns all registered VPN devices across all users.
+func (m *Manager) ListDevices() ([]VPNDevice, error) {
 	usersDir := filepath.Join(m.baseDir, usersDirName)
-	entries, err := os.ReadDir(usersDir)
+	var devices []VPNDevice
+
+	userEntries, err := os.ReadDir(usersDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -206,20 +229,29 @@ func (m *Manager) ListClients() ([]VPNUser, error) {
 		return nil, err
 	}
 
-	var users []VPNUser
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, userEntry := range userEntries {
+		if !userEntry.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(usersDir, entry.Name(), "user.yaml"))
+		userPath := filepath.Join(usersDir, userEntry.Name())
+		deviceEntries, err := os.ReadDir(userPath)
 		if err != nil {
 			continue
 		}
-		var user VPNUser
-		yaml.Unmarshal(data, &user)
-		users = append(users, user)
+		for _, devEntry := range deviceEntries {
+			if !devEntry.IsDir() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(userPath, devEntry.Name(), "device.yaml"))
+			if err != nil {
+				continue
+			}
+			var device VPNDevice
+			yaml.Unmarshal(data, &device)
+			devices = append(devices, device)
+		}
 	}
-	return users, nil
+	return devices, nil
 }
 
 // ServerPublicKey returns the server's public key.
@@ -242,10 +274,10 @@ func (m *Manager) ReloadServer() error {
 // --- internal helpers ---
 
 func (m *Manager) nextAvailableIP() (string, error) {
-	users, _ := m.ListClients()
+	devices, _ := m.ListDevices()
 	used := map[string]bool{ServerIP: true}
-	for _, u := range users {
-		used[u.IP] = true
+	for _, d := range devices {
+		used[d.IP] = true
 	}
 
 	// Assign from 10.8.0.2 to 10.8.0.254
