@@ -159,6 +159,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/vpn/users", s.authMiddleware(s.handleVPNListUsers))
 	mux.HandleFunc("/vpn/magic-link", s.authMiddleware(s.handleVPNMagicLink))
 	mux.HandleFunc("/vpn/destroy", s.authMiddleware(s.handleVPNDestroy))
+	mux.HandleFunc("/vpn/sessions", s.authMiddleware(s.handleVPNSessions))
 
 	// MQTT endpoints (authenticated)
 	mux.HandleFunc("/mqtt/reinitialize", s.authMiddleware(s.handleMQTTReinitialize))
