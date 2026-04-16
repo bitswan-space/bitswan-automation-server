@@ -539,6 +539,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	// Register GitOps service route via the daemon's ingress abstraction.
 	// addRouteToIngress detects the ingress type and handles certs + routing.
+	// Register gitops route — internal only when VPN is enabled
 	gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
 	gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
 	if err := addRouteToIngress(IngressAddRouteRequest{
@@ -547,6 +548,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		Mkcert:        *mkCerts,
 		CertsDir:      *certsDir,
 		WorkspaceName: workspaceName,
+		IngressTarget: "internal",
 	}, ""); err != nil {
 		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}
@@ -705,16 +707,18 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
 
-		// Register editor route via the ingress abstraction
+		// Register editor route — internal only when VPN is enabled
 		editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
 		editorUpstream := fmt.Sprintf("%s-editor:9999", workspaceName)
-		if err := addRouteToIngress(IngressAddRouteRequest{
+		editorRoute := IngressAddRouteRequest{
 			Hostname:      editorHostname,
 			Upstream:      editorUpstream,
 			Mkcert:        *mkCerts,
 			CertsDir:      *certsDir,
 			WorkspaceName: workspaceName,
-		}, ""); err != nil {
+			IngressTarget: "internal",
+		}
+		if err := addRouteToIngress(editorRoute, ""); err != nil {
 			return fmt.Errorf("failed to register Editor service: %w", err)
 		}
 
