@@ -11,6 +11,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"io"
+	"net/http"
+
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -22,6 +25,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
 	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/util"
+	"github.com/bitswan-space/bitswan-workspaces/internal/vpn"
 )
 
 // runWorkspaceInit runs the workspace init logic with stdout already redirected.
@@ -894,7 +898,113 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
+	// Initialize VPN automatically — editor and internal services should
+	// only be accessible through the VPN by default.
+	if !IsVPNEnabled() {
+		fmt.Fprintln(writer, "Initializing VPN...")
+
+		// Auto-detect public IP for VPN endpoint
+		vpnEndpoint := detectPublicIPForVPN()
+		if vpnEndpoint == "" {
+			fmt.Fprintln(writer, "Warning: Could not detect public IP for VPN. Run 'bitswan vpn init --endpoint <ip>' manually.")
+		} else {
+			// Ensure server name exists
+			cfg := config.NewAutomationServerConfig()
+			serverConfig, _ := cfg.LoadConfig()
+			if serverConfig != nil && serverConfig.Slug == "" {
+				cfg.SetNameAndSlug(config.GenerateRandomName())
+			}
+			if serverConfig != nil && serverConfig.Domain == "" {
+				cfg.SetDomain(domain)
+			}
+
+			homeDir := os.Getenv("HOME")
+			vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
+			vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
+			hostHome := os.Getenv("HOST_HOME")
+			hostVpnPath := vpnPath
+			hostVpnTraefikPath := vpnTraefikPath
+			if hostHome != "" {
+				hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
+				hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
+			}
+
+			mgr := vpn.NewManager(filepath.Join(homeDir, ".config", "bitswan"))
+			if !mgr.IsInitialized() {
+				if err := mgr.Init(vpnEndpoint); err != nil {
+					fmt.Fprintf(writer, "Warning: VPN init failed: %v\n", err)
+				}
+			}
+
+			// Create VPN network
+			docker.EnsureDockerNetwork("bitswan_vpn_network", *verbose)
+
+			// Start WireGuard
+			wgCompose, _ := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
+			if wgCompose != "" {
+				dockerComposeUpQuiet("wireguard", wgCompose, vpnPath)
+			}
+
+			// Start VPN Traefik
+			os.MkdirAll(vpnTraefikPath, 0755)
+			traefikYml := "entryPoints:\n  web:\n    address: \":80\"\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
+			os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
+			vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath)
+			if vpnTraefikCompose != "" {
+				dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
+			}
+
+			// Start CoreDNS
+			dockercompose.WriteCorefile(vpnPath, "")
+			corednsCompose, _ := dockercompose.CreateCoreDNSDockerComposeFile(hostVpnPath)
+			if corednsCompose != "" {
+				dockerComposeUpQuiet("coredns-vpn", corednsCompose, vpnPath)
+			}
+
+			// Register VPN admin routes
+			serverConfig, _ = cfg.LoadConfig()
+			if serverConfig != nil {
+				internalDomain := serverConfig.InternalDomain()
+				addRouteToIngress(IngressAddRouteRequest{
+					Hostname:      "vpn-admin." + domain,
+					Upstream:      "bitswan-automation-server-daemon:8080",
+					IngressTarget: "external",
+				}, "")
+				addRouteToIngress(IngressAddRouteRequest{
+					Hostname:      "vpn-admin." + internalDomain,
+					Upstream:      "bitswan-automation-server-daemon:8080",
+					IngressTarget: "internal",
+				}, "")
+			}
+
+			fmt.Fprintf(writer, "VPN initialized (endpoint: %s)\n", vpnEndpoint)
+			fmt.Fprintln(writer, "Run 'bitswan vpn bootstrap' to download your VPN config.")
+		}
+	}
+
 	return nil
+}
+
+func detectPublicIPForVPN() string {
+	resp, err := http.Get("https://api.ipify.org")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
+}
+
+func dockerComposeUpQuiet(projectName, composeContent, workDir string) {
+	composePath := filepath.Join(workDir, "docker-compose.yaml")
+	os.MkdirAll(workDir, 0755)
+	os.WriteFile(composePath, []byte(composeContent), 0644)
+	cmd := exec.Command("docker", "compose", "-p", projectName, "-f", composePath, "up", "-d")
+	cmd.Dir = workDir
+	cmd.Run()
 }
 
 func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
