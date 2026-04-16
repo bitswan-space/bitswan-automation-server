@@ -751,6 +751,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		fmt.Printf("OAuth is enabled for the Editor.\n")
 	}
 
+	// Initialize VPN automatically — editor and internal services
+	// should only be accessible through the VPN by default.
+	initVPNAutomatically(*domain, *verbose, os.Stdout)
+
 	return nil
 }
 
@@ -898,91 +902,89 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
 
-	// Initialize VPN automatically — editor and internal services should
-	// only be accessible through the VPN by default.
-	if !IsVPNEnabled() {
-		fmt.Fprintln(writer, "Initializing VPN...")
+	return nil
+}
 
-		// Auto-detect public IP for VPN endpoint
-		vpnEndpoint := detectPublicIPForVPN()
-		if vpnEndpoint == "" {
-			fmt.Fprintln(writer, "Warning: Could not detect public IP for VPN. Run 'bitswan vpn init --endpoint <ip>' manually.")
-		} else {
-			// Ensure server name exists
-			cfg := config.NewAutomationServerConfig()
-			serverConfig, _ := cfg.LoadConfig()
-			if serverConfig != nil && serverConfig.Slug == "" {
-				cfg.SetNameAndSlug(config.GenerateRandomName())
-			}
-			if serverConfig != nil && serverConfig.Domain == "" {
-				cfg.SetDomain(domain)
-			}
+// initVPNAutomatically sets up WireGuard VPN during workspace init.
+func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
+	if IsVPNEnabled() {
+		return
+	}
 
-			homeDir := os.Getenv("HOME")
-			vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
-			vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
-			hostHome := os.Getenv("HOST_HOME")
-			hostVpnPath := vpnPath
-			hostVpnTraefikPath := vpnTraefikPath
-			if hostHome != "" {
-				hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
-				hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
-			}
+	fmt.Fprintln(writer, "Initializing VPN...")
 
-			mgr := vpn.NewManager(filepath.Join(homeDir, ".config", "bitswan"))
-			if !mgr.IsInitialized() {
-				if err := mgr.Init(vpnEndpoint); err != nil {
-					fmt.Fprintf(writer, "Warning: VPN init failed: %v\n", err)
-				}
-			}
+	vpnEndpoint := detectPublicIPForVPN()
+	if vpnEndpoint == "" {
+		fmt.Fprintln(writer, "Warning: Could not detect public IP for VPN. Run 'bitswan vpn init --endpoint <ip>' manually.")
+		return
+	}
 
-			// Create VPN network
-			docker.EnsureDockerNetwork("bitswan_vpn_network", *verbose)
+	cfg := config.NewAutomationServerConfig()
+	serverConfig, _ := cfg.LoadConfig()
+	if serverConfig != nil && serverConfig.Slug == "" {
+		cfg.SetNameAndSlug(config.GenerateRandomName())
+	}
+	if serverConfig != nil && serverConfig.Domain == "" {
+		cfg.SetDomain(domain)
+	}
 
-			// Start WireGuard
-			wgCompose, _ := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
-			if wgCompose != "" {
-				dockerComposeUpQuiet("wireguard", wgCompose, vpnPath)
-			}
+	homeDir := os.Getenv("HOME")
+	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
+	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
+	hostHome := os.Getenv("HOST_HOME")
+	hostVpnPath := vpnPath
+	hostVpnTraefikPath := vpnTraefikPath
+	if hostHome != "" {
+		hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
+		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
+	}
 
-			// Start VPN Traefik
-			os.MkdirAll(vpnTraefikPath, 0755)
-			traefikYml := "entryPoints:\n  web:\n    address: \":80\"\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
-			os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
-			vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath)
-			if vpnTraefikCompose != "" {
-				dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
-			}
-
-			// Start CoreDNS
-			dockercompose.WriteCorefile(vpnPath, "")
-			corednsCompose, _ := dockercompose.CreateCoreDNSDockerComposeFile(hostVpnPath)
-			if corednsCompose != "" {
-				dockerComposeUpQuiet("coredns-vpn", corednsCompose, vpnPath)
-			}
-
-			// Register VPN admin routes
-			serverConfig, _ = cfg.LoadConfig()
-			if serverConfig != nil {
-				internalDomain := serverConfig.InternalDomain()
-				addRouteToIngress(IngressAddRouteRequest{
-					Hostname:      "vpn-admin." + domain,
-					Upstream:      "bitswan-automation-server-daemon:8080",
-					IngressTarget: "external",
-				}, "")
-				addRouteToIngress(IngressAddRouteRequest{
-					Hostname:      "vpn-admin." + internalDomain,
-					Upstream:      "bitswan-automation-server-daemon:8080",
-					IngressTarget: "internal",
-				}, "")
-			}
-
-			fmt.Fprintf(writer, "VPN initialized (endpoint: %s)\n", vpnEndpoint)
-			fmt.Fprintln(writer, "Run 'bitswan vpn bootstrap' to download your VPN config.")
+	mgr := vpn.NewManager(filepath.Join(homeDir, ".config", "bitswan"))
+	if !mgr.IsInitialized() {
+		if err := mgr.Init(vpnEndpoint); err != nil {
+			fmt.Fprintf(writer, "Warning: VPN init failed: %v\n", err)
+			return
 		}
 	}
 
-	return nil
+	docker.EnsureDockerNetwork("bitswan_vpn_network", verbose)
+
+	wgCompose, _ := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
+	if wgCompose != "" {
+		dockerComposeUpQuiet("wireguard", wgCompose, vpnPath)
+	}
+
+	os.MkdirAll(vpnTraefikPath, 0755)
+	traefikYml := "entryPoints:\n  web:\n    address: \":80\"\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
+	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
+	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath)
+	if vpnTraefikCompose != "" {
+		dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
+	}
+
+	dockercompose.WriteCorefile(vpnPath, "")
+	corednsCompose, _ := dockercompose.CreateCoreDNSDockerComposeFile(hostVpnPath)
+	if corednsCompose != "" {
+		dockerComposeUpQuiet("coredns-vpn", corednsCompose, vpnPath)
+	}
+
+	serverConfig, _ = cfg.LoadConfig()
+	if serverConfig != nil {
+		internalDomain := serverConfig.InternalDomain()
+		addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      "vpn-admin." + domain,
+			Upstream:      "bitswan-automation-server-daemon:8080",
+			IngressTarget: "external",
+		}, "")
+		addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      "vpn-admin." + internalDomain,
+			Upstream:      "bitswan-automation-server-daemon:8080",
+			IngressTarget: "internal",
+		}, "")
+	}
+
+	fmt.Fprintf(writer, "VPN initialized (endpoint: %s)\n", vpnEndpoint)
+	fmt.Fprintln(writer, "Run 'bitswan vpn bootstrap' to download your VPN config.")
 }
 
 func detectPublicIPForVPN() string {
