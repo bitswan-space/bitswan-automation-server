@@ -66,7 +66,6 @@ func newRegisterCmd() *cobra.Command {
 			}
 
 			// Update the server name from AOC (replaces the random name from init)
-			cfg := config.NewAutomationServerConfig()
 			if serverInfo.Name != "" {
 				if err := cfg.SetNameAndSlug(serverInfo.Name); err != nil {
 					fmt.Printf("Warning: failed to update server name: %v\n", err)
