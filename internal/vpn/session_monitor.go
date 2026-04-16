@@ -23,7 +23,8 @@ type SessionEvent struct {
 	DeviceID   string `json:"device_id"`
 	UserID     string `json:"user_id"`
 	DeviceName string `json:"device_name"`
-	Event      string `json:"event"` // "handshake", "connected", "disconnected"
+	Event      string `json:"event"` // "handshake", "connected", "disconnected", "unclassified"
+	Classified bool   `json:"classified"` // false = could not match to a known device
 	Timestamp  string `json:"timestamp"`
 	SourceIP   string `json:"source_ip,omitempty"`
 	PublicKey  string `json:"public_key"`
@@ -205,13 +206,16 @@ func (sm *SessionMonitor) onHandshakeDetected(sourceIP string) {
 	// Run wg show to get current peer states
 	peers, err := sm.getWgShowDump()
 	if err != nil {
+		// Can't enrich — log as unclassified
+		sm.emitEvent("", "unclassified", sourceIP, 0, 0)
 		return
 	}
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	now := time.Now().UTC()
+	// Track whether any peer had a state change matching this handshake
+	matched := false
 
 	for _, peer := range peers {
 		existing, ok := sm.peerStates[peer.PublicKey]
@@ -226,6 +230,7 @@ func (sm *SessionMonitor) onHandshakeDetected(sourceIP string) {
 				Connected:    !peer.LastHandshake.IsZero(),
 			}
 			if !peer.LastHandshake.IsZero() {
+				matched = true
 				sm.emitEvent(peer.PublicKey, "connected", sourceIP, peer.TransferRx, peer.TransferTx)
 			}
 			continue
@@ -233,6 +238,7 @@ func (sm *SessionMonitor) onHandshakeDetected(sourceIP string) {
 
 		// Check if handshake timestamp changed (new handshake)
 		if peer.LastHandshake.After(existing.LastHandshake) {
+			matched = true
 			wasConnected := existing.Connected
 			existing.LastHandshake = peer.LastHandshake
 			existing.TransferRx = peer.TransferRx
@@ -248,7 +254,13 @@ func (sm *SessionMonitor) onHandshakeDetected(sourceIP string) {
 		// Update transfer counters regardless
 		existing.TransferRx = peer.TransferRx
 		existing.TransferTx = peer.TransferTx
-		_ = now
+	}
+
+	// Iptables saw a handshake packet but no peer state changed.
+	// Could be a failed handshake attempt from an unknown key,
+	// a replay, or a timing edge case.
+	if !matched {
+		sm.emitEvent("", "unclassified", sourceIP, 0, 0)
 	}
 }
 
@@ -284,6 +296,7 @@ func (sm *SessionMonitor) emitEvent(publicKey, event, sourceIP string, rx, tx in
 
 	sessionEvent := SessionEvent{
 		Event:      event,
+		Classified: device != nil,
 		Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		SourceIP:   sourceIP,
 		PublicKey:  publicKey,
