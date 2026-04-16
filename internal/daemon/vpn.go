@@ -195,9 +195,9 @@ func (s *Server) handleVPNStatus(w http.ResponseWriter, r *http.Request) {
 
 	if initialized {
 		pub, _ := mgr.ServerPublicKey()
-		users, _ := mgr.ListClients()
+		devices, _ := mgr.ListDevices()
 		result["server_public_key"] = pub
-		result["user_count"] = len(users)
+		result["device_count"] = len(devices)
 	}
 
 	json.NewEncoder(w).Encode(result)
@@ -210,7 +210,8 @@ func (s *Server) handleVPNGenerateCredentials(w http.ResponseWriter, r *http.Req
 	}
 
 	var body struct {
-		UserID string `json:"user_id"`
+		UserID     string `json:"user_id"`
+		DeviceName string `json:"device_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -220,16 +221,20 @@ func (s *Server) handleVPNGenerateCredentials(w http.ResponseWriter, r *http.Req
 		http.Error(w, "user_id is required", http.StatusBadRequest)
 		return
 	}
+	if body.DeviceName == "" {
+		body.DeviceName = "default"
+	}
 
 	mgr := vpnManager()
-	conf, err := mgr.GenerateClient(body.UserID)
+	conf, err := mgr.GenerateClient(body.UserID, body.DeviceName)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to generate credentials: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	filename := fmt.Sprintf("%s-%s.conf", body.UserID, body.DeviceName)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", body.UserID))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 	w.Write(conf)
 }
 
@@ -240,37 +245,37 @@ func (s *Server) handleVPNRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		UserID string `json:"user_id"`
+		DeviceID string `json:"device_id"` // "user/device" format
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if body.UserID == "" {
-		http.Error(w, "user_id is required", http.StatusBadRequest)
+	if body.DeviceID == "" {
+		http.Error(w, "device_id is required (format: user/device)", http.StatusBadRequest)
 		return
 	}
 
 	mgr := vpnManager()
-	if err := mgr.RevokeClient(body.UserID); err != nil {
+	if err := mgr.RevokeDevice(body.DeviceID); err != nil {
 		http.Error(w, fmt.Sprintf("failed to revoke: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"status": "revoked", "user_id": body.UserID})
+	json.NewEncoder(w).Encode(map[string]string{"status": "revoked", "device_id": body.DeviceID})
 }
 
 func (s *Server) handleVPNListUsers(w http.ResponseWriter, r *http.Request) {
 	mgr := vpnManager()
-	users, err := mgr.ListClients()
+	devices, err := mgr.ListDevices()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list users: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to list devices: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if users == nil {
-		users = []vpn.VPNUser{}
+	if devices == nil {
+		devices = []vpn.VPNDevice{}
 	}
-	json.NewEncoder(w).Encode(users)
+	json.NewEncoder(w).Encode(devices)
 }
 
 func (s *Server) handleVPNMagicLink(w http.ResponseWriter, r *http.Request) {
