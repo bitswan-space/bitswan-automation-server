@@ -178,9 +178,15 @@ providers:
 		fmt.Printf("Warning: failed to register internal VPN admin route: %v\n", err)
 	}
 
+	// 8. Start session monitor (iptables LOG → wg show enrichment)
+	monitor := vpn.NewSessionMonitor(mgr)
+	if err := monitor.Start(); err != nil {
+		fmt.Printf("Warning: failed to start session monitor: %v\n", err)
+	}
+
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "initialized",
-		"message": "WireGuard VPN initialized with VPN Traefik and CoreDNS.",
+		"message": "WireGuard VPN initialized with VPN Traefik, CoreDNS, and session monitoring.",
 	})
 }
 
@@ -276,6 +282,38 @@ func (s *Server) handleVPNListUsers(w http.ResponseWriter, r *http.Request) {
 		devices = []vpn.VPNDevice{}
 	}
 	json.NewEncoder(w).Encode(devices)
+}
+
+func (s *Server) handleVPNSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	mgr := vpnManager()
+	monitor := vpn.NewSessionMonitor(mgr)
+
+	// Check for ?active=true query param
+	if r.URL.Query().Get("active") == "true" {
+		active := monitor.GetActiveSessions()
+		if active == nil {
+			active = []vpn.SessionEvent{}
+		}
+		json.NewEncoder(w).Encode(active)
+		return
+	}
+
+	// Return recent session log
+	limit := 100
+	events, err := monitor.GetSessionLog(limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to read session log: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if events == nil {
+		events = []vpn.SessionEvent{}
+	}
+	json.NewEncoder(w).Encode(events)
 }
 
 func (s *Server) handleVPNMagicLink(w http.ResponseWriter, r *http.Request) {

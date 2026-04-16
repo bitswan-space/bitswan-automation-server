@@ -31,6 +31,7 @@ func NewVPNCmd() *cobra.Command {
 	cmd.AddCommand(newInviteCmd())
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newListDevicesCmd())
+	cmd.AddCommand(newSessionsCmd())
 	cmd.AddCommand(newRevokeCmd())
 
 	return cmd
@@ -355,6 +356,91 @@ func newListDevicesCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newSessionsCmd() *cobra.Command {
+	var active bool
+
+	cmd := &cobra.Command{
+		Use:   "sessions",
+		Short: "Show VPN session history and active connections",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := getDaemonClient()
+			url := "http://daemon/vpn/sessions"
+			if active {
+				url += "?active=true"
+			}
+			req, _ := http.NewRequest("GET", url, nil)
+			resp, err := client.DoRequest(req)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
+
+			var events []map[string]interface{}
+			json.NewDecoder(resp.Body).Decode(&events)
+
+			if len(events) == 0 {
+				if active {
+					fmt.Println("No active VPN sessions.")
+				} else {
+					fmt.Println("No VPN session history.")
+				}
+				return nil
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+			if active {
+				fmt.Fprintln(w, "DEVICE\tUSER\tIP\tRX\tTX\tLAST SEEN")
+				for _, e := range events {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+						str(e, "device_name"), str(e, "user_id"), str(e, "ip"),
+						humanBytes(num(e, "transfer_rx")), humanBytes(num(e, "transfer_tx")),
+						str(e, "timestamp"))
+				}
+			} else {
+				fmt.Fprintln(w, "TIME\tEVENT\tDEVICE\tUSER\tSOURCE IP")
+				for _, e := range events {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+						str(e, "timestamp"), str(e, "event"),
+						str(e, "device_name"), str(e, "user_id"),
+						str(e, "source_ip"))
+				}
+			}
+			w.Flush()
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&active, "active", false, "Show only currently active sessions")
+	return cmd
+}
+
+func str(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func num(m map[string]interface{}, key string) int64 {
+	if v, ok := m[key].(float64); ok {
+		return int64(v)
+	}
+	return 0
+}
+
+func humanBytes(b int64) string {
+	if b < 1024 {
+		return fmt.Sprintf("%d B", b)
+	}
+	if b < 1024*1024 {
+		return fmt.Sprintf("%.1f KiB", float64(b)/1024)
+	}
+	if b < 1024*1024*1024 {
+		return fmt.Sprintf("%.1f MiB", float64(b)/(1024*1024))
+	}
+	return fmt.Sprintf("%.1f GiB", float64(b)/(1024*1024*1024))
 }
 
 func newRevokeCmd() *cobra.Command {
