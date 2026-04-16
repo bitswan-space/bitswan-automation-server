@@ -64,6 +64,7 @@ func (m *Manager) Init(serverEndpoint string) error {
 
 	os.MkdirAll(m.baseDir, 0700)
 	os.MkdirAll(filepath.Join(m.baseDir, usersDirName), 0700)
+	os.MkdirAll(filepath.Join(m.baseDir, "wg_confs"), 0700)
 
 	// Generate server keypair
 	serverPriv, serverPub, err := generateKeyPair()
@@ -87,7 +88,7 @@ PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 `, ServerIP, ListenPort, serverPriv)
 
-	if err := os.WriteFile(filepath.Join(m.baseDir, "wg0.conf"), []byte(conf), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(m.baseDir, "wg_confs", "wg0.conf"), []byte(conf), 0600); err != nil {
 		return err
 	}
 
@@ -267,7 +268,7 @@ func (m *Manager) ServerPublicKey() (string, error) {
 func (m *Manager) ReloadServer() error {
 	// docker exec wireguard wg syncconf wg0 <(wg-quick strip wg0)
 	cmd := exec.Command("docker", "exec", "wireguard", "bash", "-c",
-		"wg syncconf wg0 <(wg-quick strip /config/wg0.conf)")
+		"wg syncconf wg0 <(wg-quick strip /config/wg_confs/wg0.conf)")
 	return cmd.Run()
 }
 
@@ -291,7 +292,7 @@ func (m *Manager) nextAvailableIP() (string, error) {
 }
 
 func (m *Manager) addPeerToServerConfig(publicKey, ip string) error {
-	confPath := filepath.Join(m.baseDir, "wg0.conf")
+	confPath := filepath.Join(m.baseDir, "wg_confs", "wg0.conf")
 	f, err := os.OpenFile(confPath, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -308,7 +309,7 @@ func (m *Manager) addPeerToServerConfig(publicKey, ip string) error {
 }
 
 func (m *Manager) removePeerFromServerConfig(publicKey string) error {
-	confPath := filepath.Join(m.baseDir, "wg0.conf")
+	confPath := filepath.Join(m.baseDir, "wg_confs", "wg0.conf")
 	data, err := os.ReadFile(confPath)
 	if err != nil {
 		return err
