@@ -223,7 +223,7 @@ func (p *Proxy) isContainerInWorkspace(containerID string) bool {
 	return false
 }
 
-// isAllowedCreate checks if a container create request is from compose for this workspace.
+// isAllowedCreate checks if a container create request is safe for this workspace.
 func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 	// Read and re-buffer the body
 	body, err := io.ReadAll(r.Body)
@@ -241,10 +241,15 @@ func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 	}
 	json.Unmarshal(body, &createReq)
 
-	// Must be from this workspace's compose project
+	// Allow if the container has this workspace's label or compose project
+	wsLabel := createReq.Labels["gitops.workspace"]
 	project := createReq.Labels["com.docker.compose.project"]
-	if project != "" && project != p.composeProject {
-		log.Printf("BLOCKED: create for wrong project %s (expected %s)", project, p.composeProject)
+	if wsLabel != "" && wsLabel != p.workspaceName {
+		log.Printf("BLOCKED: create for wrong workspace %s (expected %s)", wsLabel, p.workspaceName)
+		return false
+	}
+	if project != "" && !strings.HasPrefix(project, strings.ToLower(p.workspaceName)) {
+		log.Printf("BLOCKED: create for wrong project %s (expected prefix %s)", project, p.workspaceName)
 		return false
 	}
 
