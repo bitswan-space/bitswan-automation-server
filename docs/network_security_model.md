@@ -132,6 +132,10 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Passive traffic sniffing | PASS | No tcpdump, no promiscuous mode (tested iter 4) |
 | 2026-04-17 | Secret file mounts in automations | PASS | No secrets mounted into automation containers |
 | 2026-04-17 | **Container resource limits** | **CRITICAL** | No memory, PID, or CPU limits. Fork bomb / OOM can crash the host |
+| 2026-04-17 | Container-manager proxy bypass via Docker socket | PASS | Docker socket removed from gitops. Only proxy socket available |
+| 2026-04-17 | Container-manager proxy bypass via TCP | PASS | Docker TCP (2375) not accessible |
+| 2026-04-17 | Exec into container-manager from proxy | PASS | CM has no workspace label, ownership check blocks exec |
+| 2026-04-17 | Daemon socket exposure from gitops | WARN | Daemon socket still mounted for ingress IPC. Less critical than Docker socket (no container creation) but allows cross-workspace management. Future: switch to HTTP with auth |
 
 ## Active Vulnerabilities
 
