@@ -96,6 +96,9 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Host SSH via gateway | INFO | Port 22 reachable — general host hardening concern, not isolation-specific |
 | 2026-04-17 | Gateway ports 80/443 | OK | Expected — containers need outbound internet access |
 | 2026-04-17 | ARP scanning | INFO | /proc/net/arp readable, reveals IPs on same network (expected for same-stage) |
+| 2026-04-17 | VPN bypass via external Traefik | PASS | Dev container reaches gateway:80/443 but gets 404 — Traefik can't resolve upstreams on stage networks |
+| 2026-04-17 | Stale routes on external Traefik | WARN | Editor/gitops routes persist from pre-fix daemon. Dead (404) but leak service names. Clean with daemon update |
+| 2026-04-17 | Traefik API binding regression | WARN | `ingress init` uses daemon container's binary. If stale, recreates Traefik with 0.0.0.0:9080 |
 
 ## Known Limitations
 
