@@ -412,10 +412,15 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver
 	fmt.Printf("AddRoute: original upstream='%s', processed upstream='%s'\n", upstream, processedUpstream)
 
 	workspaceTarget := isWorkspaceURL(traefikBaseURL)
+	vpnTarget := strings.Contains(traefikBaseURL, "traefik-vpn")
 
 	resolver := ""
 	if len(certResolver) > 0 {
 		resolver = certResolver[0]
+	}
+	// VPN Traefik uses file-based TLS certs, not ACME — never set a cert resolver
+	if vpnTarget {
+		resolver = ""
 	}
 
 	return modifyState(traefikBaseURL, func(state *traefikDynConfig) error {
