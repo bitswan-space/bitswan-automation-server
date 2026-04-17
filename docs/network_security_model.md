@@ -115,6 +115,28 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | resolv.conf writable | INFO | Container can modify its own DNS config. Isolated per-container |
 | 2026-04-17 | mountinfo host paths | INFO | Container ID and Docker storage paths visible. Information disclosure only |
 | 2026-04-17 | Raw packet sockets | PASS | No raw or packet sockets available — ARP spoofing not possible |
+| 2026-04-17 | **Gitops Docker socket — container visibility** | **CRITICAL** | Gitops can list ALL containers on the host via Docker API |
+| 2026-04-17 | **Gitops Docker socket — secret reading** | **CRITICAL** | Gitops can read env vars (including HOST_HOME) from any container |
+| 2026-04-17 | **Gitops Docker socket — network escape** | **CRITICAL** | Gitops can create containers on ANY network, bypassing all stage isolation |
+| 2026-04-17 | **Gitops Docker socket — host filesystem** | **CRITICAL** | Gitops can mount host root filesystem and read /etc/shadow |
+
+## Active Vulnerabilities
+
+### CRITICAL: Gitops Docker Socket = Full Host Access
+The gitops container mounts `/var/run/docker.sock` to orchestrate deployments. This grants it **full Docker API access**, equivalent to root on the host. A compromised gitops container can:
+- Create containers on any network (bypasses stage isolation)
+- Mount the host filesystem (read/write)
+- Read environment variables from any container
+- Kill or modify any container
+
+**Impact:** All network isolation guarantees are void if the gitops container is compromised.
+
+**Mitigation (recommended):**
+- Use a Docker socket proxy (`tecnativa/docker-socket-proxy`) that whitelists only `compose` and `container list` operations
+- Or: Run Docker compose operations via the daemon (which already has the socket) instead of giving gitops direct access
+- Or: Use Docker's `--userns-remap` to limit what the socket can do
+
+**Note:** This is an architectural constraint, not a bug. Gitops needs Docker access to deploy. The risk is accepted as long as gitops itself is hardened (auth, input validation, dependency scanning).
 
 ## Known Limitations
 
