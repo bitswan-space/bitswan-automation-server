@@ -95,10 +95,43 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Create bitswan_vpn_network
+	// 2. Initialize VPN certificate authority (for HTTPS on VPN Traefik)
+	caMgr := vpn.NewCAManager(vpnPath)
+	if err := caMgr.Init("BitSwan"); err != nil {
+		http.Error(w, fmt.Sprintf("failed to initialize VPN CA: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Issue TLS certificate for VPN Traefik (wildcard for all internal services)
+	tlsHostnames := []string{
+		"*.bswn.internal",
+		"bswn.internal",
+	}
+	// Also add the public domain if available, for VPN-internal routes using public hostnames
+	cfg := config.NewAutomationServerConfig()
+	serverConfig, _ := cfg.LoadConfig()
+	if serverConfig != nil && serverConfig.Domain != "" {
+		tlsHostnames = append(tlsHostnames, "*."+serverConfig.Domain, serverConfig.Domain)
+	}
+	tlsCertPath, tlsKeyPath, err := caMgr.IssueTLSCert(tlsHostnames)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to issue VPN TLS cert: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Also install the CA cert into the existing cert authority system so
+	// gitops and other workspace containers trust internal HTTPS.
+	caCertPEM, _ := caMgr.CACertPEM()
+	if len(caCertPEM) > 0 {
+		certAuthDir, _ := getCertAuthoritiesDir()
+		os.WriteFile(filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"), caCertPEM, 0644)
+		installCertificateInDaemon("bitswan-vpn-ca.crt", filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"))
+	}
+
+	// 3. Create bitswan_vpn_network
 	docker.EnsureDockerNetwork("bitswan_vpn_network", true)
 
-	// 3. Start WireGuard container
+	// 4. Start WireGuard container
 	wgCompose, err := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to generate WireGuard compose: %v", err), http.StatusInternalServerError)
@@ -109,11 +142,17 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Write VPN Traefik config
+	// 5. Write VPN Traefik config with TLS
 	os.MkdirAll(vpnTraefikPath, 0755)
 	traefikYml := `entryPoints:
   web:
     address: ":80"
+  websecure:
+    address: ":443"
+tls:
+  certificates:
+    - certFile: /certs/tls.crt
+      keyFile: /certs/tls.key
 api:
   insecure: true
 providers:
@@ -122,8 +161,13 @@ providers:
 `
 	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
 
-	// 5. Start VPN Traefik container
-	vpnTraefikCompose, err := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath)
+	// Host path for certs (VPN CA dir)
+	hostCaDir := filepath.Join(hostVpnPath, "ca")
+	_ = tlsCertPath
+	_ = tlsKeyPath
+
+	// 6. Start VPN Traefik container (with TLS certs mounted)
+	vpnTraefikCompose, err := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath, hostCaDir)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to generate VPN Traefik compose: %v", err), http.StatusInternalServerError)
 		return
@@ -148,9 +192,8 @@ providers:
 		return
 	}
 
-	// 7. Register VPN admin routes on both ingresses
-	cfg := config.NewAutomationServerConfig()
-	serverConfig, _ := cfg.LoadConfig()
+	// 8. Register VPN admin routes on both ingresses
+	// (cfg and serverConfig already loaded above for TLS cert hostnames)
 	if serverConfig == nil || serverConfig.Domain == "" {
 		http.Error(w, "No domain configured. Register with AOC first or set domain in automation_server_config.toml.", http.StatusBadRequest)
 		return

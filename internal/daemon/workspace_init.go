@@ -959,6 +959,27 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 		}
 	}
 
+	// Initialize VPN CA and issue TLS certs for VPN Traefik
+	caMgr := vpn.NewCAManager(vpnPath)
+	if err := caMgr.Init("BitSwan"); err != nil {
+		fmt.Fprintf(writer, "Warning: VPN CA init failed: %v\n", err)
+	}
+	tlsHostnames := []string{"*.bswn.internal", "bswn.internal"}
+	if serverConfig != nil && serverConfig.Domain != "" {
+		tlsHostnames = append(tlsHostnames, "*."+serverConfig.Domain, serverConfig.Domain)
+	}
+	if !caMgr.IsInitialized() {
+		fmt.Fprintf(writer, "Warning: VPN CA not available, skipping TLS cert\n")
+	} else {
+		caMgr.IssueTLSCert(tlsHostnames)
+		// Install CA cert into daemon trust store
+		if caCert, err := caMgr.CACertPEM(); err == nil && len(caCert) > 0 {
+			certAuthDir, _ := getCertAuthoritiesDir()
+			os.WriteFile(filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"), caCert, 0644)
+			installCertificateInDaemon("bitswan-vpn-ca.crt", filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"))
+		}
+	}
+
 	docker.EnsureDockerNetwork("bitswan_vpn_network", verbose)
 
 	wgCompose, _ := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
@@ -967,9 +988,10 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 	}
 
 	os.MkdirAll(vpnTraefikPath, 0755)
-	traefikYml := "entryPoints:\n  web:\n    address: \":80\"\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
+	traefikYml := "entryPoints:\n  web:\n    address: \":80\"\n  websecure:\n    address: \":443\"\ntls:\n  certificates:\n    - certFile: /certs/tls.crt\n      keyFile: /certs/tls.key\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
 	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
-	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath)
+	hostCaDir := filepath.Join(hostVpnPath, "ca")
+	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath, hostCaDir)
 	if vpnTraefikCompose != "" {
 		dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
 	}
