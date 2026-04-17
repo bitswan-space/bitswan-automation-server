@@ -123,6 +123,12 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Secrets dir from automation | PASS | Secrets not in automation mount, not accessible |
 | 2026-04-17 | Live-dev source mount writable | INFO | By design — RW mount for live editing. Can modify automation.toml and Dockerfile |
 | 2026-04-17 | Dockerfile injection via volume | MEDIUM | Compromised dev container can inject malicious Dockerfile for next build. Mitigated by git review before promotion |
+| 2026-04-17 | Gitops API auth on all endpoints | PASS | All endpoints return 401 without valid Bearer token |
+| 2026-04-17 | Path traversal in relative_path | PASS | Returns 404, validate_relative_path blocks ../ |
+| 2026-04-17 | Path traversal in deployment URL | PASS | Returns 404 |
+| 2026-04-17 | Arbitrary deployment_id creation | MEDIUM | Any authenticated caller can create entries in bitswan.yaml with arbitrary IDs. Deploys fail but config is polluted |
+| 2026-04-17 | YAML injection via automation_name | PASS | Special characters properly escaped by YAML library |
+| 2026-04-17 | Auth brute force / rate limiting | WARN | No rate limiting on auth failures. 10 rapid failures, no lockout |
 
 ## Active Vulnerabilities
 
