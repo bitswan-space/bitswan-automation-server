@@ -129,6 +129,12 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Arbitrary deployment_id creation | MEDIUM | Any authenticated caller can create entries in bitswan.yaml with arbitrary IDs. Deploys fail but config is polluted |
 | 2026-04-17 | YAML injection via automation_name | PASS | Special characters properly escaped by YAML library |
 | 2026-04-17 | Auth brute force / rate limiting | **FIXED** | Added: 10 failures/60s per IP → 429. Warning at 5 failures broadcasts SSE to editor |
+| 2026-04-17 | Endpoint spray detection | **FIXED** | Added: 20 404s/60s per IP → blocked 5 min. Warning at 10. SSE to editor |
+| 2026-04-17 | DNS poisoning (hostname change) | PASS | sethostname: Operation not permitted |
+| 2026-04-17 | Port impersonation on dev network | INFO | Containers can listen on any port — inherent to shared network model |
+| 2026-04-17 | Passive traffic sniffing | PASS | No tcpdump, no promiscuous mode (tested iter 4) |
+| 2026-04-17 | Secret file mounts in automations | PASS | No secrets mounted into automation containers |
+| 2026-04-17 | **Container resource limits** | **CRITICAL** | No memory, PID, or CPU limits. Fork bomb / OOM can crash the host |
 
 ## Active Vulnerabilities
 
@@ -147,6 +153,22 @@ The gitops container mounts `/var/run/docker.sock` to orchestrate deployments. T
 - Or: Use Docker's `--userns-remap` to limit what the socket can do
 
 **Note:** This is an architectural constraint, not a bug. Gitops needs Docker access to deploy. The risk is accepted as long as gitops itself is hardened (auth, input validation, dependency scanning).
+
+### CRITICAL: No Container Resource Limits
+Automation containers have no memory, PID, or CPU limits. A compromised or buggy container can:
+- Fork bomb (infinite processes → host unresponsive)
+- OOM (allocate all memory → other containers killed by OOM killer)
+- CPU exhaust (mine crypto → starve other workspaces)
+
+**Remediation:** Add default resource limits to `generate_docker_compose()`:
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 2G
+      cpus: "2.0"
+      pids: 256
+```
 
 ## Known Limitations
 
