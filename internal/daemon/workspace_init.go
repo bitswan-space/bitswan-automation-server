@@ -91,13 +91,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	// Start workspace sub-Traefik connected to all stage networks.
 	// This enables two-tier routing: VPN/platform Traefik → sub-Traefik → stage-network containers.
-	subTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName, "traefik")
+	wsHome := os.Getenv("HOME")
+	wsHostHome := os.Getenv("HOST_HOME")
+	subTraefikPath := filepath.Join(wsHome, ".config", "bitswan", "workspaces", workspaceName, "traefik")
 	os.MkdirAll(subTraefikPath, 0755)
 	subTraefikYml := "entryPoints:\n  web:\n    address: \":80\"\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
 	os.WriteFile(filepath.Join(subTraefikPath, "traefik.yml"), []byte(subTraefikYml), 0644)
 	hostSubTraefikPath := subTraefikPath
-	if hostHomeDir != "" && homeDir != hostHomeDir {
-		hostSubTraefikPath = strings.Replace(subTraefikPath, homeDir, hostHomeDir, 1)
+	if wsHostHome != "" && wsHome != wsHostHome {
+		hostSubTraefikPath = strings.Replace(subTraefikPath, wsHome, wsHostHome, 1)
 	}
 	subTraefikCompose, _ := dockercompose.CreateWorkspaceTraefikDockerComposeFile(
 		workspaceName, hostSubTraefikPath, *domain, stageNetworks,
