@@ -115,10 +115,7 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | resolv.conf writable | INFO | Container can modify its own DNS config. Isolated per-container |
 | 2026-04-17 | mountinfo host paths | INFO | Container ID and Docker storage paths visible. Information disclosure only |
 | 2026-04-17 | Raw packet sockets | PASS | No raw or packet sockets available — ARP spoofing not possible |
-| 2026-04-17 | **Gitops Docker socket — container visibility** | **CRITICAL** | Gitops can list ALL containers on the host via Docker API |
-| 2026-04-17 | **Gitops Docker socket — secret reading** | **CRITICAL** | Gitops can read env vars (including HOST_HOME) from any container |
-| 2026-04-17 | **Gitops Docker socket — network escape** | **CRITICAL** | Gitops can create containers on ANY network, bypassing all stage isolation |
-| 2026-04-17 | **Gitops Docker socket — host filesystem** | **CRITICAL** | Gitops can mount host root filesystem and read /etc/shadow |
+| 2026-04-17 | Gitops Docker socket — all 4 vectors | **FIXED** | Container-manager proxy: workspace-scoped, blocks host mounts, blocks cross-workspace access |
 | 2026-04-17 | Volume mount traversal | PASS | `../` from /app stays in container root, cannot reach host |
 | 2026-04-17 | Secrets dir from automation | PASS | Secrets not in automation mount, not accessible |
 | 2026-04-17 | Live-dev source mount writable | INFO | By design — RW mount for live editing. Can modify automation.toml and Dockerfile |
@@ -138,21 +135,16 @@ _This section is updated automatically by the security test cron._
 
 ## Active Vulnerabilities
 
-### CRITICAL: Gitops Docker Socket = Full Host Access
-The gitops container mounts `/var/run/docker.sock` to orchestrate deployments. This grants it **full Docker API access**, equivalent to root on the host. A compromised gitops container can:
-- Create containers on any network (bypasses stage isolation)
-- Mount the host filesystem (read/write)
-- Read environment variables from any container
-- Kill or modify any container
+### FIXED: Gitops Docker Socket → Container Manager Proxy
+Gitops no longer has direct Docker socket access. A per-workspace `container-manager` sidecar proxies Docker API requests and enforces:
+- Container operations filtered to `gitops.workspace={workspace}` label
+- Container creation only allowed from this workspace's compose project
+- Host mounts (`/`, `/etc`, `/root`, `docker.sock`) blocked
+- Network mode `host`/`none` blocked
+- Network create/connect/disconnect blocked
+- Docker socket mounted read-only on the proxy
 
-**Impact:** All network isolation guarantees are void if the gitops container is compromised.
-
-**Mitigation (recommended):**
-- Use a Docker socket proxy (`tecnativa/docker-socket-proxy`) that whitelists only `compose` and `container list` operations
-- Or: Run Docker compose operations via the daemon (which already has the socket) instead of giving gitops direct access
-- Or: Use Docker's `--userns-remap` to limit what the socket can do
-
-**Note:** This is an architectural constraint, not a bug. Gitops needs Docker access to deploy. The risk is accepted as long as gitops itself is hardened (auth, input validation, dependency scanning).
+In K8s, the container-manager becomes a sidecar with namespace-scoped ServiceAccount.
 
 ### CRITICAL: No Container Resource Limits
 Automation containers have no memory, PID, or CPU limits. A compromised or buggy container can:
