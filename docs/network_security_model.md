@@ -99,6 +99,10 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | VPN bypass via external Traefik | PASS | Dev container reaches gateway:80/443 but gets 404 — Traefik can't resolve upstreams on stage networks |
 | 2026-04-17 | Stale routes on external Traefik | WARN | Editor/gitops routes persist from pre-fix daemon. Dead (404) but leak service names. Clean with daemon update |
 | 2026-04-17 | Traefik API binding regression | WARN | `ingress init` uses daemon container's binary. If stale, recreates Traefik with 0.0.0.0:9080 |
+| 2026-04-17 | **Cloud metadata (169.254.169.254)** | **FIXED** | Dev containers could read Hetzner metadata (hostname, SSH keys, network config). Fixed: iptables DROP in DOCKER-USER chain |
+| 2026-04-17 | Container env var secrets | PASS | No secrets in /proc/1/environ. No secret leakage from orchestrator |
+| 2026-04-17 | Docker socket variants | PASS | No docker.sock, run/docker.sock, or bitswan socket in dev containers |
+| 2026-04-17 | Host filesystem mount | PASS | No /host mount. Standard overlay filesystem only |
 
 ## Known Limitations
 
