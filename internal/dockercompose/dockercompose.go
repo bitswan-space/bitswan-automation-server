@@ -76,16 +76,35 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsSecretToken = uniuri.NewLen(64)
 	}
 
+	// Container manager sidecar: workspace-scoped Docker socket proxy.
+	// Gitops talks to this instead of the real Docker socket.
+	composeProject := strings.ToLower(config.WorkspaceName) + "-site"
+	containerManagerService := map[string]interface{}{
+		"image":          "bitswan/container-manager:latest",
+		"restart":        "always",
+		"container_name": config.WorkspaceName + "-container-manager",
+		"networks":       []string{"bitswan_network"},
+		"volumes": []string{
+			"/var/run/docker.sock:/var/run/docker.sock:ro",
+			"/var/run/bitswan:/var/run/bitswan",
+		},
+		"environment": []string{
+			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
+			"BITSWAN_COMPOSE_PROJECT=" + composeProject,
+		},
+	}
+
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
 		"networks": []string{"bitswan_network"},
+		"depends_on": []string{"container-manager"},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
-			"/var/run/docker.sock:/var/run/docker.sock",
+			// No Docker socket — use container-manager proxy instead
 			"/var/run/bitswan:/var/run/bitswan",
 		},
 		"environment": []string{
@@ -96,6 +115,8 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 			"BITSWAN_STAGE_NETWORKS=true",
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
+			// Docker operations go through the container-manager proxy
+			"DOCKER_HOST=unix:///var/run/bitswan/container-manager.sock",
 		},
 	}
 
@@ -166,7 +187,8 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",
 		"services": map[string]interface{}{
-			"bitswan-gitops": gitopsService,
+			"bitswan-gitops":    gitopsService,
+			"container-manager": containerManagerService,
 		},
 		"networks": map[string]interface{}{
 			"bitswan_network": map[string]interface{}{
