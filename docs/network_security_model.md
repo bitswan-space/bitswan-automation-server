@@ -103,6 +103,18 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Container env var secrets | PASS | No secrets in /proc/1/environ. No secret leakage from orchestrator |
 | 2026-04-17 | Docker socket variants | PASS | No docker.sock, run/docker.sock, or bitswan socket in dev containers |
 | 2026-04-17 | Host filesystem mount | PASS | No /host mount. Standard overlay filesystem only |
+| 2026-04-17 | /proc/sysrq-trigger | PASS | Read-only filesystem, permission denied |
+| 2026-04-17 | cgroup escape (release_agent) | PASS | cgroup2 mounted read-only, cannot write notify_on_release |
+| 2026-04-17 | IP address manipulation | PASS | RTNETLINK operation not permitted — no NET_ADMIN |
+| 2026-04-17 | Promiscuous mode | PASS | ioctl blocked — cannot sniff traffic |
+| 2026-04-17 | Route injection | PASS | RTNETLINK blocked — cannot redirect traffic |
+| 2026-04-17 | nsenter host namespace | PASS | setns() operation not permitted |
+| 2026-04-17 | Kernel module loading | PASS | No /lib/modules, insmod blocked |
+| 2026-04-17 | Block device access | PASS | No /dev/sd*, /dev/vd*, /dev/dm-* |
+| 2026-04-17 | /proc/1/root symlink | INFO | Reads container's own files only (not host). Container ID visible |
+| 2026-04-17 | resolv.conf writable | INFO | Container can modify its own DNS config. Isolated per-container |
+| 2026-04-17 | mountinfo host paths | INFO | Container ID and Docker storage paths visible. Information disclosure only |
+| 2026-04-17 | Raw packet sockets | PASS | No raw or packet sockets available — ARP spoofing not possible |
 
 ## Known Limitations
 
