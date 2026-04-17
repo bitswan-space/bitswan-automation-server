@@ -119,6 +119,10 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | **Gitops Docker socket — secret reading** | **CRITICAL** | Gitops can read env vars (including HOST_HOME) from any container |
 | 2026-04-17 | **Gitops Docker socket — network escape** | **CRITICAL** | Gitops can create containers on ANY network, bypassing all stage isolation |
 | 2026-04-17 | **Gitops Docker socket — host filesystem** | **CRITICAL** | Gitops can mount host root filesystem and read /etc/shadow |
+| 2026-04-17 | Volume mount traversal | PASS | `../` from /app stays in container root, cannot reach host |
+| 2026-04-17 | Secrets dir from automation | PASS | Secrets not in automation mount, not accessible |
+| 2026-04-17 | Live-dev source mount writable | INFO | By design — RW mount for live editing. Can modify automation.toml and Dockerfile |
+| 2026-04-17 | Dockerfile injection via volume | MEDIUM | Compromised dev container can inject malicious Dockerfile for next build. Mitigated by git review before promotion |
 
 ## Active Vulnerabilities
 
