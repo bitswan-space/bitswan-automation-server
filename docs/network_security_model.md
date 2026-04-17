@@ -89,10 +89,16 @@ _This section is updated automatically by the security test cron._
 
 | Date | Test | Result | Notes |
 |------|------|--------|-------|
-| — | — | — | No tests run yet |
+| 2026-04-17 | DNS cross-network leak | PASS | Docker DNS returns SERVFAIL for all cross-network queries |
+| 2026-04-17 | Docker API exposure (2375/2376) | PASS | Ports closed, socket not mounted in automations |
+| 2026-04-17 | host.docker.internal | PASS | Not resolvable from dev containers |
+| 2026-04-17 | **Traefik API via gateway** | **FIXED** | Dev containers could read all routers via gateway:9080. Fixed: bound to 127.0.0.1 |
+| 2026-04-17 | Host SSH via gateway | WARN | Port 22 reachable from containers via gateway. Mitigate with host firewall rules |
+| 2026-04-17 | ARP scanning | INFO | /proc/net/arp readable, reveals IPs on same network (expected for same-stage) |
 
 ## Known Limitations
 
 - Docker network limit: ~30 networks per host (3 per workspace = ~8-9 workspaces max)
 - No mTLS between containers on the same network (trust boundary is the network)
 - WireGuard session monitoring relies on iptables LOG + polling, not kernel-level hooks
+I w
