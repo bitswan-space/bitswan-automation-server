@@ -709,7 +709,8 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 	}
 
 	if target == "internal" || target == "both" {
-		if err := addRouteVPNTraefik(req); err != nil {
+		workspaceName := resolveWorkspaceName(req, jwtToken)
+		if err := addRouteVPNTraefik(req, workspaceName); err != nil {
 			errs = append(errs, fmt.Errorf("vpn ingress: %w", err))
 		}
 	}
@@ -721,11 +722,32 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 }
 
 // addRouteVPNTraefik adds a route to the VPN-internal Traefik instance.
-func addRouteVPNTraefik(req IngressAddRouteRequest) error {
+// If a workspace sub-traefik is running, uses two-tier routing
+// (VPN Traefik → sub-traefik → container) so traffic can cross network boundaries.
+func addRouteVPNTraefik(req IngressAddRouteRequest, workspaceName string) error {
 	vpnTraefikURL := os.Getenv("BITSWAN_VPN_TRAEFIK_HOST")
 	if vpnTraefikURL == "" {
 		vpnTraefikURL = "http://traefik-vpn:8080"
 	}
+
+	// If workspace has a sub-traefik, use two-tier routing:
+	// VPN Traefik → workspace sub-traefik → container
+	// The sub-traefik is multi-homed (on bitswan_network + stage networks),
+	// so it can reach containers on stage networks that VPN Traefik cannot.
+	if workspaceName != "" && isWorkspaceTraefikRunning(workspaceName) {
+		workspaceTraefikURL := traefikapi.GetWorkspaceTraefikBaseURL(workspaceName)
+
+		// Add plain HTTP route at workspace sub-traefik: hostname → container
+		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, workspaceTraefikURL); err != nil {
+			return fmt.Errorf("failed to add route to workspace sub-traefik: %w", err)
+		}
+
+		// Add route at VPN Traefik: hostname → workspace sub-traefik
+		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
+		return traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, vpnTraefikURL)
+	}
+
+	// No sub-traefik — direct routing (works for services on bitswan_network)
 	return traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, vpnTraefikURL)
 }
 
