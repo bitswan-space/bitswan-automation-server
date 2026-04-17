@@ -128,7 +128,7 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Path traversal in deployment URL | PASS | Returns 404 |
 | 2026-04-17 | Arbitrary deployment_id creation | MEDIUM | Any authenticated caller can create entries in bitswan.yaml with arbitrary IDs. Deploys fail but config is polluted |
 | 2026-04-17 | YAML injection via automation_name | PASS | Special characters properly escaped by YAML library |
-| 2026-04-17 | Auth brute force / rate limiting | WARN | No rate limiting on auth failures. 10 rapid failures, no lockout |
+| 2026-04-17 | Auth brute force / rate limiting | **FIXED** | Added: 10 failures/60s per IP → 429. Warning at 5 failures broadcasts SSE to editor |
 
 ## Active Vulnerabilities
 
