@@ -136,6 +136,10 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Container-manager proxy bypass via TCP | PASS | Docker TCP (2375) not accessible |
 | 2026-04-17 | Exec into container-manager from proxy | PASS | CM has no workspace label, ownership check blocks exec |
 | 2026-04-17 | Daemon socket exposure from gitops | WARN | Daemon socket still mounted for ingress IPC. Less critical than Docker socket (no container creation) but allows cross-workspace management. Future: switch to HTTP with auth |
+| 2026-04-17 | Proxy bypass via API version prefix | PASS | /v1.44/, /v1.52/ all correctly caught by suffix matching |
+| 2026-04-17 | Proxy bypass via URL encoding | PASS | %63reate not interpreted as create |
+| 2026-04-17 | Proxy bypass via double-slash | PASS | //containers/create blocked |
+| 2026-04-17 | **Capability smuggling via compose** | **FIXED** | cap_add: [ALL] through compose was allowed. Fixed: proxy blocks ALL, SYS_ADMIN, SYS_PTRACE, SYS_MODULE, NET_ADMIN, etc. |
 
 ## Active Vulnerabilities
 
