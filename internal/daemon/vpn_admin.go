@@ -51,6 +51,19 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Disposition", "attachment; filename=wireguard.conf")
 		w.Write(conf)
 
+	case r.URL.Path == "/vpn-admin/ca.crt":
+		// Download the VPN CA certificate for trusting internal HTTPS
+		homeDir, _ := os.UserHomeDir()
+		caMgr := vpn.NewCAManager(filepath.Join(homeDir, ".config", "bitswan", "vpn"))
+		caCert, err := caMgr.CACertPEM()
+		if err != nil || len(caCert) == 0 {
+			http.Error(w, "VPN CA certificate not available", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Header().Set("Content-Disposition", "attachment; filename=bitswan-vpn-ca.crt")
+		w.Write(caCert)
+
 	case strings.HasPrefix(r.URL.Path, "/vpn-admin/claim/"):
 		// Magic link claim: validate token, generate credentials
 		token := strings.TrimPrefix(r.URL.Path, "/vpn-admin/claim/")
@@ -143,6 +156,20 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
+	case r.URL.Path == "/vpn-admin-internal/ca.crt":
+		// Download the VPN CA certificate
+		homeDir, _ := os.UserHomeDir()
+		caMgr := vpn.NewCAManager(filepath.Join(homeDir, ".config", "bitswan", "vpn"))
+		caCert, err := caMgr.CACertPEM()
+		if err != nil || len(caCert) == 0 {
+			http.Error(w, "VPN CA certificate not available", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Header().Set("Content-Disposition", "attachment; filename=bitswan-vpn-ca.crt")
+		w.Write(caCert)
+		return
+
 	case r.URL.Path == "/vpn-admin-internal/api/users":
 		mgr := vpnManager()
 		users, _ := mgr.ListDevices()
@@ -197,6 +224,21 @@ button:hover { background: #1557b0; }
 <input type="text" id="token-input" placeholder="Paste your token here" style="width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:4px;">
 <button onclick="claimToken()">Get VPN Config</button>
 </div>
+<div class="card">
+<h2>Trust Internal HTTPS</h2>
+<p>To avoid browser certificate warnings for internal services, install the BitSwan VPN CA certificate.</p>
+<button onclick="downloadCA()" style="background:#34a853;">Download CA Certificate</button>
+<details style="margin-top:12px;">
+<summary class="note" style="cursor:pointer;">Installation instructions</summary>
+<div style="margin-top:8px;font-size:13px;">
+<p><b>macOS:</b> Double-click the .crt file, add to Keychain, then trust it (Always Trust).</p>
+<p><b>Windows:</b> Double-click the .crt, Install Certificate → Local Machine → Trusted Root Certification Authorities.</p>
+<p><b>Linux:</b> <code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates</code></p>
+<p><b>Firefox:</b> Settings → Privacy & Security → View Certificates → Import.</p>
+<p><b>Corporate CA:</b> If your organization uses its own CA, upload it via the cert authority API.</p>
+</div>
+</details>
+</div>
 <script>
 function bootstrap() {
   fetch('/vpn-admin/bootstrap', {method:'POST'})
@@ -211,6 +253,9 @@ function claimToken() {
     .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
     .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'wireguard.conf'; a.click(); })
     .catch(e => alert(e.message));
+}
+function downloadCA() {
+  const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = 'bitswan-vpn-ca.crt'; a.click();
 }
 </script></body></html>`
 }

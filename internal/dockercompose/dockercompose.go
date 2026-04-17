@@ -309,9 +309,15 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 // CreateVPNTraefikDockerComposeFile creates a docker-compose file for the VPN-internal Traefik.
 // It has no host ports — only reachable from VPN clients via the WireGuard server.
 // traefikPath: path to the VPN traefik config directory (e.g., ~/.config/bitswan/traefik-vpn)
-func CreateVPNTraefikDockerComposeFile(traefikPath string) (string, error) {
+func CreateVPNTraefikDockerComposeFile(traefikPath string, certDirs ...string) (string, error) {
 	traefikVolumes := []string{
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+	}
+	// Mount CA cert directory for TLS if provided
+	for _, certDir := range certDirs {
+		if certDir != "" {
+			traefikVolumes = append(traefikVolumes, certDir+":/certs:ro")
+		}
 	}
 
 	dockerCompose := map[string]interface{}{
