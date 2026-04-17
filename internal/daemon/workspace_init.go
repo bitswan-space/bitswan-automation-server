@@ -71,6 +71,14 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	// Init bitswan network
 	docker.EnsureDockerNetwork("bitswan_network", *verbose)
 
+	// Block container access to cloud metadata service (169.254.169.254).
+	// Without this, any container can read instance metadata including SSH keys.
+	blockMetadataCmd := exec.Command("iptables", "-C", "DOCKER-USER", "-d", "169.254.169.254", "-j", "DROP")
+	if blockMetadataCmd.Run() != nil {
+		// Rule doesn't exist yet — add it
+		exec.Command("iptables", "-I", "DOCKER-USER", "-d", "169.254.169.254", "-j", "DROP").Run()
+	}
+
 	// Create per-workspace stage networks for isolation
 	stageNetworks := []string{
 		workspaceName + "-dev",
