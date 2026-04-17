@@ -67,7 +67,7 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		if r.Method == http.MethodGet {
 			// Show confirmation page
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprintf(w, vpnAdminClaimHTML(token))
+			fmt.Fprint(w, vpnAdminClaimHTML(token))
 			return
 		}
 
