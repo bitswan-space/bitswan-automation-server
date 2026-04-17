@@ -270,5 +270,32 @@ func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 		return false
 	}
 
+	// Block dangerous capabilities
+	var hostConfig struct {
+		CapAdd     []string `json:"CapAdd"`
+		Privileged bool     `json:"Privileged"`
+	}
+	// Re-parse for HostConfig fields the initial struct may have missed
+	var fullReq map[string]interface{}
+	json.Unmarshal(body, &fullReq)
+	if hc, ok := fullReq["HostConfig"].(map[string]interface{}); ok {
+		if priv, ok := hc["Privileged"].(bool); ok && priv {
+			log.Printf("BLOCKED: privileged container")
+			return false
+		}
+		if caps, ok := hc["CapAdd"].([]interface{}); ok {
+			for _, cap := range caps {
+				capStr, _ := cap.(string)
+				if capStr == "ALL" || capStr == "SYS_ADMIN" || capStr == "SYS_PTRACE" ||
+					capStr == "SYS_MODULE" || capStr == "DAC_READ_SEARCH" ||
+					capStr == "NET_ADMIN" || capStr == "SYS_RAWIO" {
+					log.Printf("BLOCKED: dangerous capability %s", capStr)
+					return false
+				}
+			}
+		}
+	}
+	_ = hostConfig
+
 	return true
 }
