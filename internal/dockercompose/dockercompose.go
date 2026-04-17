@@ -36,6 +36,15 @@ type DockerComposeConfig struct {
 	KeycloakURL        string // Keycloak base URL for authentication
 }
 
+// isVPNEnabled returns "true" if the VPN marker file exists, "false" otherwise.
+func isVPNEnabled(homeDir string) string {
+	_, err := os.Stat(filepath.Join(homeDir, ".config", "bitswan", "vpn", "enabled"))
+	if err == nil {
+		return "true"
+	}
+	return "false"
+}
+
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
 func (config *DockerComposeConfig) CreateDockerComposeFile() (string, string, error) {
 	return config.CreateDockerComposeFileWithSecret("")
@@ -121,6 +130,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 			"BITSWAN_STAGE_NETWORKS=true",
+			"BITSWAN_VPN_ENABLED=" + isVPNEnabled(homeDir),
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
 			// Docker operations go through the container-manager proxy
 			"DOCKER_HOST=unix://" + cmSocketDir + "/container-manager.sock",
