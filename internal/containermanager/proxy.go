@@ -113,9 +113,10 @@ func (p *Proxy) handleRequest(w http.ResponseWriter, r *http.Request, proxy *htt
 	}
 
 	// Validate: container-specific operations — check ownership
-	if p.isContainerOperation(path) && r.Method != "GET" {
+	// Skip for /containers/create (handled by isAllowedCreate above)
+	if p.isContainerOperation(path) && r.Method != "GET" && !strings.HasSuffix(path, "/containers/create") {
 		containerID := p.extractContainerID(path)
-		if containerID != "" && !p.isContainerInWorkspace(containerID) {
+		if containerID != "" && containerID != "create" && !p.isContainerInWorkspace(containerID) {
 			log.Printf("BLOCKED: operation on non-workspace container %s — %s %s",
 				containerID, r.Method, path)
 			http.Error(w, `{"message":"container does not belong to this workspace"}`, http.StatusForbidden)
