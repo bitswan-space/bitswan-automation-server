@@ -79,6 +79,10 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	// Container manager sidecar: workspace-scoped Docker socket proxy.
 	// Gitops talks to this instead of the real Docker socket.
 	composeProject := strings.ToLower(config.WorkspaceName) + "-site"
+	// Container manager gets its own socket directory so it doesn't
+	// share /var/run/bitswan/ with the daemon socket (which would
+	// let gitops bypass the proxy via the daemon).
+	cmSocketDir := "/var/run/bitswan-cm-" + config.WorkspaceName
 	containerManagerService := map[string]interface{}{
 		"image":          "bitswan/container-manager:latest",
 		"restart":        "always",
@@ -86,11 +90,12 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		"networks":       []string{"bitswan_network"},
 		"volumes": []string{
 			"/var/run/docker.sock:/var/run/docker.sock:ro",
-			"/var/run/bitswan:/var/run/bitswan",
+			cmSocketDir + ":" + cmSocketDir,
 		},
 		"environment": []string{
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 			"BITSWAN_COMPOSE_PROJECT=" + composeProject,
+			"CONTAINER_MANAGER_SOCKET=" + cmSocketDir + "/container-manager.sock",
 		},
 	}
 
@@ -104,8 +109,10 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
-			// No Docker socket — use container-manager proxy instead
-			"/var/run/bitswan:/var/run/bitswan",
+			// Container-manager socket for Docker operations
+			cmSocketDir + ":" + cmSocketDir + ":ro",
+			// Daemon socket for ingress route registration (read-only)
+			"/var/run/bitswan:/var/run/bitswan:ro",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
@@ -116,7 +123,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_STAGE_NETWORKS=true",
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
 			// Docker operations go through the container-manager proxy
-			"DOCKER_HOST=unix:///var/run/bitswan/container-manager.sock",
+			"DOCKER_HOST=unix://" + cmSocketDir + "/container-manager.sock",
 		},
 	}
 
