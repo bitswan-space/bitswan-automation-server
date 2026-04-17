@@ -93,7 +93,8 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Docker API exposure (2375/2376) | PASS | Ports closed, socket not mounted in automations |
 | 2026-04-17 | host.docker.internal | PASS | Not resolvable from dev containers |
 | 2026-04-17 | **Traefik API via gateway** | **FIXED** | Dev containers could read all routers via gateway:9080. Fixed: bound to 127.0.0.1 |
-| 2026-04-17 | Host SSH via gateway | WARN | Port 22 reachable from containers via gateway. Mitigate with host firewall rules |
+| 2026-04-17 | Host SSH via gateway | INFO | Port 22 reachable — general host hardening concern, not isolation-specific |
+| 2026-04-17 | Gateway ports 80/443 | OK | Expected — containers need outbound internet access |
 | 2026-04-17 | ARP scanning | INFO | /proc/net/arp readable, reveals IPs on same network (expected for same-stage) |
 
 ## Known Limitations
