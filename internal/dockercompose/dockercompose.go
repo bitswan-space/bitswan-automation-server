@@ -259,7 +259,7 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 				"image":          "traefik:v3.6",
 				"restart":        "always",
 				"container_name": "traefik",
-				"ports":          []string{"80:80", "443:443", "9080:8080"},
+				"ports":          []string{"80:80", "443:443", "127.0.0.1:9080:8080"},
 				"networks":       traefikNetworks,
 				"volumes":        traefikVolumes,
 			},
