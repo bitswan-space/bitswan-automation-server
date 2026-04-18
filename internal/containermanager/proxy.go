@@ -100,6 +100,20 @@ func (p *Proxy) handleRequest(w http.ResponseWriter, r *http.Request, proxy *htt
 		return
 	}
 
+	// Block: container export (dumps entire filesystem, may contain secrets)
+	if strings.Contains(path, "/export") && r.Method == "GET" {
+		log.Printf("BLOCKED: container export — %s", path)
+		http.Error(w, `{"message":"container export not allowed through proxy"}`, http.StatusForbidden)
+		return
+	}
+
+	// Block: container commit (creates image from running container — could capture secrets)
+	if strings.Contains(path, "/commit") && r.Method == "POST" {
+		log.Printf("BLOCKED: container commit — %s", path)
+		http.Error(w, `{"message":"container commit not allowed through proxy"}`, http.StatusForbidden)
+		return
+	}
+
 	// --- FILTERED OPERATIONS ---
 
 	// Filter: container list — inject workspace label filter
