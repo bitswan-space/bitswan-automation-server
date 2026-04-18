@@ -470,6 +470,8 @@ func CreateWireGuardDockerComposeFile(vpnPath string, listenPort int) (string, e
 func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain string, networks []string) (string, error) {
 	traefikVolumes := []string{
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		// Mount the dynamic config directory for the file provider
+		traefikPath + ":/dynamic:ro",
 	}
 
 	traefikNetworks := []string{"bitswan_network"}

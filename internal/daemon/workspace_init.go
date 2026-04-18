@@ -95,7 +95,11 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	wsHostHome := os.Getenv("HOST_HOME")
 	subTraefikPath := filepath.Join(wsHome, ".config", "bitswan", "workspaces", workspaceName, "traefik")
 	os.MkdirAll(subTraefikPath, 0755)
-	subTraefikYml := "entryPoints:\n  web:\n    address: \":80\"\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
+	// Use file provider instead of REST API to prevent dev containers from
+	// reading the Traefik API (the API port 8080 is reachable from stage networks).
+	subTraefikYml := "entryPoints:\n  web:\n    address: \":80\"\nproviders:\n  file:\n    filename: /dynamic/rest-state.json\n    watch: true\n"
+	// Ensure the dynamic config file exists so Traefik doesn't error on startup
+	os.WriteFile(filepath.Join(subTraefikPath, "rest-state.json"), []byte("{}"), 0644)
 	os.WriteFile(filepath.Join(subTraefikPath, "traefik.yml"), []byte(subTraefikYml), 0644)
 	hostSubTraefikPath := subTraefikPath
 	if wsHostHome != "" && wsHome != wsHostHome {
