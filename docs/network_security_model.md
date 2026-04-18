@@ -169,6 +169,15 @@ _This section is updated automatically by the security test cron._
 | 2026-04-18 | Coding agent → dev containers | PASS | Different networks. Connection timed out. |
 | 2026-04-18 | Coding agent symlink escape via bind mount | MEDIUM | Agent can create symlinks in /workspace/worktrees that point to host paths. Symlinks resolve in container namespace for the agent, but on host filesystem for gitops/other readers. Mitigated: agent is trusted, gitops runs as user1000. |
 | 2026-04-18 | **Daemon VPN destroy via socket** | **FIXED** | Gitops could call /vpn/destroy via Unix socket without auth. Fixed: destructive VPN endpoints (/vpn/init, /credentials, /revoke, /magic-link, /destroy) now require strictAuthMiddleware — token required even over socket. |
+| 2026-04-18 | Exec on non-workspace containers | PASS | Container-manager blocks exec on traefik, daemon (no workspace label) |
+| 2026-04-18 | **PidMode host via proxy** | **FIXED** | Container-manager allowed PidMode:host. Fixed: proxy now blocks host PID/IPC/UTS namespace modes |
+| 2026-04-18 | **Sensitive mount via proxy** | **FIXED** | Proxy only blocked exact /root, /etc. Mounting /root/.config/bitswan/vpn/ca leaked CA key. Fixed: prefix-based blocking for /root/*, /etc/*, /proc/*, /sys/*, /dev/*, /var/run/docker/*, /var/run/bitswan/* |
+| 2026-04-18 | Container list filter bypass | PASS | Proxy injects workspace label filter — only workspace containers visible |
+| 2026-04-18 | YAML bomb via API | PASS | Returns 404 (path validation) |
+| 2026-04-18 | Very long deployment_id | INFO | Returns 200 (empty container list, no crash). Consider adding length limit. |
+| 2026-04-18 | Null bytes in deployment_id | PASS | Returns 404 |
+| 2026-04-18 | Network connect via proxy | PASS | All /networks/ mutations blocked (403) |
+| 2026-04-18 | Container env var injection | PASS | Proxy allows env vars (by design — compose sets them), but sensitive mounts now blocked |
 
 ## Active Vulnerabilities
 
