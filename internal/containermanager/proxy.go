@@ -254,12 +254,20 @@ func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 		return false
 	}
 
-	// Block dangerous host mounts
+	// Block dangerous host mounts — check for sensitive path prefixes, not just exact matches
 	for _, bind := range createReq.HostConfig.Binds {
 		src := strings.Split(bind, ":")[0]
-		if src == "/" || src == "/etc" || src == "/root" || src == "/var/run/docker.sock" {
+		if src == "/" || src == "/var/run/docker.sock" {
 			log.Printf("BLOCKED: dangerous host mount %s", bind)
 			return false
+		}
+		// Block mounts under sensitive directories
+		for _, prefix := range []string{"/etc", "/root", "/proc", "/sys", "/dev",
+			"/var/run/docker", "/var/run/bitswan"} {
+			if src == prefix || strings.HasPrefix(src, prefix+"/") {
+				log.Printf("BLOCKED: sensitive host mount %s (matches %s)", bind, prefix)
+				return false
+			}
 		}
 	}
 
@@ -270,17 +278,25 @@ func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 		return false
 	}
 
-	// Block dangerous capabilities
-	var hostConfig struct {
-		CapAdd     []string `json:"CapAdd"`
-		Privileged bool     `json:"Privileged"`
-	}
-	// Re-parse for HostConfig fields the initial struct may have missed
+	// Block dangerous capabilities, privileged mode, and PID/IPC/UTS modes
 	var fullReq map[string]interface{}
 	json.Unmarshal(body, &fullReq)
 	if hc, ok := fullReq["HostConfig"].(map[string]interface{}); ok {
 		if priv, ok := hc["Privileged"].(bool); ok && priv {
 			log.Printf("BLOCKED: privileged container")
+			return false
+		}
+		// Block host PID/IPC/UTS namespace sharing
+		if pidMode, ok := hc["PidMode"].(string); ok && pidMode == "host" {
+			log.Printf("BLOCKED: PidMode host")
+			return false
+		}
+		if ipcMode, ok := hc["IpcMode"].(string); ok && ipcMode == "host" {
+			log.Printf("BLOCKED: IpcMode host")
+			return false
+		}
+		if utsMode, ok := hc["UTSMode"].(string); ok && utsMode == "host" {
+			log.Printf("BLOCKED: UTSMode host")
 			return false
 		}
 		if caps, ok := hc["CapAdd"].([]interface{}); ok {
@@ -295,7 +311,6 @@ func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 			}
 		}
 	}
-	_ = hostConfig
 
 	return true
 }
