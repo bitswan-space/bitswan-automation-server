@@ -131,7 +131,7 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Port impersonation on dev network | INFO | Containers can listen on any port — inherent to shared network model |
 | 2026-04-17 | Passive traffic sniffing | PASS | No tcpdump, no promiscuous mode (tested iter 4) |
 | 2026-04-17 | Secret file mounts in automations | PASS | No secrets mounted into automation containers |
-| 2026-04-17 | **Container resource limits** | **CRITICAL** | No memory, PID, or CPU limits. Fork bomb / OOM can crash the host |
+| 2026-04-17 | **Container resource limits** | **FIXED** | Added: memory=2G, cpus=2.0, pids=512 default limits on all automation containers |
 | 2026-04-17 | Container-manager proxy bypass via Docker socket | PASS | Docker socket removed from gitops. Only proxy socket available |
 | 2026-04-17 | Container-manager proxy bypass via TCP | PASS | Docker TCP (2375) not accessible |
 | 2026-04-17 | Exec into container-manager from proxy | PASS | CM has no workspace label, ownership check blocks exec |
@@ -193,28 +193,24 @@ _This section is updated automatically by the security test cron._
 Gitops no longer has direct Docker socket access. A per-workspace `container-manager` sidecar proxies Docker API requests and enforces:
 - Container operations filtered to `gitops.workspace={workspace}` label
 - Container creation only allowed from this workspace's compose project
-- Host mounts (`/`, `/etc`, `/root`, `docker.sock`) blocked
+- Host mounts blocked via prefix allowlist (only workspace data + cert authorities allowed)
+- PidMode/IpcMode/UTSMode `host` blocked
+- Privileged mode blocked
+- Dangerous capabilities blocked (ALL, SYS_ADMIN, SYS_PTRACE, NET_ADMIN, etc.)
 - Network mode `host`/`none` blocked
 - Network create/connect/disconnect blocked
+- Container export and commit blocked
 - Docker socket mounted read-only on the proxy
 
 In K8s, the container-manager becomes a sidecar with namespace-scoped ServiceAccount.
 
-### CRITICAL: No Container Resource Limits
-Automation containers have no memory, PID, or CPU limits. A compromised or buggy container can:
-- Fork bomb (infinite processes → host unresponsive)
-- OOM (allocate all memory → other containers killed by OOM killer)
-- CPU exhaust (mine crypto → starve other workspaces)
+### FIXED: Container Resource Limits
+All automation containers now have default resource limits:
+- Memory: 2GB (`mem_limit: 2g`)
+- CPU: 2 cores (`cpus: 2.0`)
+- PIDs: 512 (`pids_limit: 512`)
 
-**Remediation:** Add default resource limits to `generate_docker_compose()`:
-```yaml
-deploy:
-  resources:
-    limits:
-      memory: 2G
-      cpus: "2.0"
-      pids: 256
-```
+Prevents fork bombs, OOM attacks, and CPU exhaustion.
 
 ## Known Limitations
 
