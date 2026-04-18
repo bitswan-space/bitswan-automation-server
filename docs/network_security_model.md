@@ -163,6 +163,13 @@ _This section is updated automatically by the security test cron._
 | 2026-04-18 | Container-manager from dev | PASS | Different Docker networks. Connection timed out. |
 | 2026-04-18 | Daemon from dev | PASS | Different Docker networks. Connection timed out. |
 
+| 2026-04-18 | Coding agent Docker socket/proxy | PASS | No Docker socket or proxy socket mounted in agent container |
+| 2026-04-18 | Coding agent → gitops API | INFO | Agent on bitswan_network, can reach gitops with agent secret. By design. |
+| 2026-04-18 | Coding agent → daemon HTTP | WARN | Agent on bitswan_network can reach daemon. Daemon socket not exposed to agent, but TCP port reachable. Destructive ops now require strict auth. |
+| 2026-04-18 | Coding agent → dev containers | PASS | Different networks. Connection timed out. |
+| 2026-04-18 | Coding agent symlink escape via bind mount | MEDIUM | Agent can create symlinks in /workspace/worktrees that point to host paths. Symlinks resolve in container namespace for the agent, but on host filesystem for gitops/other readers. Mitigated: agent is trusted, gitops runs as user1000. |
+| 2026-04-18 | **Daemon VPN destroy via socket** | **FIXED** | Gitops could call /vpn/destroy via Unix socket without auth. Fixed: destructive VPN endpoints (/vpn/init, /credentials, /revoke, /magic-link, /destroy) now require strictAuthMiddleware — token required even over socket. |
+
 ## Active Vulnerabilities
 
 ### FIXED: Gitops Docker Socket → Container Manager Proxy
