@@ -178,6 +178,14 @@ _This section is updated automatically by the security test cron._
 | 2026-04-18 | Null bytes in deployment_id | PASS | Returns 404 |
 | 2026-04-18 | Network connect via proxy | PASS | All /networks/ mutations blocked (403) |
 | 2026-04-18 | Container env var injection | PASS | Proxy allows env vars (by design — compose sets them), but sensitive mounts now blocked |
+| 2026-04-18 | Named Docker volume mount | WARN | Proxy doesn't block named volume mounts (e.g., `bitswan_secrets:/stolen`). Low risk: no sensitive named volumes in default setup |
+| 2026-04-18 | Proxy bypass via chunked encoding | PASS | Privileged container still blocked |
+| 2026-04-18 | Container update post-create | INFO | /containers/{id}/update allowed but can only change resource limits, not mounts/caps |
+| 2026-04-18 | Outbound data exfiltration | INFO | Dev containers have internet access (by design). DNS and HTTP exfiltration possible. Consider egress filtering in future. |
+| 2026-04-18 | **Container export via proxy** | **FIXED** | GET /containers/{id}/export dumped entire filesystem. Fixed: blocked in proxy. |
+| 2026-04-18 | **Container commit via proxy** | **FIXED** | POST /commit could create images from running containers. Fixed: blocked in proxy. |
+| 2026-04-18 | IP spoofing on shared network | PASS | No NET_ADMIN — RTNETLINK blocked |
+| 2026-04-18 | Docker system info via proxy | INFO | Host OS, kernel, CPU, memory visible via /info. Information disclosure only. |
 
 ## Active Vulnerabilities
 
