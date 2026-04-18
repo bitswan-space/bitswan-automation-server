@@ -186,6 +186,17 @@ _This section is updated automatically by the security test cron._
 | 2026-04-18 | **Container commit via proxy** | **FIXED** | POST /commit could create images from running containers. Fixed: blocked in proxy. |
 | 2026-04-18 | IP spoofing on shared network | PASS | No NET_ADMIN — RTNETLINK blocked |
 | 2026-04-18 | Docker system info via proxy | INFO | Host OS, kernel, CPU, memory visible via /info. Information disclosure only. |
+| 2026-04-18 | HTTP request smuggling via sub-Traefik | PASS | CL/TE smuggling returns 404 on both injected requests |
+| 2026-04-18 | WebSocket hijack via sub-Traefik | PASS | Upgrade attempt returns 404 (no matching route) |
+| 2026-04-18 | TOCTOU race on ownership check | PASS | Parallel exec attempts: workspace container allowed, daemon blocked. No race exploitable. |
+| 2026-04-18 | API version negotiation bypass | PASS | /v999.99/, /v0.1/, /v1.0/ all return 400 |
+| 2026-04-18 | Container creation spam | WARN | No rate limit on container creation through proxy. Mitigated by PID/memory limits. |
+| 2026-04-18 | Log injection XSS | PASS | Editor log viewer uses `textContent` (auto-escapes HTML). `<script>` tags rendered as text. |
+| 2026-04-18 | DNS rebinding from dev | PASS | Docker DNS resolves only same-network names. External DNS not used. |
+| 2026-04-18 | /proc/self/fd escape | PASS | FDs point to pipes/devnull. No host FD access. |
+| 2026-04-18 | **Fork bomb (PID limit)** | **VERIFIED** | `sh: can't fork: Resource temporarily unavailable` — PID limit of 512 enforced |
+| 2026-04-18 | Docker system prune via proxy | PASS | Returns 404 (not proxied) |
+| 2026-04-18 | Image list without workspace filter | INFO | Images are global — no per-workspace isolation. By design for shared base images. |
 
 ## Active Vulnerabilities
 
