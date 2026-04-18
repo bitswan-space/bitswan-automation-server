@@ -140,6 +140,28 @@ _This section is updated automatically by the security test cron._
 | 2026-04-17 | Proxy bypass via URL encoding | PASS | %63reate not interpreted as create |
 | 2026-04-17 | Proxy bypass via double-slash | PASS | //containers/create blocked |
 | 2026-04-17 | **Capability smuggling via compose** | **FIXED** | cap_add: [ALL] through compose was allowed. Fixed: proxy blocks ALL, SYS_ADMIN, SYS_PTRACE, SYS_MODULE, NET_ADMIN, etc. |
+| 2026-04-18 | VPN CA private key from dev | PASS | CA files not mounted in automation containers |
+| 2026-04-18 | **Sub-Traefik API from dev** | **FIXED** | Dev containers could read all routes (hostnames, upstreams) via sub-Traefik API port 8080. Fixed: switched to file provider, removed API. Port 8080 now connection refused. |
+| 2026-04-18 | Container-manager socket from dev | PASS | Socket not mounted in automation containers |
+| 2026-04-18 | VPN Traefik API from dev | PASS | Different network (bitswan_network vs dev). Connection timed out. |
+| 2026-04-18 | CoreDNS from dev | PASS | Different network (vpn_network). Connection timed out. |
+| 2026-04-18 | Daemon socket from dev | PASS | Socket not mounted in automation containers. DNS resolution fails. |
+| 2026-04-18 | SSRF via gitops API | PASS | Malicious relative_path returns 404. Path validation prevents traversal. |
+| 2026-04-18 | /proc env secrets leak | PASS | No secrets in automation container /proc/1/environ |
+| 2026-04-18 | Inter-container on dev network | INFO | Dev containers CAN reach each other (same network). Expected — same-stage connectivity. |
+| 2026-04-18 | Sub-Traefik route manipulation | PASS | REST API now removed. File provider is read-only mount. |
+| 2026-04-18 | Coding agent workspace label | **FIXED** | Agent container was missing `gitops.workspace` label, causing container-manager proxy to block creation. Fixed: label added. |
+| 2026-04-18 | Sub-Traefik /dynamic writable from dev | PASS | /dynamic not accessible from dev containers (different filesystem) |
+| 2026-04-18 | Host header injection via sub-Traefik | PASS | Forged Host header returns 404 — no route match for gitops hostname at sub-Traefik |
+| 2026-04-18 | WireGuard config from dev | PASS | /config/ not mounted in automation containers |
+| 2026-04-18 | /proc/self/maps readable | INFO | ASLR addresses visible — standard container behavior, no fix needed |
+| 2026-04-18 | Unix socket discovery in dev | PASS | No Unix sockets found in dev containers |
+| 2026-04-18 | OverlayFS lower dir paths | INFO | Container sees only its own overlay. /proc/1/root stays in container. |
+| 2026-04-18 | K8s service account token | PASS | Not K8s environment — no token files present |
+| 2026-04-18 | Sub-Traefik port scan from dev | PASS | Only port 80 open (web entrypoint). Port 8080 (API) connection refused. |
+| 2026-04-18 | Gitops from dev via bitswan_network IP | PASS | Different Docker networks. Connection timed out. |
+| 2026-04-18 | Container-manager from dev | PASS | Different Docker networks. Connection timed out. |
+| 2026-04-18 | Daemon from dev | PASS | Different Docker networks. Connection timed out. |
 
 ## Active Vulnerabilities
 
