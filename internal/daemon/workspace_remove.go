@@ -145,7 +145,16 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}()
 	// Continue immediately - don't wait for ingress cleanup
 
-	// 6. Remove the gitops folder
+	// 6. Remove per-workspace stage networks
+	for _, stage := range []string{"dev", "staging", "production"} {
+		netName := workspaceName + "-" + stage
+		rmCmd := exec.Command("docker", "network", "rm", netName)
+		if err := rmCmd.Run(); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to remove network %s: %v\n", netName, err)
+		}
+	}
+
+	// 7. Remove the gitops folder
 	workspaceDir := filepath.Join(workspacesFolder, workspaceName)
 	if _, err := os.Stat(workspaceDir); os.IsNotExist(err) {
 		fmt.Fprintf(writer, "Warning: Workspace directory %s does not exist, nothing to remove.\n", workspaceDir)

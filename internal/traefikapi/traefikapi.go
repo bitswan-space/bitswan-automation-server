@@ -219,7 +219,15 @@ func saveState(path string, state *traefikDynConfig) error {
 }
 
 // pushState PUTs the full dynamic config to Traefik's REST provider endpoint.
+// For workspace sub-Traefik instances that use a file provider, the state file
+// is already written by saveState — Traefik watches it, so no HTTP push is needed.
 func pushState(traefikBaseURL string, state *traefikDynConfig) error {
+	if isWorkspaceURL(traefikBaseURL) {
+		// Workspace sub-Traefik uses file provider — no REST API push needed.
+		// The state file is already written by saveState and Traefik watches it.
+		return nil
+	}
+
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state for push: %w", err)
@@ -412,10 +420,15 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver
 	fmt.Printf("AddRoute: original upstream='%s', processed upstream='%s'\n", upstream, processedUpstream)
 
 	workspaceTarget := isWorkspaceURL(traefikBaseURL)
+	vpnTarget := strings.Contains(traefikBaseURL, "traefik-vpn")
 
 	resolver := ""
 	if len(certResolver) > 0 {
 		resolver = certResolver[0]
+	}
+	// VPN Traefik uses file-based TLS certs, not ACME — never set a cert resolver
+	if vpnTarget {
+		resolver = ""
 	}
 
 	return modifyState(traefikBaseURL, func(state *traefikDynConfig) error {

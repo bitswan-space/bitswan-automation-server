@@ -11,6 +11,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"io"
+	"net/http"
+
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -22,6 +25,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/ssh"
 	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/util"
+	"github.com/bitswan-space/bitswan-workspaces/internal/vpn"
 )
 
 // runWorkspaceInit runs the workspace init logic with stdout already redirected.
@@ -64,6 +68,50 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	// Init bitswan network
 	docker.EnsureDockerNetwork("bitswan_network", *verbose)
+
+	// Block container access to cloud metadata service (169.254.169.254).
+	// Without this, any container can read instance metadata including SSH keys.
+	blockMetadataCmd := exec.Command("iptables", "-C", "DOCKER-USER", "-d", "169.254.169.254", "-j", "DROP")
+	if blockMetadataCmd.Run() != nil {
+		// Rule doesn't exist yet — add it
+		exec.Command("iptables", "-I", "DOCKER-USER", "-d", "169.254.169.254", "-j", "DROP").Run()
+	}
+
+	// Create per-workspace stage networks for isolation
+	stageNetworks := []string{
+		workspaceName + "-dev",
+		workspaceName + "-staging",
+		workspaceName + "-production",
+	}
+	for _, net := range stageNetworks {
+		docker.EnsureDockerNetwork(net, *verbose)
+	}
+
+	// Start workspace sub-Traefik connected to all stage networks.
+	// This enables two-tier routing: VPN/platform Traefik → sub-Traefik → stage-network containers.
+	wsHome := os.Getenv("HOME")
+	wsHostHome := os.Getenv("HOST_HOME")
+	subTraefikPath := filepath.Join(wsHome, ".config", "bitswan", "workspaces", workspaceName, "traefik")
+	os.MkdirAll(subTraefikPath, 0755)
+	// Use file provider instead of REST API to prevent dev containers from
+	// reading the Traefik API (the API port 8080 is reachable from stage networks).
+	subTraefikYml := "entryPoints:\n  web:\n    address: \":80\"\nproviders:\n  file:\n    filename: /dynamic/rest-state.json\n    watch: true\n"
+	// Ensure the dynamic config file exists so Traefik doesn't error on startup
+	os.WriteFile(filepath.Join(subTraefikPath, "rest-state.json"), []byte("{}"), 0644)
+	os.WriteFile(filepath.Join(subTraefikPath, "traefik.yml"), []byte(subTraefikYml), 0644)
+	hostSubTraefikPath := subTraefikPath
+	if wsHostHome != "" && wsHome != wsHostHome {
+		hostSubTraefikPath = strings.Replace(subTraefikPath, wsHome, wsHostHome, 1)
+	}
+	subTraefikCompose, _ := dockercompose.CreateWorkspaceTraefikDockerComposeFile(
+		workspaceName, hostSubTraefikPath, *domain, stageNetworks,
+	)
+	if subTraefikCompose != "" {
+		dockerComposeUpQuiet(workspaceName+"__traefik", subTraefikCompose, subTraefikPath)
+		if *verbose {
+			fmt.Printf("Workspace sub-Traefik started on networks: %v\n", stageNetworks)
+		}
+	}
 
 	var oauthConfig *oauth.Config
 	if *oauthConfigFile != "" {
@@ -523,6 +571,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	// Register GitOps service route via the daemon's ingress abstraction.
 	// addRouteToIngress detects the ingress type and handles certs + routing.
+	// Register gitops route — internal only when VPN is enabled
 	gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
 	gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
 	if err := addRouteToIngress(IngressAddRouteRequest{
@@ -531,6 +580,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		Mkcert:        *mkCerts,
 		CertsDir:      *certsDir,
 		WorkspaceName: workspaceName,
+		IngressTarget: "internal",
 	}, ""); err != nil {
 		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}
@@ -689,16 +739,18 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
 
-		// Register editor route via the ingress abstraction
+		// Register editor route — internal only when VPN is enabled
 		editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
 		editorUpstream := fmt.Sprintf("%s-editor:9999", workspaceName)
-		if err := addRouteToIngress(IngressAddRouteRequest{
+		editorRoute := IngressAddRouteRequest{
 			Hostname:      editorHostname,
 			Upstream:      editorUpstream,
 			Mkcert:        *mkCerts,
 			CertsDir:      *certsDir,
 			WorkspaceName: workspaceName,
-		}, ""); err != nil {
+			IngressTarget: "internal",
+		}
+		if err := addRouteToIngress(editorRoute, ""); err != nil {
 			return fmt.Errorf("failed to register Editor service: %w", err)
 		}
 
@@ -734,6 +786,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	if oauthConfig != nil {
 		fmt.Printf("OAuth is enabled for the Editor.\n")
 	}
+
+	// Initialize VPN automatically — editor and internal services
+	// should only be accessible through the VPN by default.
+	initVPNAutomatically(*domain, *verbose, os.Stdout)
 
 	return nil
 }
@@ -883,6 +939,132 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 	}
 
 	return nil
+}
+
+// initVPNAutomatically sets up WireGuard VPN during workspace init.
+func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
+	if IsVPNEnabled() {
+		return
+	}
+
+	fmt.Fprintln(writer, "Initializing VPN...")
+
+	vpnEndpoint := detectPublicIPForVPN()
+	if vpnEndpoint == "" {
+		fmt.Fprintln(writer, "Warning: Could not detect public IP for VPN. Run 'bitswan vpn init --endpoint <ip>' manually.")
+		return
+	}
+
+	cfg := config.NewAutomationServerConfig()
+	serverConfig, _ := cfg.LoadConfig()
+	if serverConfig != nil && serverConfig.Slug == "" {
+		cfg.SetNameAndSlug(config.GenerateRandomName())
+	}
+	if serverConfig != nil && serverConfig.Domain == "" {
+		cfg.SetDomain(domain)
+	}
+
+	homeDir := os.Getenv("HOME")
+	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
+	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
+	hostHome := os.Getenv("HOST_HOME")
+	hostVpnPath := vpnPath
+	hostVpnTraefikPath := vpnTraefikPath
+	if hostHome != "" {
+		hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
+		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
+	}
+
+	mgr := vpn.NewManager(filepath.Join(homeDir, ".config", "bitswan"))
+	if !mgr.IsInitialized() {
+		if err := mgr.Init(vpnEndpoint); err != nil {
+			fmt.Fprintf(writer, "Warning: VPN init failed: %v\n", err)
+			return
+		}
+	}
+
+	// Initialize VPN CA and issue TLS certs for VPN Traefik
+	caMgr := vpn.NewCAManager(vpnPath)
+	if err := caMgr.Init("BitSwan"); err != nil {
+		fmt.Fprintf(writer, "Warning: VPN CA init failed: %v\n", err)
+	}
+	tlsHostnames := []string{"*.bswn.internal", "bswn.internal"}
+	if serverConfig != nil && serverConfig.Domain != "" {
+		tlsHostnames = append(tlsHostnames, "*."+serverConfig.Domain, serverConfig.Domain)
+	}
+	if !caMgr.IsInitialized() {
+		fmt.Fprintf(writer, "Warning: VPN CA not available, skipping TLS cert\n")
+	} else {
+		caMgr.IssueTLSCert(tlsHostnames)
+		// Install CA cert into daemon trust store
+		if caCert, err := caMgr.CACertPEM(); err == nil && len(caCert) > 0 {
+			certAuthDir, _ := getCertAuthoritiesDir()
+			os.WriteFile(filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"), caCert, 0644)
+			installCertificateInDaemon("bitswan-vpn-ca.crt", filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"))
+		}
+	}
+
+	docker.EnsureDockerNetwork("bitswan_vpn_network", verbose)
+
+	wgCompose, _ := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
+	if wgCompose != "" {
+		dockerComposeUpQuiet("wireguard", wgCompose, vpnPath)
+	}
+
+	os.MkdirAll(vpnTraefikPath, 0755)
+	traefikYml := "entryPoints:\n  web:\n    address: \":80\"\n  websecure:\n    address: \":443\"\ntls:\n  certificates:\n    - certFile: /certs/tls.crt\n      keyFile: /certs/tls.key\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
+	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
+	hostCaDir := filepath.Join(hostVpnPath, "ca")
+	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath, hostCaDir)
+	if vpnTraefikCompose != "" {
+		dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
+	}
+
+	dockercompose.WriteCorefile(vpnPath, "")
+	corednsCompose, _ := dockercompose.CreateCoreDNSDockerComposeFile(hostVpnPath)
+	if corednsCompose != "" {
+		dockerComposeUpQuiet("coredns-vpn", corednsCompose, vpnPath)
+	}
+
+	serverConfig, _ = cfg.LoadConfig()
+	if serverConfig != nil {
+		internalDomain := serverConfig.InternalDomain()
+		addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      "vpn-admin." + domain,
+			Upstream:      "bitswan-automation-server-daemon:8080",
+			IngressTarget: "external",
+		}, "")
+		addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      "vpn-admin." + internalDomain,
+			Upstream:      "bitswan-automation-server-daemon:8080",
+			IngressTarget: "internal",
+		}, "")
+	}
+
+	fmt.Fprintf(writer, "VPN initialized (endpoint: %s)\n", vpnEndpoint)
+	fmt.Fprintln(writer, "Run 'bitswan vpn bootstrap' to download your VPN config.")
+}
+
+func detectPublicIPForVPN() string {
+	resp, err := http.Get("https://api.ipify.org")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
+}
+
+func dockerComposeUpQuiet(projectName, composeContent, workDir string) {
+	composePath := filepath.Join(workDir, "docker-compose.yaml")
+	os.MkdirAll(workDir, 0755)
+	os.WriteFile(composePath, []byte(composeContent), 0644)
+	cmd := exec.Command("docker", "compose", "-p", projectName, "-f", composePath, "up", "-d")
+	cmd.Dir = workDir
+	cmd.Run()
 }
 
 func parseRepositoryURL(repoURL string) (*RepositoryInfo, error) {
