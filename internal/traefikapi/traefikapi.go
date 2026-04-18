@@ -219,7 +219,15 @@ func saveState(path string, state *traefikDynConfig) error {
 }
 
 // pushState PUTs the full dynamic config to Traefik's REST provider endpoint.
+// For workspace sub-Traefik instances that use a file provider, the state file
+// is already written by saveState — Traefik watches it, so no HTTP push is needed.
 func pushState(traefikBaseURL string, state *traefikDynConfig) error {
+	if isWorkspaceURL(traefikBaseURL) {
+		// Workspace sub-Traefik uses file provider — no REST API push needed.
+		// The state file is already written by saveState and Traefik watches it.
+		return nil
+	}
+
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state for push: %w", err)
