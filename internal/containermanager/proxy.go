@@ -275,11 +275,34 @@ func (p *Proxy) isAllowedCreate(r *http.Request) bool {
 			log.Printf("BLOCKED: dangerous host mount %s", bind)
 			return false
 		}
-		// Block mounts under sensitive directories
-		for _, prefix := range []string{"/etc", "/root", "/proc", "/sys", "/dev",
+		// Block mounts under sensitive directories, with exceptions for
+		// workspace-specific paths that gitops legitimately needs.
+		blocked := false
+		for _, prefix := range []string{"/etc", "/proc", "/sys", "/dev",
 			"/var/run/docker", "/var/run/bitswan"} {
 			if src == prefix || strings.HasPrefix(src, prefix+"/") {
 				log.Printf("BLOCKED: sensitive host mount %s (matches %s)", bind, prefix)
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			return false
+		}
+		// Block /root/* EXCEPT workspace data and cert authorities
+		if src == "/root" || strings.HasPrefix(src, "/root/") {
+			allowed := false
+			// Workspace data directories (source code, configs)
+			wsPrefix := fmt.Sprintf("/root/.config/bitswan/workspaces/%s/", p.workspaceName)
+			if strings.HasPrefix(src, wsPrefix) {
+				allowed = true
+			}
+			// Certificate authorities (needed for HTTPS trust)
+			if strings.HasPrefix(src, "/root/.config/bitswan/certauthorities") {
+				allowed = true
+			}
+			if !allowed {
+				log.Printf("BLOCKED: sensitive host mount %s (under /root, not in workspace allowlist)", bind)
 				return false
 			}
 		}
