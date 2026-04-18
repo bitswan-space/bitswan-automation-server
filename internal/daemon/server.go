@@ -61,10 +61,29 @@ func NewServer(version string) *Server {
 	}
 }
 
+// strictAuthMiddleware always requires a valid bearer token, even for Unix socket
+// connections. Use for destructive operations (VPN destroy, credential revocation)
+// that should not be callable by containers with socket access (e.g., gitops).
+func (s *Server) strictAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, `{"error": "authorization required for this operation"}`, http.StatusUnauthorized)
+			return
+		}
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" || parts[1] != s.token {
+			http.Error(w, `{"error": "invalid token"}`, http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // authMiddleware wraps a handler with bearer token authentication.
 // Requests arriving over the Unix socket (RemoteAddr is empty or "@")
 // are trusted and skip token verification — access is gated by the
-// socket file permissions.
+// socket file permissions. Use strictAuthMiddleware for destructive ops.
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Unix socket connections have an empty or "@" RemoteAddr
@@ -152,14 +171,16 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/service/", s.authMiddleware(s.handleService))
 
 	// VPN endpoints (authenticated)
-	mux.HandleFunc("/vpn/init", s.authMiddleware(s.handleVPNInit))
+	// VPN read-only endpoints — socket-trusted (gitops needs status)
 	mux.HandleFunc("/vpn/status", s.authMiddleware(s.handleVPNStatus))
-	mux.HandleFunc("/vpn/credentials", s.authMiddleware(s.handleVPNGenerateCredentials))
-	mux.HandleFunc("/vpn/revoke", s.authMiddleware(s.handleVPNRevoke))
-	mux.HandleFunc("/vpn/users", s.authMiddleware(s.handleVPNListUsers))
-	mux.HandleFunc("/vpn/magic-link", s.authMiddleware(s.handleVPNMagicLink))
-	mux.HandleFunc("/vpn/destroy", s.authMiddleware(s.handleVPNDestroy))
 	mux.HandleFunc("/vpn/sessions", s.authMiddleware(s.handleVPNSessions))
+	mux.HandleFunc("/vpn/users", s.authMiddleware(s.handleVPNListUsers))
+	// VPN destructive endpoints — strict auth (token required even over socket)
+	mux.HandleFunc("/vpn/init", s.strictAuthMiddleware(s.handleVPNInit))
+	mux.HandleFunc("/vpn/credentials", s.strictAuthMiddleware(s.handleVPNGenerateCredentials))
+	mux.HandleFunc("/vpn/revoke", s.strictAuthMiddleware(s.handleVPNRevoke))
+	mux.HandleFunc("/vpn/magic-link", s.strictAuthMiddleware(s.handleVPNMagicLink))
+	mux.HandleFunc("/vpn/destroy", s.strictAuthMiddleware(s.handleVPNDestroy))
 
 	// MQTT endpoints (authenticated)
 	mux.HandleFunc("/mqtt/reinitialize", s.authMiddleware(s.handleMQTTReinitialize))
