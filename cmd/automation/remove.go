@@ -12,9 +12,10 @@ func newRemoveCmd() *cobra.Command {
 	var workspace string
 
 	cmd := &cobra.Command{
-		Use:   "remove",
-		Short: "Remove the automation",
-		Args:  cobra.ExactArgs(1),
+		Use:               "remove",
+		Short:             "Remove the automation",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: validAutomationArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			automationDeploymentId := args[0]
 

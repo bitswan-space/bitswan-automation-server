@@ -13,9 +13,10 @@ func newLogsCmd() *cobra.Command {
 	var workspace string
 
 	cmd := &cobra.Command{
-		Use:   "logs",
-		Short: "Get logs for automation",
-		Args:  cobra.ExactArgs(1),
+		Use:               "logs",
+		Short:             "Get logs for automation",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: validAutomationArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			automationDeploymentId := args[0]
 
