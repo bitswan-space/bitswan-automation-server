@@ -12,9 +12,10 @@ func newStopCmd() *cobra.Command {
 	var workspace string
 
 	cmd := &cobra.Command{
-		Use:   "stop",
-		Short: "Stop the automation",
-		Args:  cobra.ExactArgs(1),
+		Use:               "stop",
+		Short:             "Stop the automation",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: validAutomationArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			automationDeploymentId := args[0]
 
