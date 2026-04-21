@@ -10,6 +10,44 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// bashCompletionExtra is appended to every generated bash completion script.
+// It solves two problems:
+//
+//  1. Trailing-space after an exact subcommand match: cobra's generated
+//     __start_bitswan returns both "automation" and "automation-server-daemon"
+//     when the user has typed "automation", so bash sees an ambiguous prefix
+//     and never adds a space. The wrapper filters COMPREPLY to the exact match
+//     only, which makes bash add the space automatically.
+//
+//  2. ./bitswan relative-path registration: lets tab-completion work when the
+//     binary is invoked as ./bitswan during development.
+const bashCompletionExtra = `
+# Wrap cobra's __start_bitswan: when the typed word exactly matches one of the
+# returned completions but other prefix-sharing commands also appear in COMPREPLY,
+# keep only the exact match so bash adds a trailing space automatically.
+eval "$(declare -f __start_bitswan | sed '1s/__start_bitswan/__start_bitswan_cobra/')"
+__start_bitswan() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    __start_bitswan_cobra "$@"
+    if [[ ${#COMPREPLY[@]} -gt 1 && -n "$cur" ]]; then
+        local c stripped
+        for c in "${COMPREPLY[@]}"; do
+            stripped="${c%%$'\t'*}"
+            if [[ "$stripped" == "$cur" ]]; then
+                COMPREPLY=("$c")
+                return
+            fi
+        done
+    fi
+}
+
+# Also register for ./bitswan (relative-path invocation during development).
+if [[ $(type -t compopt) = "builtin" ]]; then
+    complete -o default -F __start_bitswan ./bitswan
+else
+    complete -o default -o nospace -F __start_bitswan ./bitswan
+fi`
+
 func newCompletionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "completion [bash|zsh|fish|powershell]",
@@ -54,14 +92,7 @@ To load completions for every new session, execute once:
 			// Trim trailing newline so our appended block sits cleanly.
 			script := strings.TrimRight(buf.String(), "\n")
 			fmt.Fprintln(os.Stdout, script)
-			// Also register for ./bitswan so tab-completion works when invoking
-			// the binary via a relative path (common during development).
-			fmt.Fprintln(os.Stdout, "\n# Also register for ./bitswan (relative-path invocation)")
-			fmt.Fprintln(os.Stdout, `if [[ $(type -t compopt) = "builtin" ]]; then`)
-			fmt.Fprintln(os.Stdout, `    complete -o default -F __start_bitswan ./bitswan`)
-			fmt.Fprintln(os.Stdout, `else`)
-			fmt.Fprintln(os.Stdout, `    complete -o default -o nospace -F __start_bitswan ./bitswan`)
-			fmt.Fprintln(os.Stdout, `fi`)
+			fmt.Fprintln(os.Stdout, bashCompletionExtra)
 			return nil
 		},
 	}
@@ -174,12 +205,7 @@ Run once after installing bitswan. Changes take effect in new shell sessions.`,
 						return err
 					}
 					script := strings.TrimRight(buf.String(), "\n")
-					script += "\n\n# Also register for ./bitswan (relative-path invocation)\n"
-					script += "if [[ $(type -t compopt) = \"builtin\" ]]; then\n"
-					script += "    complete -o default -F __start_bitswan ./bitswan\n"
-					script += "else\n"
-					script += "    complete -o default -o nospace -F __start_bitswan ./bitswan\n"
-					script += "fi\n"
+					script += "\n" + bashCompletionExtra + "\n"
 					return os.WriteFile(file, []byte(script), 0o644)
 				}
 
