@@ -305,6 +305,21 @@ func (s *Server) Run() error {
 		}
 	}()
 
+	// Auto-initialize VPN on startup if a workspace exists with a domain.
+	// Runs in a goroutine so it doesn't block server startup.
+	go func() {
+		// Wait for servers to be ready (ingress registration needs the socket)
+		time.Sleep(3 * time.Second)
+		if !IsVPNEnabled() {
+			cfg := config.NewAutomationServerConfig()
+			serverConfig, _ := cfg.LoadConfig()
+			if serverConfig != nil && serverConfig.Domain != "" {
+				fmt.Println("Auto-initializing VPN...")
+				initVPNAutomatically(serverConfig.Domain, false, os.Stdout)
+			}
+		}
+	}()
+
 	// Handle shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
