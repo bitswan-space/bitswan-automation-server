@@ -201,7 +201,10 @@ providers:
 	domain := serverConfig.Domain
 	internalDomain := serverConfig.InternalDomain()
 
-	// External admin page: vpn-admin.{domain} → daemon:8080
+	// External VPN admin: internet-facing, behind OAuth (Keycloak).
+	// This is how new users claim magic links — they authenticate via
+	// Keycloak, then the magic link gives them VPN credentials.
+	// First admin uses CLI: bitswan vpn bootstrap.
 	externalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + domain,
 		Upstream:      "bitswan-automation-server-daemon:8080",
@@ -211,7 +214,8 @@ providers:
 		fmt.Printf("Warning: failed to register external VPN admin route: %v\n", err)
 	}
 
-	// Internal admin page: vpn-admin.{internalDomain} → daemon:8080
+	// Internal VPN admin: behind VPN, no OAuth needed.
+	// Admins use this to create magic links and manage users.
 	internalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + internalDomain,
 		Upstream:      "bitswan-automation-server-daemon:8080",
