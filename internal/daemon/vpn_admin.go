@@ -20,13 +20,25 @@ func magicLinkStore() *vpn.MagicLinkStore {
 // This page is exposed on the internet (via external Traefik) and is OAuth-protected.
 // It allows: first-admin bootstrap download, magic link claim + credential download.
 func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) {
+	// The external VPN admin page is internet-facing. It only serves:
+	// - Magic link claim (token-validated, created by admins on the internal page)
+	// - CA certificate download (public, needed to trust internal HTTPS)
+	// Bootstrap is NOT available externally — use the VPN-internal page or CLI.
+
 	switch {
 	case r.URL.Path == "/vpn-admin" || r.URL.Path == "/vpn-admin/":
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, vpnAdminExternalHTML())
 
 	case r.URL.Path == "/vpn-admin/bootstrap":
-		// First-admin bootstrap: generate credentials if no users exist
+		// Bootstrap is only available from the VPN-internal page or CLI.
+		// On the external page, require OAuth (X-Forwarded-Email must be set
+		// by an upstream OAuth proxy like oauth2-proxy).
+		email := r.Header.Get("X-Forwarded-Email")
+		if email == "" {
+			http.Error(w, "Bootstrap requires authentication. Use the VPN-internal admin page, the CLI (bitswan vpn bootstrap), or configure OAuth.", http.StatusForbidden)
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -36,11 +48,6 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		if len(users) > 0 {
 			http.Error(w, "bootstrap already completed — use a magic link instead", http.StatusForbidden)
 			return
-		}
-		// Use email from OAuth header (set by oauth2-proxy)
-		email := r.Header.Get("X-Forwarded-Email")
-		if email == "" {
-			email = "admin"
 		}
 		conf, err := mgr.GenerateClient(email, "web")
 		if err != nil {
@@ -212,12 +219,6 @@ button:hover { background: #1557b0; }
 .note { color: #666; font-size: 14px; }
 </style></head><body>
 <h1>BitSwan VPN Access</h1>
-<div class="card" id="bootstrap-section">
-<h2>First-Time Setup</h2>
-<p>If you are the first administrator, click below to download your VPN configuration.</p>
-<button onclick="bootstrap()">Download VPN Config</button>
-<p class="note">This option is only available when no VPN users exist yet.</p>
-</div>
 <div class="card">
 <h2>Have a Magic Link?</h2>
 <p>If someone shared a magic link with you, paste the token below.</p>
@@ -239,13 +240,8 @@ button:hover { background: #1557b0; }
 </div>
 </details>
 </div>
+<p class="note">First-time setup: use the CLI (<code>bitswan vpn bootstrap</code>) or the VPN-internal admin page.</p>
 <script>
-function bootstrap() {
-  fetch('/vpn-admin/bootstrap', {method:'POST'})
-    .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
-    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'wireguard.conf'; a.click(); })
-    .catch(e => alert(e.message));
-}
 function claimToken() {
   const token = document.getElementById('token-input').value.trim();
   if (!token) { alert('Please enter a token'); return; }
