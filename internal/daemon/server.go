@@ -268,10 +268,16 @@ func (s *Server) Run() error {
 		Handler: s.setupRoutes(),
 	}
 
-	// Create HTTP server for docs (listens on TCP port 8080)
+	// Create HTTP server for docs + VPN admin (listens on TCP port 8080).
+	// Traefik routes vpn-admin.{domain} here, so VPN admin must be registered
+	// on this mux — not just the Unix socket mux.
 	docsMux := http.NewServeMux()
-	docsMux.HandleFunc("/", s.handleDocs) // Root path serves docs
+	docsMux.HandleFunc("/vpn-admin", s.handleVPNAdminExternal)
+	docsMux.HandleFunc("/vpn-admin/", s.handleVPNAdminExternal)
+	docsMux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
+	docsMux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
 	docsMux.HandleFunc("/api-docs", s.handleDocs)
+	docsMux.HandleFunc("/", s.handleDocs) // Catch-all serves docs
 	s.docsServer = &http.Server{
 		Handler: docsMux,
 	}
