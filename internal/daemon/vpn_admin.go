@@ -30,18 +30,21 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
 		fmt.Fprint(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>VPN Admin — Authentication Required</title>
-<style>body{font-family:-apple-system,sans-serif;max-width:600px;margin:60px auto;padding:0 20px;color:#333}h1{color:#d93025}.card{background:#f8f9fa;border-radius:8px;padding:24px;margin:20px 0}code{background:#e8eaed;padding:2px 6px;border-radius:3px}</style>
+<html><head><meta charset="utf-8"><title>VPN Admin — Sign In Required</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:600px;margin:60px auto;padding:0 20px;color:#333}h1{color:#1a73e8}.card{background:#f8f9fa;border-radius:8px;padding:24px;margin:20px 0}code{background:#e8eaed;padding:2px 6px;border-radius:3px}a{color:#1a73e8}</style>
 </head><body>
-<h1>Authentication Required</h1>
+<h1>Sign In Required</h1>
 <div class="card">
-<p>The VPN admin page requires authentication via your organization's identity provider (Keycloak).</p>
-<p>If you're seeing this message, OAuth is not configured for this route. Ask your administrator to:</p>
-<ol>
-<li>Configure Keycloak for this automation server</li>
-<li>Or use the CLI: <code>bitswan vpn bootstrap</code> (first admin)</li>
-<li>Or access the VPN-internal admin page (requires existing VPN access)</li>
-</ol>
+<p>This page requires sign-in via your organization's identity provider.</p>
+<p>To enable sign-in, register this automation server with the <a href="https://aoc.bitswan.ai">Automation Operation Center (AOC)</a>:</p>
+<pre><code>bitswan register --aoc-api https://api.bitswan.ai --otp &lt;your-otp&gt;</code></pre>
+<p>This configures Keycloak authentication for all protected pages.</p>
+</div>
+<div class="card">
+<h3>Already an admin?</h3>
+<p>If you already have server access, get your VPN config via CLI:</p>
+<pre><code>bitswan vpn bootstrap --device my-laptop</code></pre>
+<p>Once connected to the VPN, the admin page is available without sign-in.</p>
 </div></body></html>`)
 		return
 	}
