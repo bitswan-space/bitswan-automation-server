@@ -20,15 +20,36 @@ func magicLinkStore() *vpn.MagicLinkStore {
 // This page is exposed on the internet (via external Traefik) and is OAuth-protected.
 // It allows: first-admin bootstrap download, magic link claim + credential download.
 func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) {
-	// The external VPN admin page is internet-facing. It only serves:
-	// - Magic link claim (token-validated, created by admins on the internal page)
-	// - CA certificate download (public, needed to trust internal HTTPS)
-	// Bootstrap is NOT available externally — use the VPN-internal page or CLI.
+	// The external VPN admin page is internet-facing and MUST be behind OAuth
+	// (Keycloak via oauth2-proxy). The OAuth proxy sets X-Forwarded-Email.
+	// If it's missing, the user hasn't authenticated — reject the request.
+	//
+	// Exception: /vpn-admin/ca.crt is public (CA cert needed before VPN setup).
+	email := r.Header.Get("X-Forwarded-Email")
+	if email == "" && r.URL.Path != "/vpn-admin/ca.crt" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>VPN Admin — Authentication Required</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:600px;margin:60px auto;padding:0 20px;color:#333}h1{color:#d93025}.card{background:#f8f9fa;border-radius:8px;padding:24px;margin:20px 0}code{background:#e8eaed;padding:2px 6px;border-radius:3px}</style>
+</head><body>
+<h1>Authentication Required</h1>
+<div class="card">
+<p>The VPN admin page requires authentication via your organization's identity provider (Keycloak).</p>
+<p>If you're seeing this message, OAuth is not configured for this route. Ask your administrator to:</p>
+<ol>
+<li>Configure Keycloak for this automation server</li>
+<li>Or use the CLI: <code>bitswan vpn bootstrap</code> (first admin)</li>
+<li>Or access the VPN-internal admin page (requires existing VPN access)</li>
+</ol>
+</div></body></html>`)
+		return
+	}
 
 	switch {
 	case r.URL.Path == "/vpn-admin" || r.URL.Path == "/vpn-admin/":
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnAdminExternalHTML())
+		fmt.Fprint(w, vpnAdminExternalHTML(email))
 
 	case r.URL.Path == "/vpn-admin/bootstrap":
 		// Bootstrap is only available from the VPN-internal page or CLI.
@@ -207,8 +228,8 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 
 // --- HTML templates ---
 
-func vpnAdminExternalHTML() string {
-	return `<!DOCTYPE html>
+func vpnAdminExternalHTML(email string) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; color: #333; }
@@ -217,12 +238,14 @@ h1 { color: #1a73e8; }
 button { background: #1a73e8; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; }
 button:hover { background: #1557b0; }
 .note { color: #666; font-size: 14px; }
+.user-info { font-size: 13px; color: #666; text-align: right; margin-bottom: -10px; }
 </style></head><body>
+<p class="user-info">Signed in as <b>%s</b></p>
 <h1>BitSwan VPN Access</h1>
 <div class="card">
 <h2>Have a Magic Link?</h2>
 <p>If someone shared a magic link with you, paste the token below.</p>
-<input type="text" id="token-input" placeholder="Paste your token here" style="width:100%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:4px;">
+<input type="text" id="token-input" placeholder="Paste your token here" style="width:100%%;padding:10px;margin:10px 0;border:1px solid #ddd;border-radius:4px;">
 <button onclick="claimToken()">Get VPN Config</button>
 </div>
 <div class="card">
@@ -233,10 +256,9 @@ button:hover { background: #1557b0; }
 <summary class="note" style="cursor:pointer;">Installation instructions</summary>
 <div style="margin-top:8px;font-size:13px;">
 <p><b>macOS:</b> Double-click the .crt file, add to Keychain, then trust it (Always Trust).</p>
-<p><b>Windows:</b> Double-click the .crt, Install Certificate → Local Machine → Trusted Root Certification Authorities.</p>
-<p><b>Linux:</b> <code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates</code></p>
-<p><b>Firefox:</b> Settings → Privacy & Security → View Certificates → Import.</p>
-<p><b>Corporate CA:</b> If your organization uses its own CA, upload it via the cert authority API.</p>
+<p><b>Windows:</b> Double-click the .crt, Install Certificate &rarr; Local Machine &rarr; Trusted Root Certification Authorities.</p>
+<p><b>Linux:</b> <code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/ &amp;&amp; sudo update-ca-certificates</code></p>
+<p><b>Firefox:</b> Settings &rarr; Privacy &amp; Security &rarr; View Certificates &rarr; Import.</p>
 </div>
 </details>
 </div>
@@ -253,7 +275,7 @@ function claimToken() {
 function downloadCA() {
   const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = 'bitswan-vpn-ca.crt'; a.click();
 }
-</script></body></html>`
+</script></body></html>`, email)
 }
 
 func vpnAdminClaimHTML(token string) string {
