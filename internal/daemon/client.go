@@ -74,8 +74,8 @@ func NewClientWithSocket(socketPath string) (*Client, error) {
 			if updateErr := updateCallback(); updateErr != nil {
 				return nil, fmt.Errorf("failed to update daemon: %w", updateErr)
 			}
-			// Reconnect after update
-			return NewClientWithSocket(socketPath)
+			// Reconnect after update — daemon needs time to start and create socket
+			return reconnectAfterUpdate(socketPath)
 		}
 
 		if daemonVersion != expectedVersion {
@@ -83,16 +83,33 @@ func NewClientWithSocket(socketPath string) (*Client, error) {
 			if updateErr := updateCallback(); updateErr != nil {
 				return nil, fmt.Errorf("failed to update daemon: %w", updateErr)
 			}
-			// Reconnect after update (clear version check to avoid infinite loop)
+			// Reconnect after update — daemon needs time to start and create socket
 			oldExpected := expectedVersion
 			expectedVersion = ""
-			client, err = NewClientWithSocket(socketPath)
+			client, err = reconnectAfterUpdate(socketPath)
 			expectedVersion = oldExpected
 			return client, err
 		}
 	}
 
 	return client, nil
+}
+
+// reconnectAfterUpdate retries connecting to the daemon socket after an update.
+// The daemon container needs time to start and create the socket file.
+func reconnectAfterUpdate(socketPath string) (*Client, error) {
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+		client, err := NewClientWithSocket(socketPath)
+		if err == nil {
+			return client, nil
+		}
+		if i < maxRetries-1 {
+			fmt.Printf("Waiting for daemon to start (%d/%d)...\n", i+1, maxRetries)
+		}
+	}
+	return nil, fmt.Errorf("daemon did not start within %d seconds after update", maxRetries*500/1000)
 }
 
 // doRequest performs an HTTP request with authentication
