@@ -277,7 +277,15 @@ func (s *Server) Run() error {
 	docsMux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
 	docsMux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
 	docsMux.HandleFunc("/api-docs", s.handleDocs)
-	docsMux.HandleFunc("/", s.handleDocs) // Catch-all serves docs
+	docsMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// If the request comes via the vpn-admin hostname, redirect to /vpn-admin/
+		// instead of showing Swagger docs.
+		if strings.HasPrefix(r.Host, "vpn-admin") || strings.HasPrefix(r.Host, "vpn-admin.") {
+			http.Redirect(w, r, "/vpn-admin/", http.StatusFound)
+			return
+		}
+		s.handleDocs(w, r)
+	})
 	s.docsServer = &http.Server{
 		Handler: docsMux,
 	}
