@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 	"github.com/bitswan-space/bitswan-workspaces/internal/docker"
 	"github.com/bitswan-space/bitswan-workspaces/internal/dockercompose"
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/vpn"
 )
 
@@ -201,21 +203,28 @@ providers:
 	domain := serverConfig.Domain
 	internalDomain := serverConfig.InternalDomain()
 
+	// 9. Set up OAuth for the VPN admin page.
+	// Register an "automation-server-admin" workspace with AOC to get a
+	// Keycloak client, then start oauth2-proxy in the daemon container.
+	vpnAdminOAuthUpstream := "bitswan-automation-server-daemon:8080"
+	if err := setupVPNAdminOAuth(domain); err != nil {
+		fmt.Printf("Warning: VPN admin OAuth setup failed: %v (falling back to unauthenticated)\n", err)
+	} else {
+		// oauth2-proxy listens on :9999, upstream to localhost:8080
+		vpnAdminOAuthUpstream = "bitswan-automation-server-daemon:9999"
+	}
+
 	// External VPN admin: internet-facing, behind OAuth (Keycloak).
-	// This is how new users claim magic links — they authenticate via
-	// Keycloak, then the magic link gives them VPN credentials.
-	// First admin uses CLI: bitswan vpn bootstrap.
 	externalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + domain,
-		Upstream:      "bitswan-automation-server-daemon:8080",
+		Upstream:      vpnAdminOAuthUpstream,
 		IngressTarget: "external",
 	}
 	if err := addRouteToIngress(externalAdminReq, ""); err != nil {
 		fmt.Printf("Warning: failed to register external VPN admin route: %v\n", err)
 	}
 
-	// Internal VPN admin: behind VPN, no OAuth needed.
-	// Admins use this to create magic links and manage users.
+	// Internal VPN admin: behind VPN, no OAuth needed (direct to daemon).
 	internalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + internalDomain,
 		Upstream:      "bitswan-automation-server-daemon:8080",
@@ -438,3 +447,114 @@ func (s *Server) handleVPNDestroy(w http.ResponseWriter, r *http.Request) {
 		"message": "VPN infrastructure removed. Containers stopped, config deleted.",
 	})
 }
+
+const adminWorkspaceName = "automation-server-admin"
+
+// setupVPNAdminOAuth registers an "automation-server-admin" workspace with
+// AOC to get a Keycloak client, then starts oauth2-proxy in the daemon
+// container pointing at localhost:8080 (the daemon's HTTP server).
+func setupVPNAdminOAuth(domain string) error {
+	// 1. Get or create OAuth config
+	oauthCfg, err := oauth.GetOauthConfig(adminWorkspaceName)
+	if err != nil {
+		// Not cached locally — try to fetch from AOC
+		aocClient, aocErr := aoc.NewAOCClient()
+		if aocErr != nil {
+			return fmt.Errorf("AOC not configured: %w", aocErr)
+		}
+
+		// Register the admin "workspace" if it doesn't exist yet.
+		// The editor_url points to the VPN admin page — it's just a label
+		// used by the AOC to create the Keycloak client.
+		vpnAdminURL := fmt.Sprintf("https://vpn-admin.%s/vpn-admin/", domain)
+		workspaceID, regErr := aocClient.RegisterWorkspace(adminWorkspaceName, &vpnAdminURL, domain)
+		if regErr != nil {
+			// May already exist — try fetching OAuth anyway
+			fmt.Printf("Warning: admin workspace registration: %v\n", regErr)
+		}
+
+		if workspaceID == "" {
+			// Try to find it via list
+			workspaceList, listErr := aocClient.ListWorkspaces()
+			if listErr == nil {
+				for _, ws := range workspaceList.Results {
+					if ws.Name == adminWorkspaceName {
+						workspaceID = ws.Id
+						break
+					}
+				}
+			}
+		}
+
+		if workspaceID == "" {
+			return fmt.Errorf("could not register or find admin workspace in AOC")
+		}
+
+		oauthCfg, err = aocClient.GetOAuthConfig(workspaceID)
+		if err != nil {
+			return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
+		}
+
+		// Save for next time
+		// Ensure the workspace directory exists
+		homeDir := os.Getenv("HOME")
+		os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", adminWorkspaceName), 0755)
+		if saveErr := oauth.SaveOauthConfig(adminWorkspaceName, oauthCfg); saveErr != nil {
+			fmt.Printf("Warning: failed to save admin OAuth config: %v\n", saveErr)
+		}
+	}
+
+	// 2. Start oauth2-proxy as a subprocess in this container.
+	// It listens on :9999 and proxies to localhost:8080 (daemon docs server).
+	redirectURL := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
+
+	args := []string{
+		"--provider=keycloak-oidc",
+		"--http-address=0.0.0.0:9999",
+		"--upstream=http://127.0.0.1:8080",
+		"--client-id=" + oauthCfg.ClientId,
+		"--client-secret=" + oauthCfg.ClientSecret,
+		"--cookie-secret=" + oauthCfg.CookieSecret,
+		"--oidc-issuer-url=" + oauthCfg.IssuerUrl,
+		"--redirect-url=" + redirectURL,
+		"--email-domain=*",
+		"--scope=openid email profile",
+		"--code-challenge-method=S256",
+		"--skip-provider-button=true",
+		"--pass-user-headers=true",
+		"--set-xauthrequest=true",
+	}
+
+	if oauthCfg.GroupsClaim != nil {
+		args = append(args, "--oidc-groups-claim="+*oauthCfg.GroupsClaim)
+	} else {
+		args = append(args, "--oidc-groups-claim=group_membership")
+	}
+
+	// Check if oauth2-proxy binary exists
+	oauth2ProxyPath := "/usr/local/bin/oauth2-proxy"
+	if _, err := os.Stat(oauth2ProxyPath); os.IsNotExist(err) {
+		return fmt.Errorf("oauth2-proxy binary not found at %s", oauth2ProxyPath)
+	}
+
+	cmd := exec.Command(oauth2ProxyPath, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// Prevent env var leaks — oauth2-proxy reads OAUTH2_PROXY_* from env
+	cmd.Env = append(os.Environ(), "OAUTH2_PROXY_COOKIE_NAME=_bitswan_vpn_admin")
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start oauth2-proxy: %w", err)
+	}
+
+	fmt.Printf("oauth2-proxy started for VPN admin (PID %d, listening on :9999)\n", cmd.Process.Pid)
+
+	// Don't wait — let it run in the background
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			fmt.Printf("Warning: oauth2-proxy exited: %v\n", err)
+		}
+	}()
+
+	return nil
+}
+
