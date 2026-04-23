@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -313,14 +314,70 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		return
 
 	case r.URL.Path == "/vpn-admin-internal/api/sessions":
+		// Get live peer status from wg show + match against known devices
 		mgr := vpnManager()
-		monitor := vpn.NewSessionMonitor(mgr)
-		sessions, _ := monitor.GetSessionLog(50)
-		if sessions == nil {
-			sessions = []vpn.SessionEvent{}
+		devices, _ := mgr.ListDevices()
+
+		// Build pubkey → device map
+		deviceMap := make(map[string]vpn.VPNDevice)
+		for _, d := range devices {
+			deviceMap[d.PublicKey] = d
 		}
+
+		// Parse wg show output
+		type PeerStatus struct {
+			UserID        string `json:"user_id"`
+			DeviceName    string `json:"device_name"`
+			PublicKey     string `json:"public_key"`
+			Endpoint      string `json:"endpoint"`
+			LastHandshake string `json:"last_handshake"`
+			Transfer      string `json:"transfer"`
+			IP            string `json:"ip"`
+			Status        string `json:"status"`
+		}
+
+		out, err := exec.Command("docker", "exec", "wireguard", "wg", "show", "wg0").Output()
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]PeerStatus{})
+			return
+		}
+
+		var peers []PeerStatus
+		var current *PeerStatus
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "peer: ") {
+				if current != nil {
+					peers = append(peers, *current)
+				}
+				pubKey := strings.TrimPrefix(line, "peer: ")
+				current = &PeerStatus{PublicKey: pubKey, Status: "inactive"}
+				if d, ok := deviceMap[pubKey]; ok {
+					current.UserID = d.UserID
+					current.DeviceName = d.DeviceName
+					current.IP = d.IP
+				}
+			} else if current != nil {
+				if strings.HasPrefix(line, "endpoint: ") {
+					current.Endpoint = strings.TrimPrefix(line, "endpoint: ")
+					current.Status = "connected"
+				} else if strings.HasPrefix(line, "latest handshake: ") {
+					current.LastHandshake = strings.TrimPrefix(line, "latest handshake: ")
+					current.Status = "connected"
+				} else if strings.HasPrefix(line, "transfer: ") {
+					current.Transfer = strings.TrimPrefix(line, "transfer: ")
+				} else if strings.HasPrefix(line, "allowed ips: ") && current.IP == "" {
+					current.IP = strings.TrimPrefix(line, "allowed ips: ")
+				}
+			}
+		}
+		if current != nil {
+			peers = append(peers, *current)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sessions)
+		json.NewEncoder(w).Encode(peers)
 		return
 
 	case r.URL.Path == "/vpn-admin-internal/device-setup" || r.URL.Path == "/vpn-admin-internal/device-setup/":
@@ -941,21 +998,29 @@ loadUsers(); loadLinks();`, email)
 
 	case "logs":
 		pageTitle = "Access Logs"
-		pageContent = `<div id="sessions-table">Loading...</div>`
+		pageContent = `<p class="note" style="margin-bottom:16px;">Live VPN peer status from WireGuard. Refreshes every 15 seconds.</p>
+<div id="sessions-table">Loading...</div>`
 		pageScript = `
 function loadSessions() {
-  fetch('/vpn-admin-internal/api/sessions').then(r=>r.json()).then(sessions => {
-    if (!sessions || !sessions.length) { document.getElementById('sessions-table').innerHTML = '<p class="note">No session activity recorded yet.</p>'; return; }
-    let html = '<table><tr><th>User</th><th>Device</th><th>IP</th><th>Time</th><th>Event</th></tr>';
-    sessions.forEach(s => {
-      const time = s.timestamp ? new Date(s.timestamp).toLocaleString() : '';
-      html += '<tr><td>'+(s.user_id||'')+'</td><td>'+(s.device_name||'')+'</td><td>'+(s.peer_ip||'')+'</td><td>'+time+'</td><td>'+(s.event_type||'')+'</td></tr>';
+  fetch('/vpn-admin-internal/api/sessions').then(r=>r.json()).then(peers => {
+    if (!peers || !peers.length) { document.getElementById('sessions-table').innerHTML = '<p class="note">No VPN peers configured.</p>'; return; }
+    let html = '<table><tr><th>Status</th><th>User</th><th>Device</th><th>VPN IP</th><th>Endpoint</th><th>Last Handshake</th><th>Transfer</th></tr>';
+    peers.forEach(p => {
+      const dot = p.status === 'connected' ? '<span style="color:#22C55E;">&bull;</span>' : '<span style="color:#D1D5DB;">&bull;</span>';
+      html += '<tr><td>' + dot + ' ' + p.status + '</td>';
+      html += '<td>' + (p.user_id || '<span class="note">unknown</span>') + '</td>';
+      html += '<td>' + (p.device_name || '') + '</td>';
+      html += '<td><code>' + (p.ip || '') + '</code></td>';
+      html += '<td><code>' + (p.endpoint || '-') + '</code></td>';
+      html += '<td>' + (p.last_handshake || '-') + '</td>';
+      html += '<td>' + (p.transfer || '-') + '</td></tr>';
     });
     html += '</table>';
     document.getElementById('sessions-table').innerHTML = html;
-  }).catch(() => { document.getElementById('sessions-table').innerHTML = '<p class="note">Could not load sessions.</p>'; });
+  }).catch(() => { document.getElementById('sessions-table').innerHTML = '<p class="note">Could not load peer status.</p>'; });
 }
-loadSessions();`
+loadSessions();
+setInterval(loadSessions, 15000);`
 	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
