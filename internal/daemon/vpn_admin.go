@@ -258,8 +258,21 @@ summary { cursor: pointer; color: #71717A; font-size: 14px; }
 summary b { color: #18181B; }
 pre { background: #F5F5F6; border-radius: 6px; padding: 12px; overflow-x: auto; margin: 8px 0; }
 pre code { background: none; padding: 0; }
-ol { padding-left: 20px; }
-ol li { margin: 6px 0; font-size: 14px; color: #3F3F46; }
+ol { padding-left: 20px; margin: 12px 0; }
+ol li { margin: 8px 0; font-size: 14px; color: #3F3F46; line-height: 1.6; }
+.tabs { display: flex; gap: 0; border-bottom: 2px solid #E4E4E7; margin-bottom: 20px; }
+.tab { padding: 10px 18px; font-size: 14px; font-weight: 500; color: #71717A; cursor: pointer; border: none; background: none; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.15s; }
+.tab:hover { color: #18181B; }
+.tab.active { color: #093DF5; border-bottom-color: #093DF5; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.step-num { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%%; background: #093DF5; color: #fff; font-size: 12px; font-weight: 600; margin-right: 8px; flex-shrink: 0; }
+.step { display: flex; align-items: flex-start; margin: 14px 0; }
+.step-text { font-size: 14px; color: #3F3F46; line-height: 1.6; }
+.step-text a { color: #093DF5; }
+.install-link { display: inline-flex; align-items: center; gap: 6px; background: #F5F5F6; border: 1px solid #E4E4E7; border-radius: 6px; padding: 8px 14px; text-decoration: none; color: #18181B; font-size: 13px; font-weight: 500; margin: 8px 0; }
+.install-link:hover { background: #E4E4E7; }
+.tip { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #1E40AF; }
 `
 
 func vpnAdminExternalHTML(email string, isFirstUser bool) string {
@@ -286,70 +299,54 @@ func vpnAdminExternalHTML(email string, isFirstUser bool) string {
 <button onclick="claimToken()">Get VPN Config</button>
 </div>
 <div class="card">
-<h2>Installing WireGuard</h2>
-<p>After downloading your <code>wireguard.conf</code> file, follow the instructions for your platform:</p>
-<details open>
-<summary><b>macOS</b></summary>
-<div style="margin-top:8px;">
-<ol>
-<li>Install WireGuard from the <a href="https://apps.apple.com/app/wireguard/id1451685025" style="color:#093DF5">Mac App Store</a></li>
-<li>Open WireGuard &rarr; <b>Import Tunnel(s) from File</b></li>
-<li>Select the downloaded <code>wireguard.conf</code></li>
-<li>Click <b>Activate</b> to connect</li>
-</ol>
+<h2>Setup Guide</h2>
+<p>After downloading your configuration file, follow these steps to connect.</p>
+<div class="tabs">
+  <button class="tab active" onclick="showTab('macos')">macOS</button>
+  <button class="tab" onclick="showTab('windows')">Windows</button>
+  <button class="tab" onclick="showTab('linux')">Linux</button>
+  <button class="tab" onclick="showTab('mobile')">iOS / Android</button>
 </div>
-</details>
-<details>
-<summary><b>Windows</b></summary>
-<div style="margin-top:8px;">
-<ol>
-<li>Download and install WireGuard from <a href="https://www.wireguard.com/install/" style="color:#093DF5">wireguard.com/install</a></li>
-<li>Open WireGuard &rarr; <b>Import tunnel(s) from file</b></li>
-<li>Select the downloaded <code>wireguard.conf</code></li>
-<li>Click <b>Activate</b> to connect</li>
-</ol>
+
+<div id="tab-macos" class="tab-content active">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard client<br><a href="https://apps.apple.com/app/wireguard/id1451685025" class="install-link">Download from Mac App Store &rarr;</a></div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and select <b>Import Tunnel(s) from File</b> (or drag the file onto the app icon)</div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Click <b>Activate</b> to connect to the VPN</div></div>
+  <div class="tip">To trust internal HTTPS: download the CA certificate below, double-click it to add to Keychain, then open Keychain Access, find the BitSwan certificate, and set Trust to <b>Always Trust</b>. Firefox requires a separate import via Settings &rarr; Privacy &rarr; Certificates.</div>
 </div>
-</details>
-<details>
-<summary><b>Linux</b></summary>
-<div style="margin-top:8px;">
-<ol>
-<li>Install WireGuard: <code>sudo apt install wireguard</code> (Debian/Ubuntu) or <code>sudo dnf install wireguard-tools</code> (Fedora)</li>
-<li>Copy the config: <code>sudo cp wireguard.conf /etc/wireguard/bitswan.conf</code></li>
-<li>Connect: <code>sudo wg-quick up bitswan</code></li>
-<li>To auto-connect on boot: <code>sudo systemctl enable wg-quick@bitswan</code></li>
-</ol>
-<p class="note">To disconnect: <code>sudo wg-quick down bitswan</code></p>
+
+<div id="tab-windows" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard client<br><a href="https://www.wireguard.com/install/" class="install-link">Download from wireguard.com &rarr;</a></div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and click <b>Import tunnel(s) from file</b></div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Click <b>Activate</b> to connect to the VPN</div></div>
+  <div class="tip">To trust internal HTTPS: download the CA certificate below, double-click it, select <b>Install Certificate</b> &rarr; <b>Local Machine</b> &rarr; place in <b>Trusted Root Certification Authorities</b>. Firefox requires a separate import via Settings &rarr; Privacy &rarr; Certificates.</div>
 </div>
-</details>
-<details>
-<summary><b>iOS / Android</b></summary>
-<div style="margin-top:8px;">
-<ol>
-<li>Install the WireGuard app from your device's app store</li>
-<li>Tap <b>+</b> &rarr; <b>Create from file or archive</b></li>
-<li>Select the downloaded <code>wireguard.conf</code></li>
-<li>Toggle the tunnel on to connect</li>
-</ol>
+
+<div id="tab-linux" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Install WireGuard<pre><code>sudo apt install wireguard      # Debian / Ubuntu
+sudo dnf install wireguard-tools  # Fedora / RHEL
+sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Copy the configuration file<pre><code>sudo cp ~/Downloads/wireguard.conf /etc/wireguard/bitswan.conf</code></pre></div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Connect to the VPN<pre><code>sudo wg-quick up bitswan</code></pre></div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Optional: enable auto-connect on boot<pre><code>sudo systemctl enable wg-quick@bitswan</code></pre></div></div>
+  <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>To trust internal HTTPS: download the CA certificate below, then:<pre><code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates</code></pre>Firefox requires a separate import via Preferences &rarr; Privacy &rarr; Certificates &rarr; Import.</div>
 </div>
-</details>
+
+<div id="tab-mobile" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard app<br><a href="https://apps.apple.com/app/wireguard/id1451685025" class="install-link">App Store (iOS) &rarr;</a><a href="https://play.google.com/store/apps/details?id=com.wireguard.android" class="install-link">Google Play (Android) &rarr;</a></div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Tap the <b>+</b> button, then select <b>Create from file or archive</b></div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Toggle the tunnel switch to connect</div></div>
+  <div class="tip">Tip: you can also transfer the config by scanning a QR code. Generate one from a computer with <code>qrencode -t ansiutf8 &lt; wireguard.conf</code></div>
 </div>
-<div class="card">
-<h2>Trust Internal HTTPS</h2>
-<p>Install the BitSwan VPN CA certificate to avoid browser warnings for internal services.</p>
-<button class="btn-secondary" onclick="downloadCA()">Download CA Certificate</button>
-<details>
-<summary>CA certificate installation</summary>
-<div style="margin-top:8px;">
-<p><b>macOS:</b> Double-click the .crt file &rarr; add to Keychain &rarr; double-click the cert in Keychain &rarr; Trust &rarr; set to <b>Always Trust</b>.</p>
-<p><b>Windows:</b> Double-click the .crt &rarr; Install Certificate &rarr; Local Machine &rarr; Place in: <b>Trusted Root Certification Authorities</b>.</p>
-<p><b>Linux:</b></p>
-<pre><code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/
-sudo update-ca-certificates</code></pre>
-<p><b>Firefox</b> (all platforms): Settings &rarr; Privacy &amp; Security &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
-<p class="note">Firefox uses its own certificate store, so you need to import separately even if the system trusts the CA.</p>
+
+<div style="margin-top:16px;">
+  <button class="btn-secondary" onclick="downloadCA()">Download CA Certificate</button>
+  <span class="note" style="margin-left:8px;">Needed for internal HTTPS (see platform instructions above)</span>
 </div>
-</details>
 </div>
 <script>
 function bootstrap() {
@@ -368,6 +365,12 @@ function claimToken() {
 }
 function downloadCA() {
   const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = 'bitswan-vpn-ca.crt'; a.click();
+}
+function showTab(id) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
 }
 </script></body></html>`, email, bootstrapSection)
 }
