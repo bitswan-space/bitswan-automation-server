@@ -341,49 +341,96 @@ func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string,
 <button onclick="claimToken()">Get VPN Config</button>
 </div>
 <div class="card">
-<h2>Setup Guide</h2>
+<h2>VPN Setup Guide</h2>
 <p>After downloading your configuration file, follow these steps to connect.</p>
-<div class="tabs">
-  <button class="tab active" onclick="showTab('macos')">macOS</button>
-  <button class="tab" onclick="showTab('windows')">Windows</button>
-  <button class="tab" onclick="showTab('linux')">Linux</button>
+<div class="tabs" id="vpn-tabs">
+  <button class="tab active" onclick="showTab('vpn-tabs','vpn-macos')">macOS</button>
+  <button class="tab" onclick="showTab('vpn-tabs','vpn-windows')">Windows</button>
+  <button class="tab" onclick="showTab('vpn-tabs','vpn-linux')">Linux</button>
 </div>
 
-<div id="tab-macos" class="tab-content active">
+<div id="vpn-macos" class="tab-content active">
   <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard client<br><a href="https://apps.apple.com/app/wireguard/id1451685025" class="install-link">Download from Mac App Store &rarr;</a></div></div>
   <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and select <b>Import Tunnel(s) from File</b> (or drag the file onto the app icon)</div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded configuration file</div></div>
   <div class="step"><span class="step-num">4</span><div class="step-text">Click <b>Activate</b> to connect to the VPN</div></div>
-  <div class="tip">To trust internal HTTPS: download the CA certificate below, double-click it to add to Keychain, then open Keychain Access, find the BitSwan certificate, and set Trust to <b>Always Trust</b>. Firefox requires a separate import via Settings &rarr; Privacy &rarr; Certificates.</div>
 </div>
 
-<div id="tab-windows" class="tab-content">
+<div id="vpn-windows" class="tab-content">
   <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard client<br><a href="https://www.wireguard.com/install/" class="install-link">Download from wireguard.com &rarr;</a></div></div>
   <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and click <b>Import tunnel(s) from file</b></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded configuration file</div></div>
   <div class="step"><span class="step-num">4</span><div class="step-text">Click <b>Activate</b> to connect to the VPN</div></div>
-  <div class="tip">To trust internal HTTPS: download the CA certificate below, double-click it, select <b>Install Certificate</b> &rarr; <b>Local Machine</b> &rarr; place in <b>Trusted Root Certification Authorities</b>. Firefox requires a separate import via Settings &rarr; Privacy &rarr; Certificates.</div>
 </div>
 
-<div id="tab-linux" class="tab-content">
+<div id="vpn-linux" class="tab-content">
   <div class="step"><span class="step-num">1</span><div class="step-text">Install WireGuard<pre><code>sudo apt install wireguard      # Debian / Ubuntu
 sudo dnf install wireguard-tools  # Fedora / RHEL
 sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
   <div class="step"><span class="step-num">2</span><div class="step-text">Copy the configuration file<pre><code>sudo cp ~/Downloads/wireguard.conf /etc/wireguard/bitswan.conf</code></pre></div></div>
   <div class="step"><span class="step-num">3</span><div class="step-text">Connect to the VPN<pre><code>sudo wg-quick up bitswan</code></pre></div></div>
   <div class="step"><span class="step-num">4</span><div class="step-text">Optional: enable auto-connect on boot<pre><code>sudo systemctl enable wg-quick@bitswan</code></pre></div></div>
-  <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>To trust internal HTTPS: download the CA certificate below, then:<pre><code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/
-sudo update-ca-certificates</code></pre>Firefox requires a separate import via Preferences &rarr; Privacy &rarr; Certificates &rarr; Import.
-<br><br><b>DNS note:</b> If you use a custom DNS resolver (dnsmasq, Unbound, etc.) instead of systemd-resolved, add a forwarding rule for <code>.bswn.internal</code>:<br>
+  <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>
+<b>DNS note:</b> If you use a custom DNS resolver (dnsmasq, Unbound, etc.) instead of systemd-resolved, add a forwarding rule for <code>.bswn.internal</code>:<br>
 <b>dnsmasq:</b> add <code>server=/bswn.internal/10.8.0.1</code> to your config<br>
-<b>Unbound:</b> add a <code>forward-zone</code> for <code>bswn.internal</code> pointing to <code>10.8.0.1</code><br>
-You can verify DNS works with: <code>dig @10.8.0.1 vpn-admin.network-test-3.bswn.internal</code></div>
+<b>Unbound:</b> add a <code>forward-zone</code> for <code>bswn.internal</code> pointing to <code>10.8.0.1</code></div>
+</div>
 </div>
 
+<div class="card">
+<h2>Certificate Trust Setup</h2>
+<p>Internal services use HTTPS with a private certificate authority. Install the CA certificate so your browser trusts these connections.</p>
+<div style="margin-bottom:16px;">
+  <button onclick="downloadCA()">Download CA Certificate</button>
+</div>
+<div class="tabs" id="cert-tabs">
+  <button class="tab active" onclick="showTab('cert-tabs','cert-macos')">macOS</button>
+  <button class="tab" onclick="showTab('cert-tabs','cert-windows')">Windows</button>
+  <button class="tab" onclick="showTab('cert-tabs','cert-linux')">Linux</button>
+  <button class="tab" onclick="showTab('cert-tabs','cert-chrome')">Chrome</button>
+  <button class="tab" onclick="showTab('cert-tabs','cert-firefox')">Firefox</button>
+</div>
 
-<div style="margin-top:16px;">
-  <button class="btn-secondary" onclick="downloadCA()">Download CA Certificate</button>
-  <span class="note" style="margin-left:8px;">Needed for internal HTTPS (see platform instructions above)</span>
+<div id="cert-macos" class="tab-content active">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Double-click the downloaded <code>.crt</code> file to open Keychain Access</div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">The certificate will be added to your login keychain. Find it by searching for the server name.</div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Double-click the certificate, expand <b>Trust</b>, and set <b>When using this certificate</b> to <b>Always Trust</b></div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Close the dialog and enter your password to confirm</div></div>
+  <div class="tip">This trusts the certificate for Safari and Chrome. Firefox uses its own certificate store &mdash; see the Firefox tab.</div>
+</div>
+
+<div id="cert-windows" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Double-click the downloaded <code>.crt</code> file</div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Click <b>Install Certificate</b></div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Select <b>Local Machine</b> (requires administrator), click Next</div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Select <b>Place all certificates in the following store</b>, click Browse, choose <b>Trusted Root Certification Authorities</b></div></div>
+  <div class="step"><span class="step-num">5</span><div class="step-text">Click Next, then Finish. Confirm the security warning.</div></div>
+  <div class="tip">This trusts the certificate for Edge and Chrome. Firefox uses its own store &mdash; see the Firefox tab.</div>
+</div>
+
+<div id="cert-linux" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Copy the certificate to the system trust store<pre><code>sudo cp ~/Downloads/*-ca.crt /usr/local/share/ca-certificates/</code></pre></div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Update the certificate store<pre><code>sudo update-ca-certificates</code></pre></div></div>
+  <div class="tip">This trusts the certificate for <code>curl</code>, <code>wget</code>, and Chromium-based browsers. Firefox uses its own store &mdash; see the Firefox tab.<br><br>
+On Fedora/RHEL, use instead:<pre><code>sudo cp ~/Downloads/*-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust</code></pre></div>
+</div>
+
+<div id="cert-chrome" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Open Chrome and go to <code>chrome://settings/certificates</code> (or Settings &rarr; Privacy and security &rarr; Security &rarr; Manage certificates)</div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Click the <b>Authorities</b> tab</div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Click <b>Import</b> and select the downloaded <code>.crt</code> file</div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Check <b>Trust this certificate for identifying websites</b> and click OK</div></div>
+  <div class="tip">On macOS and Windows, Chrome uses the system certificate store, so installing via the OS-level instructions above is usually sufficient. The Chrome import is mainly needed on Linux.</div>
+</div>
+
+<div id="cert-firefox" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Open Firefox and go to <code>about:preferences#privacy</code> (or Settings &rarr; Privacy &amp; Security)</div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Scroll down to <b>Certificates</b> and click <b>View Certificates</b></div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">In the <b>Authorities</b> tab, click <b>Import</b></div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.crt</code> file</div></div>
+  <div class="step"><span class="step-num">5</span><div class="step-text">Check <b>Trust this CA to identify websites</b> and click OK</div></div>
+  <div class="tip">Firefox uses its own certificate store on all platforms. Even if the certificate is trusted at the OS level, you still need to import it into Firefox separately.</div>
 </div>
 </div>
 <script>
@@ -404,10 +451,12 @@ function claimToken() {
 function downloadCA() {
   const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = '%s'; a.click();
 }
-function showTab(id) {
-  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-' + id).classList.add('active');
+function showTab(groupId, tabId) {
+  const group = document.getElementById(groupId);
+  const card = group.closest('.card');
+  card.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  group.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
   event.target.classList.add('active');
 }
 </script>
