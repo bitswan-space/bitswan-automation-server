@@ -255,10 +255,10 @@ providers:
 		fmt.Printf("Warning: failed to register external VPN admin route: %v\n", err)
 	}
 
-	// Internal VPN admin: behind VPN, no OAuth needed (direct to daemon).
+	// Internal VPN admin: behind VPN + OAuth (so we know who the user is).
 	internalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + internalDomain,
-		Upstream:      "bitswan-automation-server-daemon:8080",
+		Upstream:      vpnAdminOAuthUpstream,
 		IngressTarget: "internal",
 	}
 	if err := addRouteToIngress(internalAdminReq, ""); err != nil {
