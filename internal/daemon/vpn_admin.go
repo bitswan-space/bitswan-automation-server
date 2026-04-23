@@ -317,9 +317,10 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		qType := r.URL.Query().Get("type")
 		mgr := vpnManager()
 		monitor := vpn.NewSessionMonitor(mgr)
+		defer monitor.Close()
 
 		if qType == "history" {
-			// Historical events from JSONL log
+			// Historical events from SQLite log
 			events, _ := monitor.GetSessionLog(100)
 			if events == nil {
 				events = []vpn.SessionEvent{}

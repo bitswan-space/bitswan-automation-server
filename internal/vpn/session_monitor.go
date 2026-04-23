@@ -1,11 +1,8 @@
 package vpn
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +10,6 @@ import (
 
 const (
 	handshakeTimeout = 3 * time.Minute // no handshake for 3 min = offline
-	sessionLogFile   = "sessions.jsonl"
 	iptablesPrefix   = "WG-HANDSHAKE: "
 )
 
@@ -34,28 +30,32 @@ type SessionEvent struct {
 
 // PeerState tracks the last known state of a WireGuard peer.
 type PeerState struct {
-	PublicKey      string
-	LastHandshake  time.Time
-	TransferRx    int64
-	TransferTx    int64
-	Connected     bool
+	PublicKey     string
+	LastHandshake time.Time
+	TransferRx   int64
+	TransferTx   int64
+	Connected    bool
 }
 
 // SessionMonitor watches for WireGuard handshakes via iptables log
 // and enriches them with wg show data.
 type SessionMonitor struct {
 	manager    *Manager
-	logPath    string // path to sessions.jsonl
+	store      *SessionStore
 	peerStates map[string]*PeerState // pubkey → state
 	mu         sync.Mutex
 	stopCh     chan struct{}
 }
 
-// NewSessionMonitor creates a monitor that writes to the VPN config dir.
+// NewSessionMonitor creates a monitor backed by SQLite in the VPN config dir.
 func NewSessionMonitor(manager *Manager) *SessionMonitor {
+	store, err := NewSessionStore(manager.baseDir)
+	if err != nil {
+		fmt.Printf("Warning: failed to open session store: %v\n", err)
+	}
 	return &SessionMonitor{
 		manager:    manager,
-		logPath:    filepath.Join(manager.baseDir, sessionLogFile),
+		store:      store,
 		peerStates: make(map[string]*PeerState),
 		stopCh:     make(chan struct{}),
 	}
@@ -74,8 +74,9 @@ func (sm *SessionMonitor) Start() error {
 }
 
 func (sm *SessionMonitor) pollLoop() {
-	// Initial poll immediately
-	sm.pollPeerStates()
+	// Seed initial state without emitting events — avoids false "connected"
+	// entries on every daemon restart.
+	sm.seedInitialState()
 
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -85,6 +86,48 @@ func (sm *SessionMonitor) pollLoop() {
 			return
 		case <-ticker.C:
 			sm.pollPeerStates()
+		}
+	}
+}
+
+// seedInitialState loads persisted peer states from SQLite, then reconciles
+// with the live wg show dump. No events are emitted — this silently
+// establishes the baseline so the first real poll only logs actual changes.
+func (sm *SessionMonitor) seedInitialState() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// 1. Load last-known states from the database (survives restarts).
+	if sm.store != nil {
+		saved, err := sm.store.LoadPeerStates()
+		if err == nil && len(saved) > 0 {
+			sm.peerStates = saved
+		}
+	}
+
+	// 2. Reconcile with live WireGuard state — update without emitting events.
+	peers, err := sm.getWgShowDump()
+	if err != nil {
+		return
+	}
+
+	now := time.Now().UTC()
+	for _, peer := range peers {
+		isActive := !peer.LastHandshake.IsZero() && now.Sub(peer.LastHandshake) < handshakeTimeout
+
+		existing, ok := sm.peerStates[peer.PublicKey]
+		if !ok {
+			existing = &PeerState{PublicKey: peer.PublicKey}
+			sm.peerStates[peer.PublicKey] = existing
+		}
+
+		existing.LastHandshake = peer.LastHandshake
+		existing.TransferRx = peer.TransferRx
+		existing.TransferTx = peer.TransferTx
+		existing.Connected = isActive
+
+		if sm.store != nil {
+			sm.store.SavePeerState(existing)
 		}
 	}
 }
@@ -117,6 +160,7 @@ func (sm *SessionMonitor) pollPeerStates() {
 			if isActive {
 				sm.emitEvent(peer.PublicKey, "connected", "", peer.TransferRx, peer.TransferTx)
 			}
+			sm.persistPeerState(sm.peerStates[peer.PublicKey])
 			continue
 		}
 
@@ -137,16 +181,60 @@ func (sm *SessionMonitor) pollPeerStates() {
 		existing.LastHandshake = peer.LastHandshake
 		existing.TransferRx = peer.TransferRx
 		existing.TransferTx = peer.TransferTx
+
+		sm.persistPeerState(existing)
 	}
 }
 
-// Stop shuts down the monitor.
+// Stop shuts down the polling goroutine and closes the database.
 func (sm *SessionMonitor) Stop() {
 	close(sm.stopCh)
+	if sm.store != nil {
+		sm.store.Close()
+	}
+}
+
+// Close releases the database connection without stopping the poll loop.
+// Use for short-lived read-only monitors that were never Start()ed.
+func (sm *SessionMonitor) Close() {
+	if sm.store != nil {
+		sm.store.Close()
+	}
 }
 
 // GetActiveSessions returns currently connected devices.
+// Reads from SQLite so it works even on throwaway read-only monitors.
 func (sm *SessionMonitor) GetActiveSessions() []SessionEvent {
+	// Try SQLite first (works for read-only monitors without a poll loop).
+	if sm.store != nil {
+		states, err := sm.store.LoadPeerStates()
+		if err == nil {
+			var active []SessionEvent
+			for _, state := range states {
+				if !state.Connected {
+					continue
+				}
+				device := sm.lookupDevice(state.PublicKey)
+				if device == nil {
+					continue
+				}
+				active = append(active, SessionEvent{
+					DeviceID:   device.DeviceID,
+					UserID:     device.UserID,
+					DeviceName: device.DeviceName,
+					Event:      "active",
+					Timestamp:  state.LastHandshake.Format(time.RFC3339),
+					PublicKey:  state.PublicKey,
+					IP:         device.IP,
+					TransferRx: state.TransferRx,
+					TransferTx: state.TransferTx,
+				})
+			}
+			return active
+		}
+	}
+
+	// Fallback to in-memory state (for the running monitor).
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -174,34 +262,12 @@ func (sm *SessionMonitor) GetActiveSessions() []SessionEvent {
 	return active
 }
 
-// GetSessionLog returns recent session events from the log file.
+// GetSessionLog returns recent session events from the SQLite database.
 func (sm *SessionMonitor) GetSessionLog(limit int) ([]SessionEvent, error) {
-	data, err := os.ReadFile(sm.logPath)
-	if os.IsNotExist(err) {
+	if sm.store == nil {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	var events []SessionEvent
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		var event SessionEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-		events = append(events, event)
-	}
-
-	// Return last N events
-	if limit > 0 && len(events) > limit {
-		events = events[len(events)-limit:]
-	}
-	return events, nil
+	return sm.store.GetRecentEvents(limit)
 }
 
 // --- Internal ---
@@ -226,9 +292,6 @@ func (sm *SessionMonitor) ensureIptablesRule() error {
 	return nil
 }
 
-// Removed: tailKernelLog, onHandshakeDetected, disconnectChecker
-// Replaced by pollLoop + pollPeerStates which uses wg show dump directly.
-
 func (sm *SessionMonitor) emitEvent(publicKey, event, sourceIP string, rx, tx int64) {
 	device := sm.lookupDevice(publicKey)
 
@@ -248,15 +311,18 @@ func (sm *SessionMonitor) emitEvent(publicKey, event, sourceIP string, rx, tx in
 		sessionEvent.IP = device.IP
 	}
 
-	// Append to JSONL log
-	data, _ := json.Marshal(sessionEvent)
-	f, err := os.OpenFile(sm.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return
+	// Persist to SQLite
+	if sm.store != nil {
+		if err := sm.store.InsertEvent(sessionEvent); err != nil {
+			fmt.Printf("Warning: failed to persist session event: %v\n", err)
+		}
 	}
-	defer f.Close()
-	f.Write(data)
-	f.WriteString("\n")
+}
+
+func (sm *SessionMonitor) persistPeerState(ps *PeerState) {
+	if sm.store != nil {
+		sm.store.SavePeerState(ps)
+	}
 }
 
 func (sm *SessionMonitor) lookupDevice(publicKey string) *VPNDevice {
@@ -315,16 +381,4 @@ func (sm *SessionMonitor) getWgShowDump() ([]wgPeer, error) {
 		})
 	}
 	return peers, nil
-}
-
-func extractSourceIP(logLine string) string {
-	// iptables LOG format: ... SRC=1.2.3.4 DST=...
-	if idx := strings.Index(logLine, "SRC="); idx >= 0 {
-		rest := logLine[idx+4:]
-		if end := strings.IndexByte(rest, ' '); end >= 0 {
-			return rest[:end]
-		}
-		return rest
-	}
-	return ""
 }
