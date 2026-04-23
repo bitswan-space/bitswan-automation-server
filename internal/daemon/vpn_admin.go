@@ -288,7 +288,7 @@ function claimToken() {
 function downloadCA() {
   const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = 'bitswan-vpn-ca.crt'; a.click();
 }
-</script></body></html>`, email)
+</script></body></html>`, email, bootstrapSection)
 }
 
 func vpnAdminClaimHTML(token string) string {
