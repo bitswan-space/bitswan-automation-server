@@ -187,8 +187,13 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			// Build the claim URL using the external admin hostname
-			domain := os.Getenv("BITSWAN_GITOPS_DOMAIN")
-			claimURL := fmt.Sprintf("https://vpn-admin.%s/vpn-admin/claim/%s", domain, token)
+			cfgMagic := config.NewAutomationServerConfig()
+			scMagic, _ := cfgMagic.LoadConfig()
+			magicDomain := ""
+			if scMagic != nil {
+				magicDomain = scMagic.Domain
+			}
+			claimURL := fmt.Sprintf("https://vpn-admin.%s/vpn-admin/claim/%s", magicDomain, token)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
 				"token":     token,
