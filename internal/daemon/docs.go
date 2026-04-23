@@ -138,7 +138,7 @@ func getOpenAPISpec() string {
 		"### Workspace Create Command\n\n" +
 		"**Topic:** `workspace/create` (subscribe to send commands)\n\n" +
 		"**QoS:** 1\n\n" +
-		"**Request Format:**\n```json\n{\n  \"request-id\": \"unique-request-id\",\n  \"name\": \"workspace-name\",\n  \"remote\": \"git-repo-url\",\n  \"branch\": \"branch-name\",\n  \"domain\": \"example.com\",\n  \"certs-dir\": \"/path/to/certs\",\n  \"verbose\": false,\n  \"mkcerts\": false,\n  \"no-ide\": false,\n  \"set-hosts\": false,\n  \"local\": false,\n  \"gitops-image\": \"image:tag\",\n  \"editor-image\": \"image:tag\",\n  \"gitops-dev-source-dir\": \"/path/to/source\",\n  \"oauth-config\": \"/path/to/oauth.json\",\n  \"no-oauth\": false,\n  \"ssh-port\": \"2222\"\n}\n```\n\n" +
+		"**Request Format:**\n```json\n{\n  \"request-id\": \"unique-request-id\",\n  \"name\": \"workspace-name\",\n  \"remote\": \"git-repo-url\",\n  \"branch\": \"branch-name\",\n  \"domain\": \"example.com\",\n  \"certs-dir\": \"/path/to/certs\",\n  \"verbose\": false,\n  \"mkcerts\": false,\n  \"no-ide\": false,\n  \"set-hosts\": false,\n  \"local\": false,\n  \"gitops-image\": \"image:tag\",\n  \"editor-image\": \"image:tag\",\n  \"gitops-dev-source-dir\": \"/path/to/source\",\n  \"editor-dev-source-dir\": \"/path/to/source\",\n  \"oauth-config\": \"/path/to/oauth.json\",\n  \"no-oauth\": false,\n  \"ssh-port\": \"2222\"\n}\n```\n\n" +
 		"**Response:** Logs and results are published to the `logs` topic (see below).\n\n" +
 		"### Workspace Create Confirm Command\n\n" +
 		"**Topic:** `workspace/create/{request-id}/confirm` (publish to confirm SSH key prompt)\n\n" +

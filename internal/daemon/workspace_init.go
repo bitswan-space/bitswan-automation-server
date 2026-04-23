@@ -41,6 +41,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	gitopsImage := fs.String("gitops-image", "", "")
 	editorImage := fs.String("editor-image", "", "")
 	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
+	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
 	oauthConfigFile := fs.String("oauth-config", "", "")
 	noOauth := fs.Bool("no-oauth", false, "")
 	sshPort := fs.String("ssh-port", "", "")
@@ -653,7 +654,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	fmt.Println("GitOps deployment set up successfully!")
 
 	// Save metadata to file
-	if err := saveMetadata(gitopsConfig, workspaceName, token, *domain, *noIde, &workspaceId, mqttEnvVars, *gitopsDevSourceDir); err != nil {
+	if err := saveMetadata(gitopsConfig, workspaceName, token, *domain, *noIde, &workspaceId, mqttEnvVars, *gitopsDevSourceDir, *editorDevSourceDir); err != nil {
 		fmt.Printf("Warning: Failed to save metadata: %v\n", err)
 	}
 
@@ -835,7 +836,7 @@ func setHostsFile(workspaceName, domain string, noIde bool) error {
 	return nil
 }
 
-func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir string) error {
+func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir, editorDevSourceDir string) error {
 	metadata := config.WorkspaceMetadata{
 		Domain:       domain,
 		GitopsURL:    fmt.Sprintf("https://%s-gitops.%s", workspaceName, domain),
@@ -875,6 +876,11 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 
 	if gitopsDevSourceDir != "" {
 		metadata.GitopsDevSourceDir = &gitopsDevSourceDir
+	}
+
+	if editorDevSourceDir != "" {
+		metadata.EditorDevSourceDir = &editorDevSourceDir
+		metadata.DevMode = true
 	}
 
 	metadataPath := filepath.Join(gitopsConfig, "metadata.yaml")

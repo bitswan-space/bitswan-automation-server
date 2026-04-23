@@ -232,8 +232,19 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PASSWORD="+*metadata.MqttPassword)
 	}
 
+	var devConfig *EditorDevConfig
+	if metadata.DevMode {
+		devConfig = &EditorDevConfig{
+			DevMode: true,
+		}
+		if metadata.EditorDevSourceDir != nil {
+			devConfig.EditorDevSourceDir = *metadata.EditorDevSourceDir
+		}
+		fmt.Printf("Dev mode enabled for editor (extension source: %s)\n", devConfig.EditorDevSourceDir)
+	}
+
 	// Generate docker-compose content
-	dockerComposeContent, err := e.CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA)
+	dockerComposeContent, err := e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA, devConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
