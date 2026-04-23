@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -145,6 +146,20 @@ func (s *Server) connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId
 		}
 	}
 	fmt.Printf("  ✅ MQTT credentials received successfully!\n")
+
+	// Fetch OAuth config from AOC (same flow as workspace init)
+	fmt.Printf("  🔐 Fetching OAuth configuration from AOC...\n")
+	oauthConfig, oauthErr := aocClient.GetOAuthConfig(workspaceId)
+	if oauthErr != nil {
+		fmt.Printf("  ⚠️  Could not fetch OAuth config: %v\n", oauthErr)
+		fmt.Printf("  ⚠️  OAuth/Keycloak will not be configured for this workspace.\n")
+	} else {
+		if saveErr := oauth.SaveOauthConfig(workspaceName, oauthConfig); saveErr != nil {
+			fmt.Printf("  ⚠️  Failed to save OAuth config: %v\n", saveErr)
+		} else {
+			fmt.Printf("  ✅ OAuth configuration saved successfully!\n")
+		}
+	}
 
 	// Update metadata with new MQTT credentials and workspace ID
 	fmt.Printf("  💾 Updating metadata with MQTT credentials...\n")
