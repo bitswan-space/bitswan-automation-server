@@ -51,18 +51,12 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 
 	switch {
 	case r.URL.Path == "/vpn-admin" || r.URL.Path == "/vpn-admin/":
+		mgr := vpnManager()
+		users, _ := mgr.ListDevices()
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnAdminExternalHTML(email))
+		fmt.Fprint(w, vpnAdminExternalHTML(email, len(users) == 0))
 
 	case r.URL.Path == "/vpn-admin/bootstrap":
-		// Bootstrap is only available from the VPN-internal page or CLI.
-		// On the external page, require OAuth (X-Forwarded-Email must be set
-		// by an upstream OAuth proxy like oauth2-proxy).
-		email := r.Header.Get("X-Forwarded-Email")
-		if email == "" {
-			http.Error(w, "Bootstrap requires authentication. Use the VPN-internal admin page, the CLI (bitswan vpn bootstrap), or configure OAuth.", http.StatusForbidden)
-			return
-		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -70,7 +64,7 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		mgr := vpnManager()
 		users, _ := mgr.ListDevices()
 		if len(users) > 0 {
-			http.Error(w, "bootstrap already completed — use a magic link instead", http.StatusForbidden)
+			http.Error(w, "VPN bootstrap already completed — ask an admin for a magic link.", http.StatusForbidden)
 			return
 		}
 		conf, err := mgr.GenerateClient(email, "web")
@@ -231,7 +225,17 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 
 // --- HTML templates ---
 
-func vpnAdminExternalHTML(email string) string {
+func vpnAdminExternalHTML(email string, isFirstUser bool) string {
+	bootstrapSection := ""
+	if isFirstUser {
+		bootstrapSection = `<div class="card" style="border: 2px solid #1a73e8;">
+<h2>Welcome — First-Time VPN Setup</h2>
+<p>You are the first user. Click below to download your WireGuard VPN configuration.</p>
+<button onclick="bootstrap()">Download VPN Config</button>
+<p class="note">This option is available only once. After downloading, use the VPN-internal admin page to invite others.</p>
+</div>`
+	}
+
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN</title>
 <style>
@@ -245,6 +249,7 @@ button:hover { background: #1557b0; }
 </style></head><body>
 <p class="user-info">Signed in as <b>%s</b></p>
 <h1>BitSwan VPN Access</h1>
+%s
 <div class="card">
 <h2>Have a Magic Link?</h2>
 <p>If someone shared a magic link with you, paste the token below.</p>
@@ -265,8 +270,13 @@ button:hover { background: #1557b0; }
 </div>
 </details>
 </div>
-<p class="note">First-time setup: use the CLI (<code>bitswan vpn bootstrap</code>) or the VPN-internal admin page.</p>
 <script>
+function bootstrap() {
+  fetch('/vpn-admin/bootstrap', {method:'POST'})
+    .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
+    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'wireguard.conf'; a.click(); location.reload(); })
+    .catch(e => alert(e.message));
+}
 function claimToken() {
   const token = document.getElementById('token-input').value.trim();
   if (!token) { alert('Please enter a token'); return; }
