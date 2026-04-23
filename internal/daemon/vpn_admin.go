@@ -341,7 +341,11 @@ sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
   <div class="step"><span class="step-num">3</span><div class="step-text">Connect to the VPN<pre><code>sudo wg-quick up bitswan</code></pre></div></div>
   <div class="step"><span class="step-num">4</span><div class="step-text">Optional: enable auto-connect on boot<pre><code>sudo systemctl enable wg-quick@bitswan</code></pre></div></div>
   <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>To trust internal HTTPS: download the CA certificate below, then:<pre><code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/
-sudo update-ca-certificates</code></pre>Firefox requires a separate import via Preferences &rarr; Privacy &rarr; Certificates &rarr; Import.</div>
+sudo update-ca-certificates</code></pre>Firefox requires a separate import via Preferences &rarr; Privacy &rarr; Certificates &rarr; Import.
+<br><br><b>DNS note:</b> If you use a custom DNS resolver (dnsmasq, Unbound, etc.) instead of systemd-resolved, add a forwarding rule for <code>.bswn.internal</code>:<br>
+<b>dnsmasq:</b> add <code>server=/bswn.internal/10.8.0.1</code> to your config<br>
+<b>Unbound:</b> add a <code>forward-zone</code> for <code>bswn.internal</code> pointing to <code>10.8.0.1</code><br>
+You can verify DNS works with: <code>dig @10.8.0.1 vpn-admin.network-test-3.bswn.internal</code></div>
 </div>
 
 
