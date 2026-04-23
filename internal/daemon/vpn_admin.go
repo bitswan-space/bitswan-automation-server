@@ -230,7 +230,9 @@ const bitswanLogoSVG = `<svg width="140" height="33" viewBox="0 0 663.4 154.8" f
 const bitswanPageCSS = `
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px; color: #18181B; background: #FAFAFA; }
 .header { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; padding-bottom: 20px; border-bottom: 1px solid #E4E4E7; }
-.header h1 { font-size: 20px; font-weight: 600; color: #18181B; margin: 0; }
+.header h1 { font-size: 20px; font-weight: 600; color: #18181B; margin: 0; flex: 1; }
+.sign-out { font-size: 13px; color: #71717A; text-decoration: none; padding: 6px 12px; border: 1px solid #E4E4E7; border-radius: 6px; }
+.sign-out:hover { background: #F5F5F6; color: #18181B; }
 .card { background: #fff; border: 1px solid #E4E4E7; border-radius: 8px; padding: 24px; margin: 16px 0; }
 .card h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px 0; color: #18181B; }
 .card p { margin: 8px 0; color: #3F3F46; font-size: 14px; line-height: 1.5; }
@@ -251,7 +253,13 @@ button.danger { background: #DC2626; }
 button.danger:hover { background: #B91C1C; }
 code { background: #F5F5F6; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 details { margin-top: 12px; }
-summary { cursor: pointer; color: #71717A; font-size: 13px; }
+details[open] > summary { margin-bottom: 4px; }
+summary { cursor: pointer; color: #71717A; font-size: 14px; }
+summary b { color: #18181B; }
+pre { background: #F5F5F6; border-radius: 6px; padding: 12px; overflow-x: auto; margin: 8px 0; }
+pre code { background: none; padding: 0; }
+ol { padding-left: 20px; }
+ol li { margin: 6px 0; font-size: 14px; color: #3F3F46; }
 `
 
 func vpnAdminExternalHTML(email string, isFirstUser bool) string {
@@ -268,7 +276,7 @@ func vpnAdminExternalHTML(email string, isFirstUser bool) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN</title>
 <style>`+bitswanPageCSS+`</style></head><body>
-<div class="header">`+bitswanLogoSVG+`<h1>VPN Access</h1></div>
+<div class="header">`+bitswanLogoSVG+`<h1>VPN Access</h1><a href="/oauth2/sign_out" class="sign-out">Sign out</a></div>
 <p class="user-info">Signed in as <b>%s</b></p>
 %s
 <div class="card">
@@ -278,16 +286,68 @@ func vpnAdminExternalHTML(email string, isFirstUser bool) string {
 <button onclick="claimToken()">Get VPN Config</button>
 </div>
 <div class="card">
+<h2>Installing WireGuard</h2>
+<p>After downloading your <code>wireguard.conf</code> file, follow the instructions for your platform:</p>
+<details open>
+<summary><b>macOS</b></summary>
+<div style="margin-top:8px;">
+<ol>
+<li>Install WireGuard from the <a href="https://apps.apple.com/app/wireguard/id1451685025" style="color:#093DF5">Mac App Store</a></li>
+<li>Open WireGuard &rarr; <b>Import Tunnel(s) from File</b></li>
+<li>Select the downloaded <code>wireguard.conf</code></li>
+<li>Click <b>Activate</b> to connect</li>
+</ol>
+</div>
+</details>
+<details>
+<summary><b>Windows</b></summary>
+<div style="margin-top:8px;">
+<ol>
+<li>Download and install WireGuard from <a href="https://www.wireguard.com/install/" style="color:#093DF5">wireguard.com/install</a></li>
+<li>Open WireGuard &rarr; <b>Import tunnel(s) from file</b></li>
+<li>Select the downloaded <code>wireguard.conf</code></li>
+<li>Click <b>Activate</b> to connect</li>
+</ol>
+</div>
+</details>
+<details>
+<summary><b>Linux</b></summary>
+<div style="margin-top:8px;">
+<ol>
+<li>Install WireGuard: <code>sudo apt install wireguard</code> (Debian/Ubuntu) or <code>sudo dnf install wireguard-tools</code> (Fedora)</li>
+<li>Copy the config: <code>sudo cp wireguard.conf /etc/wireguard/bitswan.conf</code></li>
+<li>Connect: <code>sudo wg-quick up bitswan</code></li>
+<li>To auto-connect on boot: <code>sudo systemctl enable wg-quick@bitswan</code></li>
+</ol>
+<p class="note">To disconnect: <code>sudo wg-quick down bitswan</code></p>
+</div>
+</details>
+<details>
+<summary><b>iOS / Android</b></summary>
+<div style="margin-top:8px;">
+<ol>
+<li>Install the WireGuard app from your device's app store</li>
+<li>Tap <b>+</b> &rarr; <b>Create from file or archive</b></li>
+<li>Select the downloaded <code>wireguard.conf</code></li>
+<li>Toggle the tunnel on to connect</li>
+</ol>
+</div>
+</details>
+</div>
+<div class="card">
 <h2>Trust Internal HTTPS</h2>
 <p>Install the BitSwan VPN CA certificate to avoid browser warnings for internal services.</p>
 <button class="btn-secondary" onclick="downloadCA()">Download CA Certificate</button>
 <details>
-<summary>Installation instructions</summary>
+<summary>CA certificate installation</summary>
 <div style="margin-top:8px;">
-<p><b>macOS:</b> Double-click the .crt file, add to Keychain, then set to Always Trust.</p>
-<p><b>Windows:</b> Double-click &rarr; Install Certificate &rarr; Local Machine &rarr; Trusted Root Certification Authorities.</p>
-<p><b>Linux:</b> <code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/ &amp;&amp; sudo update-ca-certificates</code></p>
-<p><b>Firefox:</b> Settings &rarr; Privacy &amp; Security &rarr; View Certificates &rarr; Import.</p>
+<p><b>macOS:</b> Double-click the .crt file &rarr; add to Keychain &rarr; double-click the cert in Keychain &rarr; Trust &rarr; set to <b>Always Trust</b>.</p>
+<p><b>Windows:</b> Double-click the .crt &rarr; Install Certificate &rarr; Local Machine &rarr; Place in: <b>Trusted Root Certification Authorities</b>.</p>
+<p><b>Linux:</b></p>
+<pre><code>sudo cp bitswan-vpn-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates</code></pre>
+<p><b>Firefox</b> (all platforms): Settings &rarr; Privacy &amp; Security &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
+<p class="note">Firefox uses its own certificate store, so you need to import separately even if the system trusts the CA.</p>
 </div>
 </details>
 </div>
