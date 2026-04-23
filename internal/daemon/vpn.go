@@ -383,6 +383,7 @@ func (s *Server) handleVPNSessions(w http.ResponseWriter, r *http.Request) {
 
 	mgr := vpnManager()
 	monitor := vpn.NewSessionMonitor(mgr)
+	defer monitor.Close()
 
 	// Check for ?active=true query param
 	if r.URL.Query().Get("active") == "true" {
