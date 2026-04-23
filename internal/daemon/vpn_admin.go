@@ -1043,11 +1043,12 @@ function loadLive() {
 function loadHistory() {
   fetch('/vpn-admin-internal/api/sessions?type=history').then(r=>r.json()).then(events => {
     if (!events || !events.length) { document.getElementById('history-table').innerHTML = '<p class="note">No events recorded yet. Events are logged as peers connect and disconnect.</p>'; return; }
-    let html = '<table><tr><th>Time</th><th>Event</th><th>User</th><th>Device</th><th>IP</th></tr>';
+    function fmtBytes(b) { if (!b) return '-'; if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; }
+    let html = '<table><tr><th>Time</th><th>Event</th><th>User</th><th>Device</th><th>IP</th><th>Downloaded</th><th>Uploaded</th></tr>';
     events.reverse().forEach(e => {
       const time = e.timestamp ? new Date(e.timestamp).toLocaleString() : '';
       const badge = e.event === 'connected' ? '<span style="color:#22C55E;">connected</span>' : e.event === 'disconnected' ? '<span style="color:#EF4444;">disconnected</span>' : e.event;
-      html += '<tr><td>' + time + '</td><td>' + badge + '</td><td>' + (e.user_id||'') + '</td><td>' + (e.device_name||'') + '</td><td><code>' + (e.ip||'') + '</code></td></tr>';
+      html += '<tr><td>' + time + '</td><td>' + badge + '</td><td>' + (e.user_id||'') + '</td><td>' + (e.device_name||'') + '</td><td><code>' + (e.ip||'') + '</code></td><td>' + fmtBytes(e.transfer_rx) + '</td><td>' + fmtBytes(e.transfer_tx) + '</td></tr>';
     });
     html += '</table>';
     document.getElementById('history-table').innerHTML = html;
