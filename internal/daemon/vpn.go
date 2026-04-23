@@ -623,8 +623,27 @@ func setupVPNAdminOAuth(domain string) error {
 		args = append(args, "--oidc-groups-claim=group_membership")
 	}
 
-	// Keycloak doesn't always set email_verified in the ID token
-	args = append(args, "--insecure-oidc-allow-unverified-email=true")
+	// Write custom error template so users see a helpful message
+	// when authentication fails (e.g., unverified email)
+	homeDir := os.Getenv("HOME")
+	templateDir := filepath.Join(homeDir, ".config", "bitswan", "oauth2-proxy-templates")
+	os.MkdirAll(templateDir, 0755)
+	errorTemplate := `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>BitSwan VPN — Authentication Error</title>
+<style>` + bitswanPageCSS + `</style></head><body>
+<div class="header">` + bitswanLogoSVG + `<h1>Authentication Error</h1></div>
+<div class="card">
+<h2>{{.Title}}</h2>
+<p>{{.Message}}</p>
+</div>
+<div class="card">
+<h2>Common causes</h2>
+<div class="step"><span class="step-num">1</span><div class="step-text"><b>Email not verified</b> — your identity provider must mark your email as verified. Ask your Keycloak administrator to verify your email address.</div></div>
+<div class="step"><span class="step-num">2</span><div class="step-text"><b>Session expired</b> — try signing in again by visiting the <a href="/vpn-admin/" style="color:#093DF5">VPN admin page</a>.</div></div>
+<div class="step"><span class="step-num">3</span><div class="step-text"><b>Not authorized</b> — you may not be a member of this automation server's organization in Keycloak.</div></div>
+</div></body></html>`
+	os.WriteFile(filepath.Join(templateDir, "error.html"), []byte(errorTemplate), 0644)
+	args = append(args, "--custom-templates-dir="+templateDir)
 
 	// Check if oauth2-proxy binary exists
 	oauth2ProxyPath := "/usr/local/bin/oauth2-proxy"
