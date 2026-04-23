@@ -991,6 +991,12 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 		fmt.Fprintf(writer, "Warning: VPN CA init failed: %v\n", err)
 	}
 	tlsHostnames := []string{"*.bswn.internal", "bswn.internal"}
+	if serverConfig != nil && serverConfig.Slug != "" {
+		tlsHostnames = append(tlsHostnames,
+			"*."+serverConfig.Slug+".bswn.internal",
+			serverConfig.Slug+".bswn.internal",
+		)
+	}
 	if serverConfig != nil && serverConfig.Domain != "" {
 		tlsHostnames = append(tlsHostnames, "*."+serverConfig.Domain, serverConfig.Domain)
 	}

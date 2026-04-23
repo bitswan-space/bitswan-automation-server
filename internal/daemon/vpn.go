@@ -105,14 +105,23 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue TLS certificate for VPN Traefik (wildcard for all internal services)
+	// Issue TLS certificate for VPN Traefik.
+	// Wildcards only cover one level, so we need *.bswn.internal AND
+	// *.{slug}.bswn.internal to cover sub-subdomains like
+	// vpn-admin.network-test-3.bswn.internal.
+	cfg := config.NewAutomationServerConfig()
+	serverConfig, _ := cfg.LoadConfig()
 	tlsHostnames := []string{
 		"*.bswn.internal",
 		"bswn.internal",
 	}
-	// Also add the public domain if available, for VPN-internal routes using public hostnames
-	cfg := config.NewAutomationServerConfig()
-	serverConfig, _ := cfg.LoadConfig()
+	if serverConfig != nil && serverConfig.Slug != "" {
+		tlsHostnames = append(tlsHostnames,
+			"*."+serverConfig.Slug+".bswn.internal",
+			serverConfig.Slug+".bswn.internal",
+		)
+	}
+	// Also add the public domain for VPN-internal routes using public hostnames
 	if serverConfig != nil && serverConfig.Domain != "" {
 		tlsHostnames = append(tlsHostnames, "*."+serverConfig.Domain, serverConfig.Domain)
 	}
