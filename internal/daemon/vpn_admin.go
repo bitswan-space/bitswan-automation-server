@@ -315,7 +315,6 @@ func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string)
   <button class="tab active" onclick="showTab('macos')">macOS</button>
   <button class="tab" onclick="showTab('windows')">Windows</button>
   <button class="tab" onclick="showTab('linux')">Linux</button>
-  <button class="tab" onclick="showTab('mobile')">iOS / Android</button>
 </div>
 
 <div id="tab-macos" class="tab-content active">
@@ -345,13 +344,6 @@ sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
 sudo update-ca-certificates</code></pre>Firefox requires a separate import via Preferences &rarr; Privacy &rarr; Certificates &rarr; Import.</div>
 </div>
 
-<div id="tab-mobile" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard app<br><a href="https://apps.apple.com/app/wireguard/id1451685025" class="install-link">App Store (iOS) &rarr;</a><a href="https://play.google.com/store/apps/details?id=com.wireguard.android" class="install-link">Google Play (Android) &rarr;</a></div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Tap the <b>+</b> button, then select <b>Create from file or archive</b></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Toggle the tunnel switch to connect</div></div>
-  <div class="tip">Tip: to add a phone, first connect to the VPN on your desktop, then use the <a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#1E40AF">internal admin page</a> to add a new device (e.g. &ldquo;my-phone&rdquo;). You'll get a QR code to scan with the WireGuard app.</div>
-</div>
 
 <div style="margin-top:16px;">
   <button class="btn-secondary" onclick="downloadCA()">Download CA Certificate</button>
@@ -386,7 +378,7 @@ function showTab(id) {
 <div style="margin-top:32px;padding-top:16px;border-top:1px solid #E4E4E7;text-align:center;">
 <p class="note">Once connected to the VPN, manage users and create magic links at the<br><a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#093DF5">internal admin page</a> (requires VPN connection)</p>
 </div>
-</body></html>`, email, bootstrapSection, internalDomain, internalDomain)
+</body></html>`, email, bootstrapSection, internalDomain)
 }
 
 func vpnAdminClaimHTML(token string) string {
