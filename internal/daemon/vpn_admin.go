@@ -51,8 +51,14 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 	case r.URL.Path == "/vpn-admin" || r.URL.Path == "/vpn-admin/":
 		mgr := vpnManager()
 		users, _ := mgr.ListDevices()
+		cfg := config.NewAutomationServerConfig()
+		sc, _ := cfg.LoadConfig()
+		internalDomain := ""
+		if sc != nil {
+			internalDomain = sc.InternalDomain()
+		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnAdminExternalHTML(email, len(users) == 0))
+		fmt.Fprint(w, vpnAdminExternalHTML(email, len(users) == 0, internalDomain))
 
 	case r.URL.Path == "/vpn-admin/bootstrap":
 		if r.Method != http.MethodPost {
@@ -278,7 +284,7 @@ ol li { margin: 8px 0; font-size: 14px; color: #3F3F46; line-height: 1.6; }
 .tip { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #1E40AF; }
 `
 
-func vpnAdminExternalHTML(email string, isFirstUser bool) string {
+func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string) string {
 	bootstrapSection := ""
 	if isFirstUser {
 		bootstrapSection = `<div class="card highlight">
@@ -343,7 +349,7 @@ sudo update-ca-certificates</code></pre>Firefox requires a separate import via P
   <div class="step"><span class="step-num">2</span><div class="step-text">Tap the <b>+</b> button, then select <b>Create from file or archive</b></div></div>
   <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded <code>wireguard.conf</code> file</div></div>
   <div class="step"><span class="step-num">4</span><div class="step-text">Toggle the tunnel switch to connect</div></div>
-  <div class="tip">Tip: you can also transfer the config by scanning a QR code. Generate one from a computer with <code>qrencode -t ansiutf8 &lt; wireguard.conf</code></div>
+  <div class="tip">Tip: to add a phone, first connect to the VPN on your desktop, then use the <a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#1E40AF">internal admin page</a> to add a new device (e.g. &ldquo;my-phone&rdquo;). You'll get a QR code to scan with the WireGuard app.</div>
 </div>
 
 <div style="margin-top:16px;">
@@ -375,7 +381,11 @@ function showTab(id) {
   document.getElementById('tab-' + id).classList.add('active');
   event.target.classList.add('active');
 }
-</script></body></html>`, email, bootstrapSection)
+</script>
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid #E4E4E7;text-align:center;">
+<p class="note">Once connected to the VPN, manage users and create magic links at the<br><a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#093DF5">internal admin page</a> (requires VPN connection)</p>
+</div>
+</body></html>`, email, bootstrapSection, internalDomain, internalDomain)
 }
 
 func vpnAdminClaimHTML(token string) string {
