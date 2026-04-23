@@ -414,7 +414,7 @@ function showTab(id) {
 <div style="margin-top:32px;padding-top:16px;border-top:1px solid #E4E4E7;text-align:center;">
 <p class="note">Once connected to the VPN, manage users and create magic links at the<br><a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#093DF5">internal admin page</a> (requires VPN connection)</p>
 </div>
-</body></html>`, email, bootstrapSection, internalDomain, wgFilename, wgFilename, caFilename)
+</body></html>`, email, bootstrapSection, wgFilename, wgFilename, caFilename, internalDomain)
 }
 
 func vpnAdminClaimHTML(token string) string {
