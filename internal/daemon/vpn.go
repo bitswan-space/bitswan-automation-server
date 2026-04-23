@@ -98,7 +98,11 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Initialize VPN certificate authority (for HTTPS on VPN Traefik)
+	// 2. Load server config (needed for CA naming and TLS cert SANs)
+	cfg := config.NewAutomationServerConfig()
+	serverConfig, _ := cfg.LoadConfig()
+
+	// 3. Initialize VPN certificate authority (for HTTPS on VPN Traefik)
 	caMgr := vpn.NewCAManager(vpnPath)
 	serverName := "BitSwan"
 	if serverConfig != nil && serverConfig.Name != "" {
@@ -113,8 +117,6 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 	// Wildcards only cover one level, so we need *.bswn.internal AND
 	// *.{slug}.bswn.internal to cover sub-subdomains like
 	// vpn-admin.network-test-3.bswn.internal.
-	cfg := config.NewAutomationServerConfig()
-	serverConfig, _ := cfg.LoadConfig()
 	tlsHostnames := []string{
 		"*.bswn.internal",
 		"bswn.internal",
