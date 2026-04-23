@@ -21,6 +21,7 @@ const (
 type MagicLink struct {
 	Token     string    `json:"token"`
 	CreatedBy string    `json:"created_by"`
+	ForEmail  string    `json:"for_email,omitempty"` // intended recipient email
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Claimed   bool      `json:"claimed"`
@@ -40,8 +41,14 @@ func NewMagicLinkStore(bitswanConfigDir string) *MagicLinkStore {
 	}
 }
 
-// Create generates a new magic link token.
+// Create generates a new magic link token (backward compatible, no target email).
 func (s *MagicLinkStore) Create(createdBy string) (string, error) {
+	return s.CreateForUser(createdBy, "")
+}
+
+// CreateForUser generates a magic link token bound to a specific email.
+// When claimed, the VPN credentials will be registered to forEmail.
+func (s *MagicLinkStore) CreateForUser(createdBy, forEmail string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -55,6 +62,7 @@ func (s *MagicLinkStore) Create(createdBy string) (string, error) {
 	link := MagicLink{
 		Token:     token,
 		CreatedBy: createdBy,
+		ForEmail:  forEmail,
 		CreatedAt: now,
 		ExpiresAt: now.Add(magicLinkExpiry),
 		Claimed:   false,
@@ -70,6 +78,22 @@ func (s *MagicLinkStore) Create(createdBy string) (string, error) {
 }
 
 // Validate checks if a token is valid (exists, not expired, not claimed).
+// Get returns a magic link by token without modifying it.
+func (s *MagicLinkStore) Get(token string) (*MagicLink, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	links, err := s.readLinks()
+	if err != nil {
+		return nil, err
+	}
+	for i := range links {
+		if links[i].Token == token {
+			return &links[i], nil
+		}
+	}
+	return nil, fmt.Errorf("token not found")
+}
+
 func (s *MagicLinkStore) Validate(token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

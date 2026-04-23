@@ -129,17 +129,31 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		// POST: actually claim and generate credentials
-		email := r.Header.Get("X-Forwarded-Email")
-		if email == "" {
-			email = "user-" + token[:8]
+		// POST: actually claim and generate credentials.
+		// Use the email bound to the magic link if set, otherwise fall back
+		// to the OAuth email from X-Forwarded-Email.
+		link, _ := store.Get(token)
+		claimEmail := ""
+		if link != nil && link.ForEmail != "" {
+			claimEmail = link.ForEmail
+			// If the user is authenticated via OAuth, verify the email matches
+			oauthEmail := r.Header.Get("X-Forwarded-Email")
+			if oauthEmail != "" && oauthEmail != claimEmail {
+				http.Error(w, fmt.Sprintf("This magic link is for %s, but you are signed in as %s", claimEmail, oauthEmail), http.StatusForbidden)
+				return
+			}
+		} else {
+			claimEmail = r.Header.Get("X-Forwarded-Email")
+			if claimEmail == "" {
+				claimEmail = "user-" + token[:8]
+			}
 		}
-		if err := store.Claim(token, email); err != nil {
+		if err := store.Claim(token, claimEmail); err != nil {
 			http.Error(w, fmt.Sprintf("failed to claim token: %v", err), http.StatusForbidden)
 			return
 		}
 		mgr := vpnManager()
-		conf, err := mgr.GenerateClient(email, "web")
+		conf, err := mgr.GenerateClient(claimEmail, "web")
 		if err != nil {
 			http.Error(w, fmt.Sprintf("failed to generate credentials: %v", err), http.StatusInternalServerError)
 			return
@@ -175,18 +189,18 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		if r.Method == http.MethodPost {
 			var body struct {
 				CreatedBy string `json:"created_by"`
+				ForEmail  string `json:"for_email"`
 			}
 			json.NewDecoder(r.Body).Decode(&body)
 			if body.CreatedBy == "" {
 				body.CreatedBy = "admin"
 			}
 			store := magicLinkStore()
-			token, err := store.Create(body.CreatedBy)
+			token, err := store.CreateForUser(body.CreatedBy, body.ForEmail)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("failed to create magic link: %v", err), http.StatusInternalServerError)
 				return
 			}
-			// Build the claim URL using the external admin hostname
 			cfgMagic := config.NewAutomationServerConfig()
 			scMagic, _ := cfgMagic.LoadConfig()
 			magicDomain := ""
@@ -198,6 +212,7 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 			json.NewEncoder(w).Encode(map[string]string{
 				"token":     token,
 				"claim_url": claimURL,
+				"for_email": body.ForEmail,
 				"expires":   "1 hour",
 			})
 			return
@@ -589,9 +604,9 @@ body { max-width: 800px; }
 
 <div class="card">
 <h2>My Devices</h2>
-<p>Add a new VPN device for your account.</p>
+<div id="my-devices">Loading...</div>
 <div class="add-device-form">
-  <input type="text" id="add-device" placeholder="Device name (e.g. laptop, phone)">
+  <input type="text" id="add-device" placeholder="New device name (e.g. laptop, phone)">
   <button onclick="addDevice()">Add Device</button>
 </div>
 <div id="add-result"></div>
@@ -599,8 +614,11 @@ body { max-width: 800px; }
 
 <div class="card">
 <h2>Invite User</h2>
-<p>Create a one-time magic link (valid 1 hour) for a new user to join the VPN.</p>
-<button onclick="generateLink()">Generate Magic Link</button>
+<p>Create a one-time magic link (valid 1 hour) for a specific user to join the VPN.</p>
+<div class="add-device-form">
+  <input type="text" id="invite-email" placeholder="User's email address">
+  <button onclick="generateLink()">Generate Magic Link</button>
+</div>
 <div id="link-result"></div>
 </div>
 
@@ -631,7 +649,9 @@ body { max-width: 800px; }
 
 <script>
 function generateLink() {
-  fetch('/vpn-admin-internal/api/magic-link', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({created_by:'admin'})})
+  const inviteEmail = document.getElementById('invite-email').value.trim();
+  if (!inviteEmail) { alert('Enter the email address of the user to invite'); return; }
+  fetch('/vpn-admin-internal/api/magic-link', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({created_by: currentUserEmail, for_email: inviteEmail})})
     .then(r => r.json())
     .then(d => {
       document.getElementById('link-result').innerHTML =
@@ -684,6 +704,24 @@ function loadUsers() {
       if (!grouped[u.user_id]) grouped[u.user_id] = [];
       grouped[u.user_id].push(u);
     });
+    // Render "My Devices" section
+    const myDevices = grouped[currentUserEmail] || [];
+    if (myDevices.length) {
+      let myHtml = '';
+      myDevices.forEach(d => {
+        const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
+        myHtml += '<div class="device-row">';
+        myHtml += '<div class="device-info"><div class="device-name">' + d.device_name + '</div>';
+        myHtml += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
+        myHtml += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="revokeDevice(\'' + d.device_id + '\')">Remove</button>';
+        myHtml += '</div>';
+      });
+      document.getElementById('my-devices').innerHTML = myHtml;
+    } else {
+      document.getElementById('my-devices').innerHTML = '<p class="note">No devices yet. Add one below.</p>';
+    }
+
+    // Render all users table
     let html = '';
     Object.keys(grouped).sort().forEach(userId => {
       html += '<div class="user-group"><div class="user-group-header">' + userId + '</div>';
@@ -704,10 +742,10 @@ function loadUsers() {
 function loadLinks() {
   fetch('/vpn-admin-internal/api/magic-link').then(r=>r.json()).then(links => {
     if (!links.length) { document.getElementById('links-table').innerHTML = '<p class="note">No pending invitations.</p>'; return; }
-    let html = '<table><tr><th>Created By</th><th>Expires</th><th>Token</th></tr>';
+    let html = '<table><tr><th>For</th><th>Created By</th><th>Expires</th></tr>';
     links.forEach(l => {
-      html += '<tr><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td>';
-      html += '<td style="font-family:monospace;font-size:12px">'+l.token.substring(0,12)+'&hellip;</td></tr>';
+      const forEmail = l.for_email || '<span class="note">any user</span>';
+      html += '<tr><td>'+forEmail+'</td><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td></tr>';
     });
     html += '</table>';
     document.getElementById('links-table').innerHTML = html;
