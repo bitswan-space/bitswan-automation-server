@@ -42,8 +42,9 @@ func (ca *CAManager) IsInitialized() bool {
 }
 
 // Init generates a new CA keypair and self-signed certificate.
-// The CA is valid for 10 years.
-func (ca *CAManager) Init(orgName string) error {
+// orgName is the organization (e.g., "BitSwan"), serverName identifies
+// this specific server (e.g., "network-test-3"). The CA is valid for 10 years.
+func (ca *CAManager) Init(orgName string, serverName ...string) error {
 	if ca.IsInitialized() {
 		return nil // already initialized
 	}
@@ -62,7 +63,7 @@ func (ca *CAManager) Init(orgName string) error {
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{orgName},
-			CommonName:   orgName + " VPN CA",
+			CommonName:   ca.caCN(orgName, serverName...),
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -178,6 +179,13 @@ func (ca *CAManager) IssueTLSCert(hostnames []string) (certPath, keyPath string,
 	}
 
 	return certPath, keyPath, nil
+}
+
+func (ca *CAManager) caCN(orgName string, serverName ...string) string {
+	if len(serverName) > 0 && serverName[0] != "" {
+		return serverName[0] + " VPN CA"
+	}
+	return orgName + " VPN CA"
 }
 
 // CACertPath returns the path to the CA certificate file.

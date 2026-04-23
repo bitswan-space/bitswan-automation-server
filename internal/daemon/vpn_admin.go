@@ -52,14 +52,16 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 	case r.URL.Path == "/vpn-admin" || r.URL.Path == "/vpn-admin/":
 		mgr := vpnManager()
 		users, _ := mgr.ListDevices()
-		cfg := config.NewAutomationServerConfig()
-		sc, _ := cfg.LoadConfig()
+		cfgPage := config.NewAutomationServerConfig()
+		scPage, _ := cfgPage.LoadConfig()
 		internalDomain := ""
-		if sc != nil {
-			internalDomain = sc.InternalDomain()
+		srvName := ""
+		if scPage != nil {
+			internalDomain = scPage.InternalDomain()
+			srvName = scPage.Name
 		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnAdminExternalHTML(email, len(users) == 0, internalDomain))
+		fmt.Fprint(w, vpnAdminExternalHTML(email, len(users) == 0, internalDomain, srvName))
 
 	case r.URL.Path == "/vpn-admin/bootstrap":
 		if r.Method != http.MethodPost {
@@ -78,7 +80,13 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", "attachment; filename=wireguard.conf")
+		cfgName := config.NewAutomationServerConfig()
+		scName, _ := cfgName.LoadConfig()
+		wgFilename := "wireguard.conf"
+		if scName != nil && scName.Name != "" {
+			wgFilename = scName.Name + ".conf"
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", wgFilename))
 		w.Write(conf)
 
 	case r.URL.Path == "/vpn-admin/ca.crt":
@@ -90,8 +98,15 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "VPN CA certificate not available", http.StatusNotFound)
 			return
 		}
+		// Name the cert file after the automation server
+		cfgLoader := config.NewAutomationServerConfig()
+		sc, _ := cfgLoader.LoadConfig()
+		certFilename := "bitswan-vpn-ca.crt"
+		if sc != nil && sc.Name != "" {
+			certFilename = sc.Name + "-ca.crt"
+		}
 		w.Header().Set("Content-Type", "application/x-pem-file")
-		w.Header().Set("Content-Disposition", "attachment; filename=bitswan-vpn-ca.crt")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", certFilename))
 		w.Write(caCert)
 
 	case strings.HasPrefix(r.URL.Path, "/vpn-admin/claim/"):
@@ -130,7 +145,13 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", "attachment; filename=wireguard.conf")
+		cfgName := config.NewAutomationServerConfig()
+		scName, _ := cfgName.LoadConfig()
+		wgFilename := "wireguard.conf"
+		if scName != nil && scName.Name != "" {
+			wgFilename = scName.Name + ".conf"
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", wgFilename))
 		w.Write(conf)
 
 	default:
@@ -195,8 +216,14 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "VPN CA certificate not available", http.StatusNotFound)
 			return
 		}
+		cfgInt := config.NewAutomationServerConfig()
+		scInt, _ := cfgInt.LoadConfig()
+		certFilename := "bitswan-vpn-ca.crt"
+		if scInt != nil && scInt.Name != "" {
+			certFilename = scInt.Name + "-ca.crt"
+		}
 		w.Header().Set("Content-Type", "application/x-pem-file")
-		w.Header().Set("Content-Disposition", "attachment; filename=bitswan-vpn-ca.crt")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", certFilename))
 		w.Write(caCert)
 		return
 
@@ -285,7 +312,12 @@ ol li { margin: 8px 0; font-size: 14px; color: #3F3F46; line-height: 1.6; }
 .tip { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #1E40AF; }
 `
 
-func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string) string {
+func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string, serverName string) string {
+	if serverName == "" {
+		serverName = "bitswan-vpn"
+	}
+	caFilename := serverName + "-ca.crt"
+	wgFilename := serverName + ".conf"
 	bootstrapSection := ""
 	if isFirstUser {
 		bootstrapSection = `<div class="card highlight">
@@ -358,7 +390,7 @@ You can verify DNS works with: <code>dig @10.8.0.1 vpn-admin.network-test-3.bswn
 function bootstrap() {
   fetch('/vpn-admin/bootstrap', {method:'POST'})
     .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
-    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'wireguard.conf'; a.click(); location.reload(); })
+    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = '%s'; a.click(); location.reload(); })
     .catch(e => alert(e.message));
 }
 function claimToken() {
@@ -366,11 +398,11 @@ function claimToken() {
   if (!token) { alert('Please enter a token'); return; }
   fetch('/vpn-admin/claim/' + token, {method:'POST'})
     .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
-    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'wireguard.conf'; a.click(); })
+    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = '%s'; a.click(); })
     .catch(e => alert(e.message));
 }
 function downloadCA() {
-  const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = 'bitswan-vpn-ca.crt'; a.click();
+  const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = '%s'; a.click();
 }
 function showTab(id) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -382,7 +414,7 @@ function showTab(id) {
 <div style="margin-top:32px;padding-top:16px;border-top:1px solid #E4E4E7;text-align:center;">
 <p class="note">Once connected to the VPN, manage users and create magic links at the<br><a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#093DF5">internal admin page</a> (requires VPN connection)</p>
 </div>
-</body></html>`, email, bootstrapSection, internalDomain)
+</body></html>`, email, bootstrapSection, internalDomain, wgFilename, wgFilename, caFilename)
 }
 
 func vpnAdminClaimHTML(token string) string {

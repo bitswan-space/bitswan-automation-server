@@ -987,7 +987,11 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 
 	// Initialize VPN CA and issue TLS certs for VPN Traefik
 	caMgr := vpn.NewCAManager(vpnPath)
-	if err := caMgr.Init("BitSwan"); err != nil {
+	wsServerName := "BitSwan"
+	if serverConfig != nil && serverConfig.Name != "" {
+		wsServerName = serverConfig.Name
+	}
+	if err := caMgr.Init("BitSwan", wsServerName); err != nil {
 		fmt.Fprintf(writer, "Warning: VPN CA init failed: %v\n", err)
 	}
 	tlsHostnames := []string{"*.bswn.internal", "bswn.internal"}

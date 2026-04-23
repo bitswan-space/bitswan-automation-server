@@ -100,7 +100,11 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Initialize VPN certificate authority (for HTTPS on VPN Traefik)
 	caMgr := vpn.NewCAManager(vpnPath)
-	if err := caMgr.Init("BitSwan"); err != nil {
+	serverName := "BitSwan"
+	if serverConfig != nil && serverConfig.Name != "" {
+		serverName = serverConfig.Name
+	}
+	if err := caMgr.Init("BitSwan", serverName); err != nil {
 		http.Error(w, fmt.Sprintf("failed to initialize VPN CA: %v", err), http.StatusInternalServerError)
 		return
 	}
