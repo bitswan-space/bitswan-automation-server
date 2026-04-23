@@ -153,9 +153,11 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
   websecure:
     address: ":443"
 tls:
-  certificates:
-    - certFile: /certs/tls.crt
-      keyFile: /certs/tls.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/tls.crt
+        keyFile: /certs/tls.key
 api:
   insecure: true
 providers:
