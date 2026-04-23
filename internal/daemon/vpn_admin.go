@@ -242,13 +242,40 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		userID := strings.TrimPrefix(r.URL.Path, "/vpn-admin-internal/api/revoke/")
+		deviceID := strings.TrimPrefix(r.URL.Path, "/vpn-admin-internal/api/revoke/")
 		mgr := vpnManager()
-		if err := mgr.RevokeDevice(userID); err != nil {
+		if err := mgr.RevokeDevice(deviceID); err != nil {
 			http.Error(w, fmt.Sprintf("failed to revoke: %v", err), http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
+		return
+
+	case r.URL.Path == "/vpn-admin-internal/api/add-device":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			UserID     string `json:"user_id"`
+			DeviceName string `json:"device_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == "" || body.DeviceName == "" {
+			http.Error(w, `{"error":"user_id and device_name are required"}`, http.StatusBadRequest)
+			return
+		}
+		mgr := vpnManager()
+		conf, err := mgr.GenerateClient(body.UserID, body.DeviceName)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "created",
+			"config": string(conf),
+		})
 		return
 	}
 
@@ -520,26 +547,71 @@ func vpnAdminClaimHTML(token string) string {
 func vpnAdminInternalHTML() string {
 	return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN Admin</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>` + bitswanPageCSS + `
 body { max-width: 800px; }
+.device-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E4E4E7; }
+.device-row:last-child { border-bottom: none; }
+.device-info { flex: 1; }
+.device-name { font-weight: 600; color: #18181B; }
+.device-meta { font-size: 13px; color: #71717A; margin-top: 2px; }
+.device-meta code { font-size: 12px; }
+.user-group { margin-bottom: 20px; }
+.user-group-header { font-weight: 600; color: #093DF5; font-size: 15px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #093DF5; }
+.add-device-form { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.add-device-form input { flex: 1; margin: 0; }
+.qr-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.qr-modal-content { background: #fff; border-radius: 12px; padding: 32px; max-width: 400px; width: 90%%; text-align: center; }
+.qr-modal-content h3 { margin: 0 0 8px; }
+.qr-modal-content p { color: #71717A; font-size: 14px; margin: 8px 0 16px; }
+.qr-canvas { margin: 16px auto; }
+.qr-instructions { text-align: left; margin: 16px 0; font-size: 13px; color: #3F3F46; }
+.qr-instructions ol { padding-left: 20px; margin: 8px 0; }
+.qr-instructions li { margin: 4px 0; }
 </style></head><body>
 <div class="header">` + bitswanLogoSVG + `<h1>VPN Administration</h1></div>
 
 <div class="card">
-<h2>Generate Magic Link</h2>
-<p>Create a one-time link (valid 1 hour) for a new user to download VPN credentials.</p>
+<h2>Add Device</h2>
+<p>Add a new VPN device for yourself or another user.</p>
+<div class="add-device-form">
+  <input type="text" id="add-user" placeholder="Email (e.g. you@company.com)">
+  <input type="text" id="add-device" placeholder="Device name (e.g. laptop, phone)" style="max-width:200px;">
+  <button onclick="addDevice()">Add</button>
+</div>
+<div id="add-result"></div>
+</div>
+
+<div class="card">
+<h2>Invite User</h2>
+<p>Create a one-time magic link (valid 1 hour) for a new user to join the VPN.</p>
 <button onclick="generateLink()">Generate Magic Link</button>
 <div id="link-result"></div>
 </div>
 
 <div class="card">
-<h2>VPN Users</h2>
+<h2>VPN Users &amp; Devices</h2>
 <div id="users-table">Loading...</div>
 </div>
 
 <div class="card">
-<h2>Active Magic Links</h2>
+<h2>Pending Invitations</h2>
 <div id="links-table">Loading...</div>
+</div>
+
+<div id="qr-overlay" class="qr-modal" style="display:none" onclick="if(event.target===this)closeQR()">
+<div class="qr-modal-content">
+  <h3 id="qr-title">Scan with WireGuard</h3>
+  <p id="qr-subtitle">Open the WireGuard app on your phone and scan this QR code.</p>
+  <div id="qr-code" class="qr-canvas"></div>
+  <div class="qr-instructions">
+    <details><summary><b>iOS</b></summary>
+    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Create from QR code</b></li><li>Point camera at QR code</li><li>Name the tunnel and tap <b>Save</b></li></ol></details>
+    <details><summary><b>Android</b></summary>
+    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Scan from QR code</b></li><li>Point camera at QR code</li><li>Name the tunnel and tap <b>Create Tunnel</b></li></ol></details>
+  </div>
+  <button onclick="closeQR()">Close</button>
+</div>
 </div>
 
 <script>
@@ -549,38 +621,88 @@ function generateLink() {
     .then(d => {
       document.getElementById('link-result').innerHTML =
         '<div class="link-box">' + d.claim_url + '</div>' +
-        '<button onclick="navigator.clipboard.writeText(\'' + d.claim_url + '\').then(()=>alert(\'Copied!\'))">Copy to Clipboard</button>' +
-        '<p style="color:#666">Expires in ' + d.expires + '</p>';
+        '<button class="btn-secondary" onclick="navigator.clipboard.writeText(\'' + d.claim_url + '\').then(()=>this.textContent=\'Copied!\')">Copy Link</button>' +
+        '<span class="note" style="margin-left:8px;">Expires in ' + d.expires + '</span>';
       loadLinks();
     });
 }
+
+function addDevice() {
+  const userId = document.getElementById('add-user').value.trim();
+  const deviceName = document.getElementById('add-device').value.trim();
+  if (!userId || !deviceName) { alert('Enter both email and device name'); return; }
+  fetch('/vpn-admin-internal/api/add-device', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user_id: userId, device_name: deviceName})})
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { alert(d.error); return; }
+      document.getElementById('add-result').innerHTML =
+        '<div class="tip" style="margin-top:12px;">Device <b>' + deviceName + '</b> created for <b>' + userId + '</b></div>';
+      // Show QR code
+      showQR(d.config, userId + ' / ' + deviceName);
+      loadUsers();
+      document.getElementById('add-user').value = '';
+      document.getElementById('add-device').value = '';
+    })
+    .catch(e => alert(e.message));
+}
+
+function showQR(config, title) {
+  const qr = qrcode(0, 'M');
+  qr.addData(config);
+  qr.make();
+  document.getElementById('qr-code').innerHTML = qr.createSvgTag(6, 0);
+  document.getElementById('qr-title').textContent = 'Scan with WireGuard';
+  document.getElementById('qr-subtitle').textContent = title;
+  document.getElementById('qr-overlay').style.display = 'flex';
+}
+function closeQR() { document.getElementById('qr-overlay').style.display = 'none'; }
+
 function loadUsers() {
   fetch('/vpn-admin-internal/api/users').then(r=>r.json()).then(users => {
-    if (!users.length) { document.getElementById('users-table').innerHTML = '<p>No users yet.</p>'; return; }
-    let html = '<table><tr><th>User</th><th>IP</th><th>Public Key</th><th></th></tr>';
+    if (!users.length) { document.getElementById('users-table').innerHTML = '<p class="note">No users yet.</p>'; return; }
+    // Group by user_id
+    const grouped = {};
     users.forEach(u => {
-      html += '<tr><td>'+u.id+'</td><td>'+u.ip+'</td><td style="font-family:monospace;font-size:12px">'+u.public_key+'</td>';
-      html += '<td><button class="danger" onclick="revokeUser(\''+u.id+'\')">Revoke</button></td></tr>';
+      if (!grouped[u.user_id]) grouped[u.user_id] = [];
+      grouped[u.user_id].push(u);
     });
-    html += '</table>';
+    let html = '';
+    Object.keys(grouped).sort().forEach(userId => {
+      html += '<div class="user-group"><div class="user-group-header">' + userId + '</div>';
+      grouped[userId].forEach(d => {
+        const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
+        html += '<div class="device-row">';
+        html += '<div class="device-info"><div class="device-name">' + d.device_name + '</div>';
+        html += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
+        html += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="revokeDevice(\'' + d.device_id + '\')">Revoke</button>';
+        html += '</div>';
+      });
+      html += '</div>';
+    });
     document.getElementById('users-table').innerHTML = html;
   });
 }
+
 function loadLinks() {
   fetch('/vpn-admin-internal/api/magic-link').then(r=>r.json()).then(links => {
-    if (!links.length) { document.getElementById('links-table').innerHTML = '<p>No active links.</p>'; return; }
-    let html = '<table><tr><th>Created By</th><th>Expires</th><th>Token (first 8)</th></tr>';
+    if (!links.length) { document.getElementById('links-table').innerHTML = '<p class="note">No pending invitations.</p>'; return; }
+    let html = '<table><tr><th>Created By</th><th>Expires</th><th>Token</th></tr>';
     links.forEach(l => {
-      html += '<tr><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td><td style="font-family:monospace">'+l.token.substring(0,8)+'...</td></tr>';
+      html += '<tr><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td>';
+      html += '<td style="font-family:monospace;font-size:12px">'+l.token.substring(0,12)+'&hellip;</td></tr>';
     });
     html += '</table>';
     document.getElementById('links-table').innerHTML = html;
   });
 }
-function revokeUser(id) {
-  if (!confirm('Revoke VPN access for ' + id + '?')) return;
-  fetch('/vpn-admin-internal/api/revoke/' + id, {method:'POST'}).then(() => loadUsers());
+
+function revokeDevice(deviceId) {
+  if (!confirm('Revoke device ' + deviceId + '?')) return;
+  fetch('/vpn-admin-internal/api/revoke/' + encodeURIComponent(deviceId), {method:'POST'})
+    .then(() => loadUsers());
 }
+
 loadUsers();
 loadLinks();
 </script></body></html>`
