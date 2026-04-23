@@ -200,12 +200,27 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	email := r.Header.Get("X-Forwarded-Email")
+
 	switch {
 	case r.URL.Path == "/vpn-admin-internal" || r.URL.Path == "/vpn-admin-internal/":
 		if r.Method == http.MethodGet {
-			email := r.Header.Get("X-Forwarded-Email")
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnAdminInternalHTML(email))
+			fmt.Fprint(w, vpnInternalPage(email, "my-devices"))
+			return
+		}
+
+	case r.URL.Path == "/vpn-admin-internal/users" || r.URL.Path == "/vpn-admin-internal/users/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, "users"))
+			return
+		}
+
+	case r.URL.Path == "/vpn-admin-internal/logs" || r.URL.Path == "/vpn-admin-internal/logs/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, "logs"))
 			return
 		}
 
@@ -768,78 +783,113 @@ func vpnAdminWrongUserHTML(currentEmail, intendedEmail string) string {
 </div></body></html>`, currentEmail, intendedEmail)
 }
 
-func vpnAdminInternalHTML(email string) string {
+// sidebarCSS is extra CSS for the sidebar layout used by internal pages.
+const sidebarCSS = `
+body { max-width: none; padding: 0; display: flex; min-height: 100vh; }
+.sidebar { width: 240px; background: #fff; border-right: 1px solid #E4E4E7; padding: 24px 0; flex-shrink: 0; display: flex; flex-direction: column; }
+.sidebar-logo { padding: 0 20px 20px; border-bottom: 1px solid #E4E4E7; margin-bottom: 8px; }
+.sidebar-nav { flex: 1; }
+.sidebar-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: #3F3F46; text-decoration: none; font-size: 14px; font-weight: 500; border-left: 3px solid transparent; }
+.sidebar-nav a:hover { background: #F5F5F6; color: #18181B; }
+.sidebar-nav a.active { background: #EFF6FF; color: #093DF5; border-left-color: #093DF5; }
+.sidebar-footer { padding: 16px 20px; border-top: 1px solid #E4E4E7; font-size: 13px; color: #71717A; }
+.sidebar-footer a { color: #71717A; text-decoration: none; }
+.sidebar-footer a:hover { color: #18181B; }
+.main { flex: 1; padding: 32px 40px; overflow-y: auto; max-width: 800px; }
+.main h1 { font-size: 22px; font-weight: 600; margin: 0 0 24px; color: #18181B; }
+`
+
+func vpnInternalPage(email, page string) string {
 	cfgSlug := config.NewAutomationServerConfig()
 	scSlug, _ := cfgSlug.LoadConfig()
 	serverSlug := "bitswan"
+	serverName := "BitSwan"
 	if scSlug != nil && scSlug.Slug != "" {
 		serverSlug = scSlug.Slug
 	}
 
-	signOutLink := ""
-	if email != "" {
-		signOutLink = `<a href="/oauth2/sign_out" class="sign-out">Sign out</a>`
-	}
-	userInfo := ""
-	if email != "" {
-		userInfo = fmt.Sprintf(`<p class="user-info">Signed in as <b>%s</b></p>`, email)
+	if scSlug != nil && scSlug.Name != "" {
+		serverName = scSlug.Name
 	}
 
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html><head><meta charset="utf-8">` + bitswanFavicon + `<title>BitSwan VPN Admin</title>
-<style>` + bitswanPageCSS + `
-body { max-width: 800px; }
-.device-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E4E4E7; }
-.device-row:last-child { border-bottom: none; }
-.device-info { flex: 1; }
-.device-name { font-weight: 600; color: #18181B; }
-.device-meta { font-size: 13px; color: #71717A; margin-top: 2px; }
-.device-meta code { font-size: 12px; }
-.user-group { margin-bottom: 20px; }
-.user-group-header { font-weight: 600; color: #093DF5; font-size: 15px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #093DF5; }
-.add-device-form { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
-.add-device-form input { flex: 1; margin: 0; }
-</style></head><body>
-<div class="header">` + bitswanLogoSVG + `<h1>VPN Administration</h1>%s</div>
-%s
+	active := func(p string) string {
+		if p == page {
+			return " active"
+		}
+		return ""
+	}
 
-<div class="card">
-<h2>My Devices</h2>
+	// Page content per section
+	var pageContent, pageTitle, pageScript string
+
+	switch page {
+	case "my-devices":
+		pageTitle = "My Devices"
+		pageContent = `
 <div id="my-devices">Loading...</div>
-<div class="add-device-form">
+<div class="add-device-form" style="margin-top:16px;">
   <input type="text" id="add-device" placeholder="New device name (e.g. laptop, phone)">
   <button onclick="addDevice()">Add Device</button>
 </div>
-<div id="add-result"></div>
-</div>
+<div id="add-result"></div>`
+		pageScript = fmt.Sprintf(`
+const currentUserEmail = '%s';
+const serverSlug = '%s';
+function addDevice() {
+  const deviceName = document.getElementById('add-device').value.trim();
+  if (!deviceName) { alert('Enter a device name (e.g. laptop, phone)'); return; }
+  fetch('/vpn-admin-internal/api/add-device', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user_id: currentUserEmail, device_name: deviceName})})
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { alert(d.error); return; }
+      const data = btoa(JSON.stringify({config: d.config, user: currentUserEmail, device: deviceName, serverSlug: serverSlug}));
+      window.location.href = '/vpn-admin-internal/device-setup#' + data;
+    })
+    .catch(e => alert(e.message));
+}
+function loadMyDevices() {
+  fetch('/vpn-admin-internal/api/users').then(r=>r.json()).then(users => {
+    const mine = users.filter(u => u.user_id === currentUserEmail);
+    if (!mine.length) { document.getElementById('my-devices').innerHTML = '<p class="note">No devices yet. Add one below.</p>'; return; }
+    let html = '';
+    mine.forEach(d => {
+      const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
+      html += '<div class="device-row"><div class="device-info"><div class="device-name">' + d.device_name + '</div>';
+      html += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
+      html += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="removeDevice(\'' + d.device_id + '\')">Remove</button></div>';
+    });
+    document.getElementById('my-devices').innerHTML = html;
+  });
+}
+function removeDevice(id) {
+  if (!confirm('Remove device ' + id.split('/').pop() + '?')) return;
+  fetch('/vpn-admin-internal/api/revoke/' + encodeURIComponent(id), {method:'POST'}).then(() => loadMyDevices());
+}
+loadMyDevices();`, email, serverSlug)
 
-<div class="card">
+	case "users":
+		pageTitle = "Users & Devices"
+		pageContent = `
+<div class="card" style="margin-top:0;">
 <h2>Invite User</h2>
-<p>Create a one-time magic link (valid 1 hour) for a specific user to join the VPN.</p>
+<p>Create a one-time magic link (valid 1 hour) for a specific user.</p>
 <div class="add-device-form">
   <input type="text" id="invite-email" placeholder="User's email address">
   <button onclick="generateLink()">Generate Magic Link</button>
 </div>
 <div id="link-result"></div>
 </div>
-
 <div class="card">
-<h2>VPN Users &amp; Devices</h2>
+<h2>All Users</h2>
 <div id="users-table">Loading...</div>
 </div>
-
 <div class="card">
 <h2>Pending Invitations</h2>
 <div id="links-table">Loading...</div>
-</div>
-
-<div class="card">
-<h2>Session Log</h2>
-<p class="note">Recent VPN connection activity.</p>
-<div id="sessions-table">Loading...</div>
-</div>
-
-<script>
+</div>`
+		pageScript = fmt.Sprintf(`
+const currentUserEmail = '%s';
 function generateLink() {
   const inviteEmail = document.getElementById('invite-email').value.trim();
   if (!inviteEmail) { alert('Enter the email address of the user to invite'); return; }
@@ -853,105 +903,94 @@ function generateLink() {
       loadLinks();
     });
 }
-
-const currentUserEmail = '%s';
-function addDevice() {
-  const userId = currentUserEmail;
-  const deviceName = document.getElementById('add-device').value.trim();
-  if (!userId) { alert('Not signed in'); return; }
-  if (!deviceName) { alert('Enter a device name (e.g. laptop, phone)'); return; }
-  fetch('/vpn-admin-internal/api/add-device', {method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({user_id: userId, device_name: deviceName})})
-    .then(r => r.json())
-    .then(d => {
-      if (d.error) { alert(d.error); return; }
-      // Redirect to device setup page with config in URL hash (not sent to server)
-      const data = btoa(JSON.stringify({config: d.config, user: userId, device: deviceName, serverSlug: '%s'}));
-      window.location.href = '/vpn-admin-internal/device-setup#' + data;
-    })
-    .catch(e => alert(e.message));
-}
-
 function loadUsers() {
   fetch('/vpn-admin-internal/api/users').then(r=>r.json()).then(users => {
     if (!users.length) { document.getElementById('users-table').innerHTML = '<p class="note">No users yet.</p>'; return; }
-    // Group by user_id
     const grouped = {};
-    users.forEach(u => {
-      if (!grouped[u.user_id]) grouped[u.user_id] = [];
-      grouped[u.user_id].push(u);
-    });
-    // Render "My Devices" section
-    const myDevices = grouped[currentUserEmail] || [];
-    if (myDevices.length) {
-      let myHtml = '';
-      myDevices.forEach(d => {
-        const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
-        myHtml += '<div class="device-row">';
-        myHtml += '<div class="device-info"><div class="device-name">' + d.device_name + '</div>';
-        myHtml += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
-        myHtml += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="revokeDevice(\'' + d.device_id + '\')">Remove</button>';
-        myHtml += '</div>';
-      });
-      document.getElementById('my-devices').innerHTML = myHtml;
-    } else {
-      document.getElementById('my-devices').innerHTML = '<p class="note">No devices yet. Add one below.</p>';
-    }
-
-    // Render all users table
+    users.forEach(u => { if (!grouped[u.user_id]) grouped[u.user_id] = []; grouped[u.user_id].push(u); });
     let html = '';
     Object.keys(grouped).sort().forEach(userId => {
       html += '<div class="user-group"><div class="user-group-header">' + userId + '</div>';
       grouped[userId].forEach(d => {
         const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
-        html += '<div class="device-row">';
-        html += '<div class="device-info"><div class="device-name">' + d.device_name + '</div>';
+        html += '<div class="device-row"><div class="device-info"><div class="device-name">' + d.device_name + '</div>';
         html += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
-        html += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="revokeDevice(\'' + d.device_id + '\')">Revoke</button>';
-        html += '</div>';
+        html += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="revokeDevice(\'' + d.device_id + '\')">Revoke</button></div>';
       });
       html += '</div>';
     });
     document.getElementById('users-table').innerHTML = html;
   });
 }
-
 function loadLinks() {
   fetch('/vpn-admin-internal/api/magic-link').then(r=>r.json()).then(links => {
     if (!links.length) { document.getElementById('links-table').innerHTML = '<p class="note">No pending invitations.</p>'; return; }
-    let html = '<table><tr><th>For</th><th>Created By</th><th>Expires</th></tr>';
+    let html = '<table><tr><th>For</th><th>Invited By</th><th>Expires</th></tr>';
     links.forEach(l => {
-      const forEmail = l.for_email || '<span class="note">any user</span>';
-      html += '<tr><td>'+forEmail+'</td><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td></tr>';
+      html += '<tr><td>'+(l.for_email||'<span class="note">any</span>')+'</td><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td></tr>';
     });
     html += '</table>';
     document.getElementById('links-table').innerHTML = html;
   });
 }
-
-function revokeDevice(deviceId) {
-  if (!confirm('Revoke device ' + deviceId + '?')) return;
-  fetch('/vpn-admin-internal/api/revoke/' + encodeURIComponent(deviceId), {method:'POST'})
-    .then(() => loadUsers());
+function revokeDevice(id) {
+  if (!confirm('Revoke ' + id + '?')) return;
+  fetch('/vpn-admin-internal/api/revoke/' + encodeURIComponent(id), {method:'POST'}).then(() => loadUsers());
 }
+loadUsers(); loadLinks();`, email)
 
+	case "logs":
+		pageTitle = "Access Logs"
+		pageContent = `<div id="sessions-table">Loading...</div>`
+		pageScript = `
 function loadSessions() {
   fetch('/vpn-admin-internal/api/sessions').then(r=>r.json()).then(sessions => {
     if (!sessions || !sessions.length) { document.getElementById('sessions-table').innerHTML = '<p class="note">No session activity recorded yet.</p>'; return; }
     let html = '<table><tr><th>User</th><th>Device</th><th>IP</th><th>Time</th><th>Event</th></tr>';
-    sessions.slice(0, 30).forEach(s => {
+    sessions.forEach(s => {
       const time = s.timestamp ? new Date(s.timestamp).toLocaleString() : '';
       html += '<tr><td>'+(s.user_id||'')+'</td><td>'+(s.device_name||'')+'</td><td>'+(s.peer_ip||'')+'</td><td>'+time+'</td><td>'+(s.event_type||'')+'</td></tr>';
     });
     html += '</table>';
     document.getElementById('sessions-table').innerHTML = html;
-  }).catch(() => {
-    document.getElementById('sessions-table').innerHTML = '<p class="note">Could not load sessions.</p>';
-  });
+  }).catch(() => { document.getElementById('sessions-table').innerHTML = '<p class="note">Could not load sessions.</p>'; });
 }
+loadSessions();`
+	}
 
-loadUsers();
-loadLinks();
-loadSessions();
-</script></body></html>`, signOutLink, userInfo, email, serverSlug)
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="utf-8">`+bitswanFavicon+`<title>%s — %s VPN</title>
+<style>`+bitswanPageCSS+sidebarCSS+`
+.device-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E4E4E7; }
+.device-row:last-child { border-bottom: none; }
+.device-info { flex: 1; }
+.device-name { font-weight: 600; color: #18181B; }
+.device-meta { font-size: 13px; color: #71717A; margin-top: 2px; }
+.device-meta code { font-size: 12px; }
+.user-group { margin-bottom: 24px; }
+.user-group-header { font-weight: 600; color: #093DF5; font-size: 15px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #093DF5; }
+.add-device-form { display: flex; gap: 8px; align-items: center; }
+.add-device-form input { flex: 1; margin: 0; }
+</style></head><body>
+<div class="sidebar">
+  <div class="sidebar-logo">`+bitswanLogoSVG+`</div>
+  <nav class="sidebar-nav">
+    <a href="/vpn-admin-internal/" class="%s">My Devices</a>
+    <a href="/vpn-admin-internal/users" class="%s">Users &amp; Devices</a>
+    <a href="/vpn-admin-internal/logs" class="%s">Access Logs</a>
+  </nav>
+  <div class="sidebar-footer">
+    <div style="margin-bottom:4px;">%s</div>
+    <a href="/oauth2/sign_out">Sign out</a>
+  </div>
+</div>
+<div class="main">
+  <h1>%s</h1>
+  %s
+</div>
+<script>%s</script>
+</body></html>`,
+		pageTitle, serverName,
+		active("my-devices"), active("users"), active("logs"),
+		email, pageTitle, pageContent, pageScript)
 }
