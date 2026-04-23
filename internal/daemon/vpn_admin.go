@@ -852,8 +852,9 @@ body { max-width: none; padding: 0; display: flex; min-height: 100vh; }
 .sidebar-footer { padding: 16px 20px; border-top: 1px solid #E4E4E7; font-size: 13px; color: #71717A; }
 .sidebar-footer a { color: #71717A; text-decoration: none; }
 .sidebar-footer a:hover { color: #18181B; }
-.main { flex: 1; padding: 32px 40px; overflow-y: auto; max-width: 800px; }
+.main { flex: 1; padding: 32px 40px; overflow-y: auto; }
 .main h1 { font-size: 22px; font-weight: 600; margin: 0 0 24px; color: #18181B; }
+.main table { white-space: nowrap; }
 `
 
 func vpnInternalPage(email, page string) string {
