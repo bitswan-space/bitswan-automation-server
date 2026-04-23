@@ -123,7 +123,15 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if r.Method == http.MethodGet {
-			// Show confirmation page
+			// Check if the link is for a specific user and if the current user matches
+			link, _ := store.Get(token)
+			oauthEmail := r.Header.Get("X-Forwarded-Email")
+			if link != nil && link.ForEmail != "" && oauthEmail != "" && oauthEmail != link.ForEmail {
+				w.Header().Set("Content-Type", "text/html")
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, vpnAdminWrongUserHTML(oauthEmail, link.ForEmail))
+				return
+			}
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnAdminClaimHTML(token))
 			return
@@ -563,6 +571,20 @@ func vpnAdminClaimHTML(token string) string {
 <button type="submit">Download VPN Config</button>
 </form>
 </div></body></html>`, token)
+}
+
+func vpnAdminWrongUserHTML(currentEmail, intendedEmail string) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>BitSwan VPN</title>
+<style>`+bitswanPageCSS+`</style></head><body>
+<div class="header">`+bitswanLogoSVG+`<h1>Wrong Account</h1><a href="/oauth2/sign_out" class="sign-out">Sign out</a></div>
+<div class="card">
+<p>You are signed in as <b>%s</b>, but this invitation is for <b>%s</b>.</p>
+<p>Please sign out and sign in with the correct account, or ask the administrator to create a new invitation for your email address.</p>
+<div style="margin-top:16px;display:flex;gap:8px;">
+<a href="/oauth2/sign_out" class="btn">Sign Out</a>
+</div>
+</div></body></html>`, currentEmail, intendedEmail)
 }
 
 func vpnAdminInternalHTML(email string) string {
