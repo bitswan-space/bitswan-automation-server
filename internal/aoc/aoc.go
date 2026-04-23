@@ -625,6 +625,23 @@ func (c *AOCClient) GetKeycloakClientSecret(workspaceId string) (*KeycloakClient
 	return &response, nil
 }
 
+// AddKeycloakRedirectURI adds a redirect URI to the workspace's Keycloak client.
+func (c *AOCClient) AddKeycloakRedirectURI(workspaceId, redirectURI string) error {
+	payload := map[string]string{"redirect_uri": redirectURI}
+	jsonBytes, _ := json.Marshal(payload)
+	url := fmt.Sprintf("%s/api/automation_server/workspaces/%s/keycloak/add-redirect-uri/", c.settings.AOCUrl, workspaceId)
+	resp, err := c.sendRequest("POST", url, jsonBytes)
+	if err != nil {
+		return fmt.Errorf("failed to add redirect URI: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("add redirect URI failed: %s - %s", resp.Status, string(body))
+	}
+	return nil
+}
+
 func generateCookieSecret() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, 32)
