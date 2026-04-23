@@ -502,6 +502,34 @@ func setupVPNDNSForwarding() {
 		}
 	}
 	fmt.Printf("VPN DNS forwarding configured (CoreDNS at %s)\n", corednsIP)
+
+	// Also forward traffic to 10.8.0.3 (the IP CoreDNS returns for all
+	// .bswn.internal names) to the VPN Traefik container's Docker IP.
+	vpnTraefikOut, err := exec.Command("docker", "inspect", "traefik-vpn",
+		"--format", `{{(index .NetworkSettings.Networks "bitswan_vpn_network").IPAddress}}`).Output()
+	if err != nil {
+		fmt.Printf("Warning: could not get VPN Traefik IP: %v\n", err)
+		return
+	}
+	vpnTraefikIP := strings.TrimSpace(string(vpnTraefikOut))
+	if vpnTraefikIP == "" {
+		fmt.Println("Warning: VPN Traefik IP is empty, skipping traffic forwarding")
+		return
+	}
+
+	// DNAT: 10.8.0.3 on wg0 -> VPN Traefik Docker IP
+	dnatCheck := []string{"exec", "wireguard", "iptables", "-t", "nat", "-C", "PREROUTING", "-i", "wg0", "-d", "10.8.0.3", "-j", "DNAT", "--to-destination", vpnTraefikIP}
+	dnatAdd := []string{"exec", "wireguard", "iptables", "-t", "nat", "-A", "PREROUTING", "-i", "wg0", "-d", "10.8.0.3", "-j", "DNAT", "--to-destination", vpnTraefikIP}
+	if exec.Command("docker", dnatCheck...).Run() != nil {
+		exec.Command("docker", dnatAdd...).Run()
+	}
+	// MASQUERADE for return traffic
+	masqCheck := []string{"exec", "wireguard", "iptables", "-t", "nat", "-C", "POSTROUTING", "-d", vpnTraefikIP, "-j", "MASQUERADE"}
+	masqAdd := []string{"exec", "wireguard", "iptables", "-t", "nat", "-A", "POSTROUTING", "-d", vpnTraefikIP, "-j", "MASQUERADE"}
+	if exec.Command("docker", masqCheck...).Run() != nil {
+		exec.Command("docker", masqAdd...).Run()
+	}
+	fmt.Printf("VPN traffic forwarding configured (10.8.0.3 -> VPN Traefik at %s)\n", vpnTraefikIP)
 }
 
 const adminWorkspaceName = "automation-server-admin"
