@@ -495,8 +495,13 @@ func setupVPNAdminOAuth(domain string) error {
 			return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
 		}
 
+		// Register the oauth2-proxy callback redirect URI with Keycloak
+		redirectURI := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
+		if addErr := aocClient.AddKeycloakRedirectURI(workspaceID, redirectURI); addErr != nil {
+			fmt.Printf("Warning: failed to add redirect URI to Keycloak: %v\n", addErr)
+		}
+
 		// Save for next time
-		// Ensure the workspace directory exists
 		homeDir := os.Getenv("HOME")
 		os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", adminWorkspaceName), 0755)
 		if saveErr := oauth.SaveOauthConfig(adminWorkspaceName, oauthCfg); saveErr != nil {
