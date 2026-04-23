@@ -332,6 +332,11 @@ func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string,
 <html><head><meta charset="utf-8"><title>BitSwan VPN</title>
 <style>`+bitswanPageCSS+`</style></head><body>
 <div class="header">`+bitswanLogoSVG+`<h1>VPN Access</h1><a href="/oauth2/sign_out" class="sign-out">Sign out</a></div>
+<div id="vpn-banner" class="card highlight" style="display:none;text-align:center;">
+<h2>You're connected to the VPN</h2>
+<p>Manage users, create magic links, and add devices from the internal admin.</p>
+<a href="" id="vpn-internal-link" class="btn" style="text-decoration:none;">Open Internal Admin &rarr;</a>
+</div>
 <p class="user-info">Signed in as <b>%s</b></p>
 %s
 <div class="card">
@@ -472,6 +477,21 @@ function claimToken() {
 function downloadCA() {
   const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = '%s'; a.click();
 }
+// VPN detection: try to reach the internal admin via a hidden image load.
+// Images bypass CORS, so if the VPN Traefik responds at all we know VPN is up.
+(function() {
+  const internalUrl = 'https://vpn-admin.%s/vpn-admin-internal/';
+  const banner = document.getElementById('vpn-banner');
+  const link = document.getElementById('vpn-internal-link');
+  link.href = internalUrl;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  fetch(internalUrl, {mode:'no-cors', signal:controller.signal})
+    .then(() => { clearTimeout(timeout); banner.style.display = ''; })
+    .catch(() => { clearTimeout(timeout); });
+})();
+
 function showTab(groupId, tabId) {
   const group = document.getElementById(groupId);
   const card = group.closest('.card');
@@ -484,7 +504,7 @@ function showTab(groupId, tabId) {
 <div style="margin-top:32px;padding-top:16px;border-top:1px solid #E4E4E7;text-align:center;">
 <p class="note">Once connected to the VPN, manage users and create magic links at the<br><a href="https://vpn-admin.%s/vpn-admin-internal/" style="color:#093DF5">internal admin page</a> (requires VPN connection)</p>
 </div>
-</body></html>`, email, bootstrapSection, wgFilename, wgFilename, caFilename, internalDomain)
+</body></html>`, email, bootstrapSection, wgFilename, wgFilename, caFilename, internalDomain, internalDomain)
 }
 
 func vpnAdminClaimHTML(token string) string {
