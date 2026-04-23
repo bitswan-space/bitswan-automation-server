@@ -623,6 +623,9 @@ func setupVPNAdminOAuth(domain string) error {
 		args = append(args, "--oidc-groups-claim=group_membership")
 	}
 
+	// Keycloak doesn't always set email_verified in the ID token
+	args = append(args, "--insecure-oidc-allow-unverified-email=true")
+
 	// Check if oauth2-proxy binary exists
 	oauth2ProxyPath := "/usr/local/bin/oauth2-proxy"
 	if _, err := os.Stat(oauth2ProxyPath); os.IsNotExist(err) {
