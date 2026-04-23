@@ -105,7 +105,14 @@ func (s *Server) connectWorkspaceToAOC(workspaceName, aocUrl, automationServerId
 	var workspaceId string
 	if metadata.WorkspaceId == nil || *metadata.WorkspaceId == "" {
 		fmt.Printf("  🆕 Registering workspace '%s' with AOC...\n", workspaceName)
-		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, metadata.EditorURL, metadata.Domain)
+		// Construct editor URL if not set (same as workspace init).
+		// The AOC uses this to create the Keycloak client for OAuth.
+		editorURL := metadata.EditorURL
+		if editorURL == nil && metadata.Domain != "" {
+			url := fmt.Sprintf("https://%s-editor.%s", workspaceName, metadata.Domain)
+			editorURL = &url
+		}
+		workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL, metadata.Domain)
 		if err != nil {
 			return fmt.Errorf("failed to register workspace with AOC: %w", err)
 		}
