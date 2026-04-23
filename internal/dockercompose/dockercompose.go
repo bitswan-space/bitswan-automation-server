@@ -312,6 +312,7 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 func CreateVPNTraefikDockerComposeFile(traefikPath string, certDirs ...string) (string, error) {
 	traefikVolumes := []string{
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		traefikPath + "/tls-config.yml:/etc/traefik/tls-config.yml:ro",
 	}
 	// Mount CA cert directory for TLS if provided
 	for _, certDir := range certDirs {

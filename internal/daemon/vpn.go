@@ -152,18 +152,25 @@ func (s *Server) handleVPNInit(w http.ResponseWriter, r *http.Request) {
     address: ":80"
   websecure:
     address: ":443"
-tls:
-  stores:
-    default:
-      defaultCertificate:
-        certFile: /certs/tls.crt
-        keyFile: /certs/tls.key
 api:
   insecure: true
 providers:
   rest:
     insecure: true
+  file:
+    filename: /etc/traefik/tls-config.yml
+    watch: true
 `
+	// TLS config must be in a dynamic config file (file provider), not
+	// in the static traefik.yml — Traefik ignores tls.stores in static config.
+	tlsConfigYml := `tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/tls.crt
+        keyFile: /certs/tls.key
+`
+	os.WriteFile(filepath.Join(vpnTraefikPath, "tls-config.yml"), []byte(tlsConfigYml), 0644)
 	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
 
 	// Host path for certs (VPN CA dir)
