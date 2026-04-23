@@ -153,7 +153,7 @@ func (c *AOCClient) ExchangeOTP(otp, automationServerId string) (string, string,
 		return "", "", fmt.Errorf("failed to marshal OTP request: %w", err)
 	}
 
-	resp, err := c.sendRequest("POST", fmt.Sprintf("%s/api/automation_server/exchange-otp/", c.settings.AOCUrl), jsonBytes)
+	resp, err := c.sendRequest("POST", fmt.Sprintf("%s/api/automation_server/exchange-otp", c.settings.AOCUrl), jsonBytes)
 	if err != nil {
 		return "", "", fmt.Errorf("error sending OTP exchange request: %w", err)
 	}
@@ -176,7 +176,7 @@ func (c *AOCClient) ExchangeOTP(otp, automationServerId string) (string, string,
 
 // GetAutomationServerInfo gets the automation server information
 func (c *AOCClient) GetAutomationServerInfo() (*AutomationServerInfo, error) {
-	resp, err := c.sendRequest("GET", fmt.Sprintf("%s/api/automation_server/info/", c.settings.AOCUrl), nil)
+	resp, err := c.sendRequest("GET", fmt.Sprintf("%s/api/automation_server/info", c.settings.AOCUrl), nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request: %w", err)
 	}
@@ -363,7 +363,7 @@ func (c *AOCClient) DeleteWorkspace(workspaceId string) error {
 
 // GetMQTTCredentials gets MQTT credentials for a workspace
 func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, error) {
-	url := fmt.Sprintf("%s/api/automation_server/workspaces/%s/emqx/jwt/", c.settings.AOCUrl, workspaceId)
+	url := fmt.Sprintf("%s/api/automation_server/workspaces/%s/emqx/jwt", c.settings.AOCUrl, workspaceId)
 	resp, err := c.sendRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request to %s: %w", url, err)
@@ -465,7 +465,7 @@ func (c *AOCClient) GetMQTTCredentials(workspaceId string) (*MQTTCredentials, er
 
 // GetAutomationServerMQTTCredentials gets MQTT credentials for the automation server itself
 func (c *AOCClient) GetAutomationServerMQTTCredentials() (*MQTTCredentials, error) {
-	url := fmt.Sprintf("%s/api/automation_server/emqx/jwt/", c.settings.AOCUrl)
+	url := fmt.Sprintf("%s/api/automation_server/emqx/jwt", c.settings.AOCUrl)
 	resp, err := c.sendRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending request to %s: %w", url, err)
