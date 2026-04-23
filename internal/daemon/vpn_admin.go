@@ -389,6 +389,8 @@ sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
   <button class="tab" onclick="showTab('cert-tabs','cert-linux')">Linux</button>
   <button class="tab" onclick="showTab('cert-tabs','cert-chrome')">Chrome</button>
   <button class="tab" onclick="showTab('cert-tabs','cert-firefox')">Firefox</button>
+  <button class="tab" onclick="showTab('cert-tabs','cert-ios')">iOS</button>
+  <button class="tab" onclick="showTab('cert-tabs','cert-android')">Android</button>
 </div>
 
 <div id="cert-macos" class="tab-content active">
@@ -431,6 +433,25 @@ sudo update-ca-trust</code></pre></div>
   <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.crt</code> file</div></div>
   <div class="step"><span class="step-num">5</span><div class="step-text">Check <b>Trust this CA to identify websites</b> and click OK</div></div>
   <div class="tip">Firefox uses its own certificate store on all platforms. Even if the certificate is trusted at the OS level, you still need to import it into Firefox separately.</div>
+</div>
+
+<div id="cert-ios" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Download the CA certificate on your iPhone or iPad (tap the download button above in Safari)</div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">A prompt will appear: <b>This website is trying to download a configuration profile.</b> Tap <b>Allow</b>.</div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Open <b>Settings</b> &rarr; <b>General</b> &rarr; <b>VPN &amp; Device Management</b> (or <b>Profiles</b> on older iOS)</div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">Tap the downloaded profile and tap <b>Install</b>. Enter your passcode when prompted.</div></div>
+  <div class="step"><span class="step-num">5</span><div class="step-text">Go to <b>Settings</b> &rarr; <b>General</b> &rarr; <b>About</b> &rarr; <b>Certificate Trust Settings</b></div></div>
+  <div class="step"><span class="step-num">6</span><div class="step-text">Enable full trust for the certificate by toggling it on. Confirm when prompted.</div></div>
+  <div class="tip">Both steps are required on iOS: installing the profile (step 4) and enabling trust (step 6). Without step 6, Safari will still show certificate warnings.</div>
+</div>
+
+<div id="cert-android" class="tab-content">
+  <div class="step"><span class="step-num">1</span><div class="step-text">Download the CA certificate on your Android device (tap the download button above in Chrome)</div></div>
+  <div class="step"><span class="step-num">2</span><div class="step-text">Open <b>Settings</b> &rarr; <b>Security</b> (or <b>Security &amp; Privacy</b>) &rarr; <b>Encryption &amp; credentials</b></div></div>
+  <div class="step"><span class="step-num">3</span><div class="step-text">Tap <b>Install a certificate</b> &rarr; <b>CA certificate</b></div></div>
+  <div class="step"><span class="step-num">4</span><div class="step-text">You may see a warning about network monitoring. Tap <b>Install anyway</b>.</div></div>
+  <div class="step"><span class="step-num">5</span><div class="step-text">Select the downloaded <code>.crt</code> file and confirm</div></div>
+  <div class="tip">The exact menu path varies by Android version and manufacturer. On Samsung devices: Settings &rarr; Biometrics and Security &rarr; Other security settings &rarr; Install from device storage. On Pixel: Settings &rarr; Security &rarr; More security settings &rarr; Encryption &amp; credentials.</div>
 </div>
 </div>
 <script>
