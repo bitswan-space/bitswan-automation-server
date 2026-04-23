@@ -656,16 +656,23 @@ body { max-width: 800px; }
 
 <div id="qr-overlay" class="qr-modal" style="display:none" onclick="if(event.target===this)closeQR()">
 <div class="qr-modal-content">
-  <h3 id="qr-title">Scan with WireGuard</h3>
-  <p id="qr-subtitle">Open the WireGuard app on your phone and scan this QR code.</p>
-  <div id="qr-code" class="qr-canvas"></div>
-  <div class="qr-instructions">
-    <details><summary><b>iOS</b></summary>
-    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Create from QR code</b></li><li>Point camera at QR code</li><li>Name the tunnel and tap <b>Save</b></li></ol></details>
-    <details><summary><b>Android</b></summary>
-    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Scan from QR code</b></li><li>Point camera at QR code</li><li>Name the tunnel and tap <b>Create Tunnel</b></li></ol></details>
+  <h3 id="qr-title">Device Added</h3>
+  <p id="qr-subtitle"></p>
+  <div style="margin:16px 0;display:flex;gap:8px;justify-content:center;">
+    <button onclick="downloadConfig()">Download Config File</button>
   </div>
-  <button onclick="closeQR()">Close</button>
+  <div id="qr-code" class="qr-canvas"></div>
+  <p class="note" style="margin:8px 0 0;">QR code for mobile &mdash; scan with the WireGuard app</p>
+  <div class="qr-instructions" style="text-align:left;">
+    <details><summary><b>Desktop (macOS / Windows / Linux)</b></summary>
+    <ol><li>Click <b>Download Config File</b> above</li><li>Open WireGuard and import the downloaded file</li><li>Click <b>Activate</b> to connect</li></ol>
+    <p class="note">Linux: <code>sudo cp ~/Downloads/*.conf /etc/wireguard/bitswan.conf &amp;&amp; sudo wg-quick up bitswan</code></p></details>
+    <details><summary><b>iOS</b></summary>
+    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Create from QR code</b></li><li>Point camera at the QR code above</li><li>Name the tunnel and tap <b>Save</b></li></ol></details>
+    <details><summary><b>Android</b></summary>
+    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Scan from QR code</b></li><li>Point camera at the QR code above</li><li>Name the tunnel and tap <b>Create Tunnel</b></li></ol></details>
+  </div>
+  <div style="margin-top:16px;"><button class="btn-secondary" onclick="closeQR()">Close</button></div>
 </div>
 </div>
 
@@ -705,14 +712,25 @@ function addDevice() {
     .catch(e => alert(e.message));
 }
 
+let lastConfig = '';
+let lastDeviceName = '';
 function showQR(config, title) {
+  lastConfig = config;
+  lastDeviceName = title.split('/').pop().trim().replace(/\s+/g, '-') || 'wireguard';
   const qr = qrcode(0, 'M');
   qr.addData(config);
   qr.make();
   document.getElementById('qr-code').innerHTML = qr.createSvgTag(6, 0);
-  document.getElementById('qr-title').textContent = 'Scan with WireGuard';
+  document.getElementById('qr-title').textContent = 'Device Added';
   document.getElementById('qr-subtitle').textContent = title;
   document.getElementById('qr-overlay').style.display = 'flex';
+}
+function downloadConfig() {
+  const blob = new Blob([lastConfig], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = lastDeviceName + '.conf';
+  a.click();
 }
 function closeQR() { document.getElementById('qr-overlay').style.display = 'none'; }
 
