@@ -281,6 +281,14 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
 		return
 
+	case r.URL.Path == "/vpn-admin-internal/device-setup" || r.URL.Path == "/vpn-admin-internal/device-setup/":
+		if r.Method == http.MethodGet {
+			email := r.Header.Get("X-Forwarded-Email")
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnAdminDeviceSetupHTML(email))
+			return
+		}
+
 	case r.URL.Path == "/vpn-admin-internal/api/add-device":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -573,6 +581,134 @@ func vpnAdminClaimHTML(token string) string {
 </div></body></html>`, token)
 }
 
+func vpnAdminDeviceSetupHTML(email string) string {
+	return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>BitSwan VPN — Device Setup</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<style>` + bitswanPageCSS + `
+body { max-width: 700px; }
+.qr-container { text-align: center; margin: 20px 0; padding: 20px; background: #fff; border: 1px solid #E4E4E7; border-radius: 8px; }
+.qr-container svg { max-width: 280px; }
+</style></head><body>
+<div class="header">` + bitswanLogoSVG + `<h1>Device Setup</h1></div>
+
+<div id="loading" class="card"><p>Loading device configuration...</p></div>
+
+<div id="setup-content" style="display:none;">
+
+<div class="card highlight">
+  <h2 id="device-title"></h2>
+  <p>Your VPN configuration is ready. Download the config file or scan the QR code to set up your device.</p>
+  <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+    <button onclick="downloadConfig()">Download Config File</button>
+    <a href="/vpn-admin-internal/" class="btn btn-secondary" style="text-decoration:none;">Back to Admin</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Setup Instructions</h2>
+  <div class="tabs" id="setup-tabs">
+    <button class="tab active" onclick="showTab('setup-tabs','setup-macos')">macOS</button>
+    <button class="tab" onclick="showTab('setup-tabs','setup-windows')">Windows</button>
+    <button class="tab" onclick="showTab('setup-tabs','setup-linux')">Linux</button>
+    <button class="tab" onclick="showTab('setup-tabs','setup-mobile')">iOS / Android</button>
+  </div>
+
+  <div id="setup-macos" class="tab-content active">
+    <div class="step"><span class="step-num">1</span><div class="step-text">Click <b>Download Config File</b> above</div></div>
+    <div class="step"><span class="step-num">2</span><div class="step-text">Install WireGuard from the <a href="https://apps.apple.com/app/wireguard/id1451685025" style="color:#093DF5">Mac App Store</a> (if not already installed)</div></div>
+    <div class="step"><span class="step-num">3</span><div class="step-text">Open WireGuard and select <b>Import Tunnel(s) from File</b></div></div>
+    <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.conf</code> file</div></div>
+    <div class="step"><span class="step-num">5</span><div class="step-text">Click <b>Activate</b> to connect</div></div>
+  </div>
+
+  <div id="setup-windows" class="tab-content">
+    <div class="step"><span class="step-num">1</span><div class="step-text">Click <b>Download Config File</b> above</div></div>
+    <div class="step"><span class="step-num">2</span><div class="step-text">Install WireGuard from <a href="https://www.wireguard.com/install/" style="color:#093DF5">wireguard.com</a> (if not already installed)</div></div>
+    <div class="step"><span class="step-num">3</span><div class="step-text">Open WireGuard and click <b>Import tunnel(s) from file</b></div></div>
+    <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.conf</code> file</div></div>
+    <div class="step"><span class="step-num">5</span><div class="step-text">Click <b>Activate</b> to connect</div></div>
+  </div>
+
+  <div id="setup-linux" class="tab-content">
+    <div class="step"><span class="step-num">1</span><div class="step-text">Click <b>Download Config File</b> above</div></div>
+    <div class="step"><span class="step-num">2</span><div class="step-text">Install WireGuard (if not already installed)<pre><code>sudo apt install wireguard      # Debian / Ubuntu
+sudo dnf install wireguard-tools  # Fedora / RHEL
+sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
+    <div class="step"><span class="step-num">3</span><div class="step-text">Copy the config file<pre><code id="linux-cp-cmd">sudo cp ~/Downloads/device.conf /etc/wireguard/bitswan.conf</code></pre></div></div>
+    <div class="step"><span class="step-num">4</span><div class="step-text">Connect<pre><code>sudo wg-quick up bitswan</code></pre></div></div>
+    <div class="step"><span class="step-num">5</span><div class="step-text">Optional: auto-connect on boot<pre><code>sudo systemctl enable wg-quick@bitswan</code></pre></div></div>
+    <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>
+    <b>DNS note:</b> If you use dnsmasq or Unbound instead of systemd-resolved, add: <code>server=/bswn.internal/10.8.0.1</code></div>
+  </div>
+
+  <div id="setup-mobile" class="tab-content">
+    <p>Scan the QR code below with the WireGuard app on your phone.</p>
+    <div class="qr-container" id="qr-code"></div>
+    <div class="tabs" id="mobile-tabs" style="margin-top:12px;">
+      <button class="tab active" onclick="showTab('mobile-tabs','mobile-ios')">iOS</button>
+      <button class="tab" onclick="showTab('mobile-tabs','mobile-android')">Android</button>
+    </div>
+    <div id="mobile-ios" class="tab-content active">
+      <div class="step"><span class="step-num">1</span><div class="step-text">Install <a href="https://apps.apple.com/app/wireguard/id1451685025" style="color:#093DF5">WireGuard from the App Store</a></div></div>
+      <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard, tap <b>+</b> &rarr; <b>Create from QR code</b></div></div>
+      <div class="step"><span class="step-num">3</span><div class="step-text">Point your camera at the QR code above</div></div>
+      <div class="step"><span class="step-num">4</span><div class="step-text">Name the tunnel and tap <b>Save</b></div></div>
+    </div>
+    <div id="mobile-android" class="tab-content">
+      <div class="step"><span class="step-num">1</span><div class="step-text">Install <a href="https://play.google.com/store/apps/details?id=com.wireguard.android" style="color:#093DF5">WireGuard from Google Play</a></div></div>
+      <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard, tap <b>+</b> &rarr; <b>Scan from QR code</b></div></div>
+      <div class="step"><span class="step-num">3</span><div class="step-text">Point your camera at the QR code above</div></div>
+      <div class="step"><span class="step-num">4</span><div class="step-text">Name the tunnel and tap <b>Create Tunnel</b></div></div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+let configData = '';
+let deviceName = '';
+
+try {
+  const hash = window.location.hash.substring(1);
+  const data = JSON.parse(atob(hash));
+  configData = data.config;
+  deviceName = data.device || 'device';
+  document.getElementById('device-title').textContent = data.device + ' — ' + data.user;
+  // Update Linux cp command with actual filename
+  const cpCmd = document.getElementById('linux-cp-cmd');
+  if (cpCmd) cpCmd.textContent = 'sudo cp ~/Downloads/' + deviceName.replace(/\s+/g, '-') + '.conf /etc/wireguard/bitswan.conf';
+  // Generate QR code
+  const qr = qrcode(0, 'M');
+  qr.addData(configData);
+  qr.make();
+  document.getElementById('qr-code').innerHTML = qr.createSvgTag(6, 0);
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('setup-content').style.display = 'block';
+} catch(e) {
+  document.getElementById('loading').innerHTML = '<div class="card"><p>No device configuration found. <a href="/vpn-admin-internal/" style="color:#093DF5">Go back to admin</a> and add a device first.</p></div>';
+}
+
+function downloadConfig() {
+  const blob = new Blob([configData], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = deviceName.replace(/\s+/g, '-') + '.conf';
+  a.click();
+}
+
+function showTab(groupId, tabId) {
+  const group = document.getElementById(groupId);
+  const card = group.closest('.card') || group.parentElement;
+  card.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  group.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  event.target.classList.add('active');
+}
+</script></body></html>`
+}
+
 func vpnAdminWrongUserHTML(currentEmail, intendedEmail string) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN</title>
@@ -599,7 +735,6 @@ func vpnAdminInternalHTML(email string) string {
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN Admin</title>
-<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>` + bitswanPageCSS + `
 body { max-width: 800px; }
 .device-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E4E4E7; }
@@ -612,14 +747,6 @@ body { max-width: 800px; }
 .user-group-header { font-weight: 600; color: #093DF5; font-size: 15px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #093DF5; }
 .add-device-form { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
 .add-device-form input { flex: 1; margin: 0; }
-.qr-modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-.qr-modal-content { background: #fff; border-radius: 12px; padding: 32px; max-width: 400px; width: 90%%; text-align: center; }
-.qr-modal-content h3 { margin: 0 0 8px; }
-.qr-modal-content p { color: #71717A; font-size: 14px; margin: 8px 0 16px; }
-.qr-canvas { margin: 16px auto; }
-.qr-instructions { text-align: left; margin: 16px 0; font-size: 13px; color: #3F3F46; }
-.qr-instructions ol { padding-left: 20px; margin: 8px 0; }
-.qr-instructions li { margin: 4px 0; }
 </style></head><body>
 <div class="header">` + bitswanLogoSVG + `<h1>VPN Administration</h1>%s</div>
 %s
@@ -654,27 +781,6 @@ body { max-width: 800px; }
 <div id="links-table">Loading...</div>
 </div>
 
-<div id="qr-overlay" class="qr-modal" style="display:none" onclick="if(event.target===this)closeQR()">
-<div class="qr-modal-content">
-  <h3 id="qr-title">Device Added</h3>
-  <p id="qr-subtitle"></p>
-  <div style="margin:16px 0;display:flex;gap:8px;justify-content:center;">
-    <button onclick="downloadConfig()">Download Config File</button>
-  </div>
-  <div id="qr-code" class="qr-canvas"></div>
-  <p class="note" style="margin:8px 0 0;">QR code for mobile &mdash; scan with the WireGuard app</p>
-  <div class="qr-instructions" style="text-align:left;">
-    <details><summary><b>Desktop (macOS / Windows / Linux)</b></summary>
-    <ol><li>Click <b>Download Config File</b> above</li><li>Open WireGuard and import the downloaded file</li><li>Click <b>Activate</b> to connect</li></ol>
-    <p class="note">Linux: <code>sudo cp ~/Downloads/*.conf /etc/wireguard/bitswan.conf &amp;&amp; sudo wg-quick up bitswan</code></p></details>
-    <details><summary><b>iOS</b></summary>
-    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Create from QR code</b></li><li>Point camera at the QR code above</li><li>Name the tunnel and tap <b>Save</b></li></ol></details>
-    <details><summary><b>Android</b></summary>
-    <ol><li>Open WireGuard app</li><li>Tap <b>+</b> &rarr; <b>Scan from QR code</b></li><li>Point camera at the QR code above</li><li>Name the tunnel and tap <b>Create Tunnel</b></li></ol></details>
-  </div>
-  <div style="margin-top:16px;"><button class="btn-secondary" onclick="closeQR()">Close</button></div>
-</div>
-</div>
 
 <script>
 function generateLink() {
@@ -702,37 +808,12 @@ function addDevice() {
     .then(r => r.json())
     .then(d => {
       if (d.error) { alert(d.error); return; }
-      document.getElementById('add-result').innerHTML =
-        '<div class="tip" style="margin-top:12px;">Device <b>' + deviceName + '</b> created for <b>' + userId + '</b></div>';
-      // Show QR code
-      showQR(d.config, userId + ' / ' + deviceName);
-      loadUsers();
-      document.getElementById('add-device').value = '';
+      // Redirect to device setup page with config in URL hash (not sent to server)
+      const data = btoa(JSON.stringify({config: d.config, user: userId, device: deviceName}));
+      window.location.href = '/vpn-admin-internal/device-setup#' + data;
     })
     .catch(e => alert(e.message));
 }
-
-let lastConfig = '';
-let lastDeviceName = '';
-function showQR(config, title) {
-  lastConfig = config;
-  lastDeviceName = title.split('/').pop().trim().replace(/\s+/g, '-') || 'wireguard';
-  const qr = qrcode(0, 'M');
-  qr.addData(config);
-  qr.make();
-  document.getElementById('qr-code').innerHTML = qr.createSvgTag(6, 0);
-  document.getElementById('qr-title').textContent = 'Device Added';
-  document.getElementById('qr-subtitle').textContent = title;
-  document.getElementById('qr-overlay').style.display = 'flex';
-}
-function downloadConfig() {
-  const blob = new Blob([lastConfig], {type:'text/plain'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = lastDeviceName + '.conf';
-  a.click();
-}
-function closeQR() { document.getElementById('qr-overlay').style.display = 'none'; }
 
 function loadUsers() {
   fetch('/vpn-admin-internal/api/users').then(r=>r.json()).then(users => {
