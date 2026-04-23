@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -556,64 +557,42 @@ func setupVPNDNSForwarding() {
 	fmt.Printf("VPN traffic forwarding configured (10.8.0.3 -> VPN Traefik at %s)\n", vpnTraefikIP)
 }
 
-const adminWorkspaceName = "automation-server-admin"
+const vpnAdminConfigName = "vpn-admin"
 
-// setupVPNAdminOAuth registers an "automation-server-admin" workspace with
-// AOC to get a Keycloak client, then starts oauth2-proxy in the daemon
+// setupVPNAdminOAuth provisions a Keycloak OIDC client for the VPN admin
+// via the server-level AOC endpoint, then starts oauth2-proxy in the daemon
 // container pointing at localhost:8080 (the daemon's HTTP server).
 func setupVPNAdminOAuth(domain string) error {
 	// 1. Get or create OAuth config
-	oauthCfg, err := oauth.GetOauthConfig(adminWorkspaceName)
+	oauthCfg, err := oauth.GetOauthConfig(vpnAdminConfigName)
 	if err != nil {
-		// Not cached locally — try to fetch from AOC
+		// Not cached locally — provision via AOC
 		aocClient, aocErr := aoc.NewAOCClient()
 		if aocErr != nil {
 			return fmt.Errorf("AOC not configured: %w", aocErr)
 		}
 
-		// Register the admin "workspace" if it doesn't exist yet.
-		// The editor_url points to the VPN admin page — it's just a label
-		// used by the AOC to create the Keycloak client.
-		vpnAdminURL := fmt.Sprintf("https://vpn-admin.%s/vpn-admin/", domain)
-		workspaceID, regErr := aocClient.RegisterWorkspace(adminWorkspaceName, &vpnAdminURL, domain)
-		if regErr != nil {
-			// May already exist — try fetching OAuth anyway
-			fmt.Printf("Warning: admin workspace registration: %v\n", regErr)
-		}
-
-		if workspaceID == "" {
-			// Try to find it via list
-			workspaceList, listErr := aocClient.ListWorkspaces()
-			if listErr == nil {
-				for _, ws := range workspaceList.Results {
-					if ws.Name == adminWorkspaceName {
-						workspaceID = ws.Id
-						break
-					}
-				}
-			}
-		}
-
-		if workspaceID == "" {
-			return fmt.Errorf("could not register or find admin workspace in AOC")
-		}
-
-		oauthCfg, err = aocClient.GetOAuthConfig(workspaceID)
-		if err != nil {
-			return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
-		}
-
-		// Register the oauth2-proxy callback redirect URI with Keycloak
 		redirectURI := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
-		if addErr := aocClient.AddKeycloakRedirectURI(workspaceID, redirectURI); addErr != nil {
-			fmt.Printf("Warning: failed to add redirect URI to Keycloak: %v\n", addErr)
+		oauthResp, oauthErr := aocClient.GetOrCreateOAuthClient("vpn-admin", redirectURI)
+		if oauthErr != nil {
+			return fmt.Errorf("failed to get/create OAuth client from AOC: %w", oauthErr)
+		}
+
+		cookieSecret := genRandomString(32)
+
+		oauthCfg = &oauth.Config{
+			ClientId:     oauthResp.ClientID,
+			ClientSecret: oauthResp.ClientSecret,
+			IssuerUrl:    oauthResp.IssuerURL,
+			CookieSecret: cookieSecret,
+			EmailDomains: []string{"*"},
 		}
 
 		// Save for next time
 		homeDir := os.Getenv("HOME")
-		os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", adminWorkspaceName), 0755)
-		if saveErr := oauth.SaveOauthConfig(adminWorkspaceName, oauthCfg); saveErr != nil {
-			fmt.Printf("Warning: failed to save admin OAuth config: %v\n", saveErr)
+		os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", vpnAdminConfigName), 0755)
+		if saveErr := oauth.SaveOauthConfig(vpnAdminConfigName, oauthCfg); saveErr != nil {
+			fmt.Printf("Warning: failed to save VPN admin OAuth config: %v\n", saveErr)
 		}
 	}
 
@@ -669,5 +648,16 @@ func setupVPNAdminOAuth(domain string) error {
 	}()
 
 	return nil
+}
+
+func genRandomString(n int) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		var rb [1]byte
+		crand.Read(rb[:])
+		b[i] = alphabet[int(rb[0])%len(alphabet)]
+	}
+	return string(b)
 }
 
