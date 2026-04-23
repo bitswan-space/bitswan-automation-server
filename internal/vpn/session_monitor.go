@@ -1,7 +1,6 @@
 package vpn
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -63,20 +62,82 @@ func NewSessionMonitor(manager *Manager) *SessionMonitor {
 }
 
 // Start begins monitoring. Call in a goroutine.
-// It sets up the iptables rule, tails the kernel log, and enriches events.
+// Polls wg show dump every 30 seconds to detect connect/disconnect events.
 func (sm *SessionMonitor) Start() error {
-	// Ensure iptables LOG rule exists
-	if err := sm.ensureIptablesRule(); err != nil {
-		return fmt.Errorf("failed to set up iptables logging: %w", err)
-	}
+	// Ensure iptables LOG rule exists (for handshake counting, not tailing)
+	sm.ensureIptablesRule()
 
-	// Start two goroutines:
-	// 1. Tail kernel log for handshake packets → trigger enrichment
-	// 2. Periodic disconnect checker (detect peers that went silent)
-	go sm.tailKernelLog()
-	go sm.disconnectChecker()
+	// Single goroutine: poll wg show dump, detect state changes, emit events
+	go sm.pollLoop()
 
 	return nil
+}
+
+func (sm *SessionMonitor) pollLoop() {
+	// Initial poll immediately
+	sm.pollPeerStates()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sm.stopCh:
+			return
+		case <-ticker.C:
+			sm.pollPeerStates()
+		}
+	}
+}
+
+func (sm *SessionMonitor) pollPeerStates() {
+	peers, err := sm.getWgShowDump()
+	if err != nil {
+		return
+	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	now := time.Now().UTC()
+
+	for _, peer := range peers {
+		existing, ok := sm.peerStates[peer.PublicKey]
+
+		isActive := !peer.LastHandshake.IsZero() && now.Sub(peer.LastHandshake) < handshakeTimeout
+
+		if !ok {
+			// New peer
+			sm.peerStates[peer.PublicKey] = &PeerState{
+				PublicKey:     peer.PublicKey,
+				LastHandshake: peer.LastHandshake,
+				TransferRx:   peer.TransferRx,
+				TransferTx:   peer.TransferTx,
+				Connected:    isActive,
+			}
+			if isActive {
+				sm.emitEvent(peer.PublicKey, "connected", "", peer.TransferRx, peer.TransferTx)
+			}
+			continue
+		}
+
+		// Detect state changes
+		wasConnected := existing.Connected
+
+		if isActive && !wasConnected {
+			// Came online
+			existing.Connected = true
+			sm.emitEvent(peer.PublicKey, "connected", "", peer.TransferRx, peer.TransferTx)
+		} else if !isActive && wasConnected {
+			// Went offline
+			existing.Connected = false
+			sm.emitEvent(peer.PublicKey, "disconnected", "", existing.TransferRx, existing.TransferTx)
+		}
+
+		// Update state
+		existing.LastHandshake = peer.LastHandshake
+		existing.TransferRx = peer.TransferRx
+		existing.TransferTx = peer.TransferTx
+	}
 }
 
 // Stop shuts down the monitor.
@@ -165,131 +226,8 @@ func (sm *SessionMonitor) ensureIptablesRule() error {
 	return nil
 }
 
-func (sm *SessionMonitor) tailKernelLog() {
-	// Tail the kernel log from the wireguard container
-	cmd := exec.Command("docker", "exec", "wireguard",
-		"tail", "-n", "0", "-F", "/proc/kmsg")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "session monitor: failed to tail kernel log: %v\n", err)
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "session monitor: failed to start tail: %v\n", err)
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-sm.stopCh:
-			cmd.Process.Kill()
-			return
-		default:
-		}
-
-		line := scanner.Text()
-		if !strings.Contains(line, iptablesPrefix) {
-			continue
-		}
-
-		// Extract source IP from iptables log line
-		sourceIP := extractSourceIP(line)
-
-		// Handshake detected — enrich with wg show
-		sm.onHandshakeDetected(sourceIP)
-	}
-}
-
-func (sm *SessionMonitor) onHandshakeDetected(sourceIP string) {
-	// Run wg show to get current peer states
-	peers, err := sm.getWgShowDump()
-	if err != nil {
-		// Can't enrich — log as unclassified
-		sm.emitEvent("", "unclassified", sourceIP, 0, 0)
-		return
-	}
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// Track whether any peer had a state change matching this handshake
-	matched := false
-
-	for _, peer := range peers {
-		existing, ok := sm.peerStates[peer.PublicKey]
-
-		if !ok {
-			// New peer
-			sm.peerStates[peer.PublicKey] = &PeerState{
-				PublicKey:     peer.PublicKey,
-				LastHandshake: peer.LastHandshake,
-				TransferRx:   peer.TransferRx,
-				TransferTx:   peer.TransferTx,
-				Connected:    !peer.LastHandshake.IsZero(),
-			}
-			if !peer.LastHandshake.IsZero() {
-				matched = true
-				sm.emitEvent(peer.PublicKey, "connected", sourceIP, peer.TransferRx, peer.TransferTx)
-			}
-			continue
-		}
-
-		// Check if handshake timestamp changed (new handshake)
-		if peer.LastHandshake.After(existing.LastHandshake) {
-			matched = true
-			wasConnected := existing.Connected
-			existing.LastHandshake = peer.LastHandshake
-			existing.TransferRx = peer.TransferRx
-			existing.TransferTx = peer.TransferTx
-			existing.Connected = true
-
-			if !wasConnected {
-				sm.emitEvent(peer.PublicKey, "connected", sourceIP, peer.TransferRx, peer.TransferTx)
-			}
-			sm.emitEvent(peer.PublicKey, "handshake", sourceIP, peer.TransferRx, peer.TransferTx)
-		}
-
-		// Update transfer counters regardless
-		existing.TransferRx = peer.TransferRx
-		existing.TransferTx = peer.TransferTx
-	}
-
-	// Iptables saw a handshake packet but no peer state changed.
-	// Could be a failed handshake attempt from an unknown key,
-	// a replay, or a timing edge case.
-	if !matched {
-		sm.emitEvent("", "unclassified", sourceIP, 0, 0)
-	}
-}
-
-func (sm *SessionMonitor) disconnectChecker() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-sm.stopCh:
-			return
-		case <-ticker.C:
-			sm.checkDisconnects()
-		}
-	}
-}
-
-func (sm *SessionMonitor) checkDisconnects() {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	now := time.Now().UTC()
-	for pubkey, state := range sm.peerStates {
-		if state.Connected && now.Sub(state.LastHandshake) > handshakeTimeout {
-			state.Connected = false
-			sm.emitEvent(pubkey, "disconnected", "", state.TransferRx, state.TransferTx)
-		}
-	}
-}
+// Removed: tailKernelLog, onHandshakeDetected, disconnectChecker
+// Replaced by pollLoop + pollPeerStates which uses wg show dump directly.
 
 func (sm *SessionMonitor) emitEvent(publicKey, event, sourceIP string, rx, tx int64) {
 	device := sm.lookupDevice(publicKey)

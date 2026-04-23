@@ -314,17 +314,28 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		return
 
 	case r.URL.Path == "/vpn-admin-internal/api/sessions":
-		// Get live peer status from wg show + match against known devices
+		qType := r.URL.Query().Get("type")
 		mgr := vpnManager()
-		devices, _ := mgr.ListDevices()
+		monitor := vpn.NewSessionMonitor(mgr)
 
-		// Build pubkey → device map
+		if qType == "history" {
+			// Historical events from JSONL log
+			events, _ := monitor.GetSessionLog(100)
+			if events == nil {
+				events = []vpn.SessionEvent{}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(events)
+			return
+		}
+
+		// Default: live peer status from wg show
+		devices, _ := mgr.ListDevices()
 		deviceMap := make(map[string]vpn.VPNDevice)
 		for _, d := range devices {
 			deviceMap[d.PublicKey] = d
 		}
 
-		// Parse wg show output
 		type PeerStatus struct {
 			UserID        string `json:"user_id"`
 			DeviceName    string `json:"device_name"`
@@ -999,12 +1010,21 @@ loadUsers(); loadLinks();`, email)
 
 	case "logs":
 		pageTitle = "Access Logs"
-		pageContent = `<p class="note" style="margin-bottom:16px;">Live VPN peer status from WireGuard. Refreshes every 15 seconds.</p>
-<div id="sessions-table">Loading...</div>`
+		pageContent = `
+<div class="card" style="margin-top:0;">
+<h2>Live Status</h2>
+<p class="note">Current VPN peer connections. Refreshes every 15 seconds.</p>
+<div id="live-status">Loading...</div>
+</div>
+<div class="card">
+<h2>Connection History</h2>
+<p class="note">Connect/disconnect events logged by the session monitor.</p>
+<div id="history-table">Loading...</div>
+</div>`
 		pageScript = `
-function loadSessions() {
+function loadLive() {
   fetch('/vpn-admin-internal/api/sessions').then(r=>r.json()).then(peers => {
-    if (!peers || !peers.length) { document.getElementById('sessions-table').innerHTML = '<p class="note">No VPN peers configured.</p>'; return; }
+    if (!peers || !peers.length) { document.getElementById('live-status').innerHTML = '<p class="note">No VPN peers configured.</p>'; return; }
     let html = '<table><tr><th>Status</th><th>User</th><th>Device</th><th>VPN IP</th><th>Endpoint</th><th>Last Handshake</th><th>Transfer</th></tr>';
     peers.forEach(p => {
       const dot = p.status === 'connected' ? '<span style="color:#22C55E;">&bull;</span>' : '<span style="color:#D1D5DB;">&bull;</span>';
@@ -1017,11 +1037,24 @@ function loadSessions() {
       html += '<td>' + (p.transfer || '-') + '</td></tr>';
     });
     html += '</table>';
-    document.getElementById('sessions-table').innerHTML = html;
-  }).catch(() => { document.getElementById('sessions-table').innerHTML = '<p class="note">Could not load peer status.</p>'; });
+    document.getElementById('live-status').innerHTML = html;
+  }).catch(() => { document.getElementById('live-status').innerHTML = '<p class="note">Could not load.</p>'; });
 }
-loadSessions();
-setInterval(loadSessions, 15000);`
+function loadHistory() {
+  fetch('/vpn-admin-internal/api/sessions?type=history').then(r=>r.json()).then(events => {
+    if (!events || !events.length) { document.getElementById('history-table').innerHTML = '<p class="note">No events recorded yet. Events are logged as peers connect and disconnect.</p>'; return; }
+    let html = '<table><tr><th>Time</th><th>Event</th><th>User</th><th>Device</th><th>IP</th></tr>';
+    events.reverse().forEach(e => {
+      const time = e.timestamp ? new Date(e.timestamp).toLocaleString() : '';
+      const badge = e.event === 'connected' ? '<span style="color:#22C55E;">connected</span>' : e.event === 'disconnected' ? '<span style="color:#EF4444;">disconnected</span>' : e.event;
+      html += '<tr><td>' + time + '</td><td>' + badge + '</td><td>' + (e.user_id||'') + '</td><td>' + (e.device_name||'') + '</td><td><code>' + (e.ip||'') + '</code></td></tr>';
+    });
+    html += '</table>';
+    document.getElementById('history-table').innerHTML = html;
+  }).catch(() => { document.getElementById('history-table').innerHTML = '<p class="note">Could not load.</p>'; });
+}
+loadLive(); loadHistory();
+setInterval(loadLive, 15000);`
 	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
