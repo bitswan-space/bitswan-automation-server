@@ -165,8 +165,9 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case r.URL.Path == "/vpn-admin-internal" || r.URL.Path == "/vpn-admin-internal/":
 		if r.Method == http.MethodGet {
+			email := r.Header.Get("X-Forwarded-Email")
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnAdminInternalHTML())
+			fmt.Fprint(w, vpnAdminInternalHTML(email))
 			return
 		}
 
@@ -544,8 +545,17 @@ func vpnAdminClaimHTML(token string) string {
 </div></body></html>`, token)
 }
 
-func vpnAdminInternalHTML() string {
-	return `<!DOCTYPE html>
+func vpnAdminInternalHTML(email string) string {
+	signOutLink := ""
+	if email != "" {
+		signOutLink = `<a href="/oauth2/sign_out" class="sign-out">Sign out</a>`
+	}
+	userInfo := ""
+	if email != "" {
+		userInfo = fmt.Sprintf(`<p class="user-info">Signed in as <b>%s</b></p>`, email)
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>BitSwan VPN Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>` + bitswanPageCSS + `
@@ -569,15 +579,15 @@ body { max-width: 800px; }
 .qr-instructions ol { padding-left: 20px; margin: 8px 0; }
 .qr-instructions li { margin: 4px 0; }
 </style></head><body>
-<div class="header">` + bitswanLogoSVG + `<h1>VPN Administration</h1></div>
+<div class="header">` + bitswanLogoSVG + `<h1>VPN Administration</h1>%s</div>
+%s
 
 <div class="card">
-<h2>Add Device</h2>
-<p>Add a new VPN device for yourself or another user.</p>
+<h2>My Devices</h2>
+<p>Add a new VPN device for your account.</p>
 <div class="add-device-form">
-  <input type="text" id="add-user" placeholder="Email (e.g. you@company.com)">
-  <input type="text" id="add-device" placeholder="Device name (e.g. laptop, phone)" style="max-width:200px;">
-  <button onclick="addDevice()">Add</button>
+  <input type="text" id="add-device" placeholder="Device name (e.g. laptop, phone)">
+  <button onclick="addDevice()">Add Device</button>
 </div>
 <div id="add-result"></div>
 </div>
@@ -627,10 +637,12 @@ function generateLink() {
     });
 }
 
+const currentUserEmail = '%s';
 function addDevice() {
-  const userId = document.getElementById('add-user').value.trim();
+  const userId = currentUserEmail;
   const deviceName = document.getElementById('add-device').value.trim();
-  if (!userId || !deviceName) { alert('Enter both email and device name'); return; }
+  if (!userId) { alert('Not signed in'); return; }
+  if (!deviceName) { alert('Enter a device name (e.g. laptop, phone)'); return; }
   fetch('/vpn-admin-internal/api/add-device', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({user_id: userId, device_name: deviceName})})
     .then(r => r.json())
@@ -705,5 +717,5 @@ function revokeDevice(deviceId) {
 
 loadUsers();
 loadLinks();
-</script></body></html>`
+</script></body></html>`, signOutLink, userInfo, email)
 }
