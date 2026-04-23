@@ -61,10 +61,29 @@ func NewServer(version string) *Server {
 	}
 }
 
+// strictAuthMiddleware always requires a valid bearer token, even for Unix socket
+// connections. Use for destructive operations (VPN destroy, credential revocation)
+// that should not be callable by containers with socket access (e.g., gitops).
+func (s *Server) strictAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, `{"error": "authorization required for this operation"}`, http.StatusUnauthorized)
+			return
+		}
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" || parts[1] != s.token {
+			http.Error(w, `{"error": "invalid token"}`, http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
 // authMiddleware wraps a handler with bearer token authentication.
 // Requests arriving over the Unix socket (RemoteAddr is empty or "@")
 // are trusted and skip token verification — access is gated by the
-// socket file permissions.
+// socket file permissions. Use strictAuthMiddleware for destructive ops.
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Unix socket connections have an empty or "@" RemoteAddr
@@ -151,6 +170,18 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/service", s.authMiddleware(s.handleService))
 	mux.HandleFunc("/service/", s.authMiddleware(s.handleService))
 
+	// VPN endpoints (authenticated)
+	// VPN read-only endpoints — socket-trusted (gitops needs status)
+	mux.HandleFunc("/vpn/status", s.authMiddleware(s.handleVPNStatus))
+	mux.HandleFunc("/vpn/sessions", s.authMiddleware(s.handleVPNSessions))
+	mux.HandleFunc("/vpn/users", s.authMiddleware(s.handleVPNListUsers))
+	// VPN destructive endpoints — strict auth (token required even over socket)
+	mux.HandleFunc("/vpn/init", s.strictAuthMiddleware(s.handleVPNInit))
+	mux.HandleFunc("/vpn/credentials", s.strictAuthMiddleware(s.handleVPNGenerateCredentials))
+	mux.HandleFunc("/vpn/revoke", s.strictAuthMiddleware(s.handleVPNRevoke))
+	mux.HandleFunc("/vpn/magic-link", s.strictAuthMiddleware(s.handleVPNMagicLink))
+	mux.HandleFunc("/vpn/destroy", s.strictAuthMiddleware(s.handleVPNDestroy))
+
 	// MQTT endpoints (authenticated)
 	mux.HandleFunc("/mqtt/reinitialize", s.authMiddleware(s.handleMQTTReinitialize))
 
@@ -160,6 +191,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// Docs endpoint (unauthenticated - public access)
 	mux.HandleFunc("/api-docs", s.handleDocs)
+
+	// VPN admin web pages (served on this mux, routed via ingress)
+	// External page: OAuth-protected by the ingress proxy (not by daemon auth)
+	mux.HandleFunc("/vpn-admin", s.handleVPNAdminExternal)
+	mux.HandleFunc("/vpn-admin/", s.handleVPNAdminExternal)
+	// Internal page: only reachable via VPN Traefik
+	mux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
+	mux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
 
 	return mux
 }
@@ -229,10 +268,24 @@ func (s *Server) Run() error {
 		Handler: s.setupRoutes(),
 	}
 
-	// Create HTTP server for docs (listens on TCP port 8080)
+	// Create HTTP server for docs + VPN admin (listens on TCP port 8080).
+	// Traefik routes vpn-admin.{domain} here, so VPN admin must be registered
+	// on this mux — not just the Unix socket mux.
 	docsMux := http.NewServeMux()
-	docsMux.HandleFunc("/", s.handleDocs) // Root path serves docs
+	docsMux.HandleFunc("/vpn-admin", s.handleVPNAdminExternal)
+	docsMux.HandleFunc("/vpn-admin/", s.handleVPNAdminExternal)
+	docsMux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
+	docsMux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
 	docsMux.HandleFunc("/api-docs", s.handleDocs)
+	docsMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// If the request comes via the vpn-admin hostname, redirect to /vpn-admin/
+		// instead of showing Swagger docs.
+		if strings.HasPrefix(r.Host, "vpn-admin") || strings.HasPrefix(r.Host, "vpn-admin.") {
+			http.Redirect(w, r, "/vpn-admin/", http.StatusFound)
+			return
+		}
+		s.handleDocs(w, r)
+	})
 	s.docsServer = &http.Server{
 		Handler: docsMux,
 	}
@@ -256,6 +309,21 @@ func (s *Server) Run() error {
 			}
 			if i < maxRetries-1 {
 				time.Sleep(2 * time.Second)
+			}
+		}
+	}()
+
+	// Auto-initialize VPN on startup if a workspace exists with a domain.
+	// Runs in a goroutine so it doesn't block server startup.
+	go func() {
+		// Wait for servers to be ready (ingress registration needs the socket)
+		time.Sleep(3 * time.Second)
+		if !IsVPNEnabled() {
+			cfg := config.NewAutomationServerConfig()
+			serverConfig, _ := cfg.LoadConfig()
+			if serverConfig != nil && serverConfig.Domain != "" {
+				fmt.Println("Auto-initializing VPN...")
+				initVPNAutomatically(serverConfig.Domain, false, os.Stdout)
 			}
 		}
 	}()

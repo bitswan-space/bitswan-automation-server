@@ -5,9 +5,23 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
+
+// Slugify converts a name to a DNS-safe slug (lowercase, hyphens, no leading/trailing hyphens).
+func Slugify(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(s, "-")
+	s = regexp.MustCompile(`-{2,}`).ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		s = "local"
+	}
+	return s
+}
 
 // AutomationServerConfig handles reading and writing of Bitswan automation server configuration
 type AutomationServerConfig struct {
@@ -17,8 +31,20 @@ type AutomationServerConfig struct {
 // Config represents the combined TOML configuration
 type Config struct {
 	ActiveWorkspace            string                             `toml:"active_workspace"`
+	Name                       string                             `toml:"name,omitempty"`
+	Slug                       string                             `toml:"slug,omitempty"`
+	Domain                     string                             `toml:"domain,omitempty"`
 	AutomationOperationsCenter AutomationOperationsCenterSettings `toml:"aoc"`
 	LocalServer                LocalServerSettings                `toml:"local_server"`
+}
+
+// InternalDomain returns the fake internal domain for this automation server.
+// Format: <slug>.bswn.internal (e.g., acme-corp.bswn.internal)
+func (c *Config) InternalDomain() string {
+	if c.Slug == "" {
+		return "local.bswn.internal"
+	}
+	return c.Slug + ".bswn.internal"
 }
 
 // LocalServerSettings represents the local automation server daemon settings
@@ -129,6 +155,27 @@ func (m *AutomationServerConfig) saveTOMLConfig(config *Config) error {
 	}
 
 	return nil
+}
+
+// SetNameAndSlug sets the automation server display name and DNS slug.
+func (m *AutomationServerConfig) SetNameAndSlug(name string) error {
+	config, err := m.LoadConfig()
+	if err != nil {
+		config = &Config{}
+	}
+	config.Name = name
+	config.Slug = Slugify(name)
+	return m.SaveConfig(config)
+}
+
+// SetDomain sets the platform-level domain (e.g., sandbox.bitswan.ai).
+func (m *AutomationServerConfig) SetDomain(domain string) error {
+	config, err := m.LoadConfig()
+	if err != nil {
+		config = &Config{}
+	}
+	config.Domain = domain
+	return m.SaveConfig(config)
 }
 
 // UpdateAutomationServer updates only the automation server settings

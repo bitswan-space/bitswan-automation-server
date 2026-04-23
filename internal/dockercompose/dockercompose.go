@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -75,17 +76,43 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsSecretToken = uniuri.NewLen(64)
 	}
 
+	// Container manager sidecar: workspace-scoped Docker socket proxy.
+	// Gitops talks to this instead of the real Docker socket.
+	composeProject := strings.ToLower(config.WorkspaceName) + "-site"
+	// Container manager gets its own socket directory so it doesn't
+	// share /var/run/bitswan/ with the daemon socket (which would
+	// let gitops bypass the proxy via the daemon).
+	cmSocketDir := "/var/run/bitswan-cm-" + config.WorkspaceName
+	containerManagerService := map[string]interface{}{
+		"image":          "bitswan/container-manager:latest",
+		"restart":        "always",
+		"container_name": config.WorkspaceName + "-container-manager",
+		"networks":       []string{"bitswan_network"},
+		"volumes": []string{
+			"/var/run/docker.sock:/var/run/docker.sock:ro",
+			cmSocketDir + ":" + cmSocketDir,
+		},
+		"environment": []string{
+			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
+			"BITSWAN_COMPOSE_PROJECT=" + composeProject,
+			"CONTAINER_MANAGER_SOCKET=" + cmSocketDir + "/container-manager.sock",
+		},
+	}
+
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
 		"hostname": config.WorkspaceName + "-gitops",
 		"networks": []string{"bitswan_network"},
+		"depends_on": []string{"container-manager"},
 		"volumes": []string{
 			gitopsPathForVolumes + "/gitops:/gitops/gitops:z",
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
-			"/var/run/docker.sock:/var/run/docker.sock",
-			"/var/run/bitswan:/var/run/bitswan",
+			// Container-manager socket for Docker operations
+			cmSocketDir + ":" + cmSocketDir + ":ro",
+			// Daemon socket for ingress route registration (read-only)
+			"/var/run/bitswan:/var/run/bitswan:ro",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",
@@ -93,7 +120,10 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
+			"BITSWAN_STAGE_NETWORKS=true",
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
+			// Docker operations go through the container-manager proxy
+			"DOCKER_HOST=unix://" + cmSocketDir + "/container-manager.sock",
 		},
 	}
 
@@ -164,7 +194,8 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",
 		"services": map[string]interface{}{
-			"bitswan-gitops": gitopsService,
+			"bitswan-gitops":    gitopsService,
+			"container-manager": containerManagerService,
 		},
 		"networks": map[string]interface{}{
 			"bitswan_network": map[string]interface{}{
@@ -257,12 +288,169 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 				"image":          "traefik:v3.6",
 				"restart":        "always",
 				"container_name": "traefik",
-				"ports":          []string{"80:80", "443:443", "9080:8080"},
+				"ports":          []string{"80:80", "443:443", "127.0.0.1:9080:8080"},
 				"networks":       traefikNetworks,
 				"volumes":        traefikVolumes,
 			},
 		},
 		"networks": networksMap,
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateVPNTraefikDockerComposeFile creates a docker-compose file for the VPN-internal Traefik.
+// It has no host ports — only reachable from VPN clients via the WireGuard server.
+// traefikPath: path to the VPN traefik config directory (e.g., ~/.config/bitswan/traefik-vpn)
+func CreateVPNTraefikDockerComposeFile(traefikPath string, certDirs ...string) (string, error) {
+	traefikVolumes := []string{
+		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		traefikPath + "/tls-config.yml:/etc/traefik/tls-config.yml:ro",
+	}
+	// Mount CA cert directory for TLS if provided
+	for _, certDir := range certDirs {
+		if certDir != "" {
+			traefikVolumes = append(traefikVolumes, certDir+":/certs:ro")
+		}
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"traefik-vpn": map[string]interface{}{
+				"image":          "traefik:v3.6",
+				"restart":        "always",
+				"container_name": "traefik-vpn",
+				// No host ports — only reachable from VPN subnet
+				"networks": []string{"bitswan_network", "bitswan_vpn_network"},
+				"volumes":  traefikVolumes,
+			},
+		},
+		"networks": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
+				"external": true,
+			},
+			"bitswan_vpn_network": map[string]interface{}{
+				"external": true,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// WriteCorefile writes the CoreDNS Corefile to the local VPN config directory.
+// localVpnPath: daemon-local path (e.g., /root/.config/bitswan/vpn)
+func WriteCorefile(localVpnPath string, vpnTraefikIP string) error {
+	if vpnTraefikIP == "" {
+		vpnTraefikIP = "10.8.0.3"
+	}
+	corefile := fmt.Sprintf(`bswn.internal {
+    template IN A {
+        answer "{{ .Name }} 60 IN A %s"
+    }
+}
+
+. {
+    forward . 8.8.8.8 8.8.4.4
+    cache 30
+}
+`, vpnTraefikIP)
+	corefilePath := filepath.Join(localVpnPath, "Corefile")
+	if err := os.MkdirAll(localVpnPath, 0700); err != nil {
+		return fmt.Errorf("failed to create VPN config dir: %w", err)
+	}
+	return os.WriteFile(corefilePath, []byte(corefile), 0644)
+}
+
+// CreateCoreDNSDockerComposeFile creates a docker-compose file for the VPN DNS server.
+// hostVpnPath: host path for volume mounts (e.g., /home/ubuntu/.config/bitswan/vpn)
+func CreateCoreDNSDockerComposeFile(hostVpnPath string) (string, error) {
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"coredns-vpn": map[string]interface{}{
+				"image":          "coredns/coredns:latest",
+				"restart":        "always",
+				"container_name": "coredns-vpn",
+				"command":        "-conf /etc/coredns/Corefile",
+				"networks":       []string{"bitswan_vpn_network"},
+				"volumes": []string{
+					hostVpnPath + "/Corefile:/etc/coredns/Corefile:ro",
+				},
+			},
+		},
+		"networks": map[string]interface{}{
+			"bitswan_vpn_network": map[string]interface{}{
+				"external": true,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	encoder := yaml.NewEncoder(&buf)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(dockerCompose); err != nil {
+		return "", fmt.Errorf("failed to encode docker-compose data structure: %w", err)
+	}
+
+	return buf.String(), nil
+}
+
+// CreateWireGuardDockerComposeFile creates a docker-compose file for the WireGuard VPN server.
+// vpnPath: path to VPN config directory (e.g., ~/.config/bitswan/vpn)
+// listenPort: UDP port for WireGuard (default 51820)
+func CreateWireGuardDockerComposeFile(vpnPath string, listenPort int) (string, error) {
+	if listenPort == 0 {
+		listenPort = 51820
+	}
+
+	dockerCompose := map[string]interface{}{
+		"version": "3.8",
+		"services": map[string]interface{}{
+			"wireguard": map[string]interface{}{
+				"image":          "linuxserver/wireguard:latest",
+				"restart":        "always",
+				"container_name": "wireguard",
+				"cap_add":        []string{"NET_ADMIN", "SYS_MODULE"},
+				"ports":          []string{fmt.Sprintf("%d:%d/udp", listenPort, listenPort)},
+				"networks":       []string{"bitswan_network", "bitswan_vpn_network"},
+				"environment": []string{
+					"PUID=1000",
+					"PGID=1000",
+				},
+				"volumes": []string{
+					vpnPath + ":/config:z",
+					"/lib/modules:/lib/modules:ro",
+				},
+				"sysctls": []string{
+					"net.ipv4.conf.all.src_valid_mark=1",
+					"net.ipv4.ip_forward=1",
+				},
+			},
+		},
+		"networks": map[string]interface{}{
+			"bitswan_network": map[string]interface{}{
+				"external": true,
+			},
+			"bitswan_vpn_network": map[string]interface{}{
+				"external": true,
+			},
+		},
 	}
 
 	var buf bytes.Buffer
@@ -283,6 +471,8 @@ func CreateTraefikDockerComposeFile(traefikPath string, networks ...string) (str
 func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain string, networks []string) (string, error) {
 	traefikVolumes := []string{
 		traefikPath + "/traefik.yml:/etc/traefik/traefik.yml:z",
+		// Mount the dynamic config directory for the file provider
+		traefikPath + ":/dynamic:ro",
 	}
 
 	traefikNetworks := []string{"bitswan_network"}
