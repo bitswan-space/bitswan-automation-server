@@ -237,28 +237,32 @@ providers:
 	// 9. Set up OAuth for the VPN admin page.
 	// Register an "automation-server-admin" workspace with AOC to get a
 	// Keycloak client, then start oauth2-proxy in the daemon container.
-	vpnAdminOAuthUpstream := "bitswan-automation-server-daemon:8080"
-	if err := setupVPNAdminOAuth(domain); err != nil {
-		fmt.Printf("Warning: VPN admin OAuth setup failed: %v (falling back to unauthenticated)\n", err)
+	// External VPN admin: internet-facing, behind OAuth.
+	externalUpstream := "bitswan-automation-server-daemon:8080"
+	if err := startOAuth2Proxy(domain, "vpn-admin."+domain, 9999); err != nil {
+		fmt.Printf("Warning: external VPN admin OAuth failed: %v (falling back to unauthenticated)\n", err)
 	} else {
-		// oauth2-proxy listens on :9999, upstream to localhost:8080
-		vpnAdminOAuthUpstream = "bitswan-automation-server-daemon:9999"
+		externalUpstream = "bitswan-automation-server-daemon:9999"
 	}
-
-	// External VPN admin: internet-facing, behind OAuth (Keycloak).
 	externalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + domain,
-		Upstream:      vpnAdminOAuthUpstream,
+		Upstream:      externalUpstream,
 		IngressTarget: "external",
 	}
 	if err := addRouteToIngress(externalAdminReq, ""); err != nil {
 		fmt.Printf("Warning: failed to register external VPN admin route: %v\n", err)
 	}
 
-	// Internal VPN admin: behind VPN + OAuth (so we know who the user is).
+	// Internal VPN admin: behind VPN + OAuth (defense in depth).
+	internalUpstream := "bitswan-automation-server-daemon:8080"
+	if err := startOAuth2Proxy(domain, "vpn-admin."+internalDomain, 9998); err != nil {
+		fmt.Printf("Warning: internal VPN admin OAuth failed: %v (falling back to unauthenticated)\n", err)
+	} else {
+		internalUpstream = "bitswan-automation-server-daemon:9998"
+	}
 	internalAdminReq := IngressAddRouteRequest{
 		Hostname:      "vpn-admin." + internalDomain,
-		Upstream:      vpnAdminOAuthUpstream,
+		Upstream:      internalUpstream,
 		IngressTarget: "internal",
 	}
 	if err := addRouteToIngress(internalAdminReq, ""); err != nil {
@@ -559,50 +563,62 @@ func setupVPNDNSForwarding() {
 
 const vpnAdminConfigName = "vpn-admin"
 
-// setupVPNAdminOAuth provisions a Keycloak OIDC client for the VPN admin
-// via the server-level AOC endpoint, then starts oauth2-proxy in the daemon
-// container pointing at localhost:8080 (the daemon's HTTP server).
-func setupVPNAdminOAuth(domain string) error {
-	// 1. Get or create OAuth config
+// getVPNAdminOAuthConfig fetches or loads the OAuth config for VPN admin.
+func getVPNAdminOAuthConfig(domain string) (*oauth.Config, error) {
 	oauthCfg, err := oauth.GetOauthConfig(vpnAdminConfigName)
-	if err != nil {
-		// Not cached locally — provision via AOC
-		aocClient, aocErr := aoc.NewAOCClient()
-		if aocErr != nil {
-			return fmt.Errorf("AOC not configured: %w", aocErr)
-		}
-
-		redirectURI := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
-		oauthResp, oauthErr := aocClient.GetOrCreateOAuthClient("vpn-admin", redirectURI)
-		if oauthErr != nil {
-			return fmt.Errorf("failed to get/create OAuth client from AOC: %w", oauthErr)
-		}
-
-		cookieSecret := genRandomString(32)
-
-		oauthCfg = &oauth.Config{
-			ClientId:     oauthResp.ClientID,
-			ClientSecret: oauthResp.ClientSecret,
-			IssuerUrl:    oauthResp.IssuerURL,
-			CookieSecret: cookieSecret,
-			EmailDomains: []string{"*"},
-		}
-
-		// Save for next time
-		homeDir := os.Getenv("HOME")
-		os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", vpnAdminConfigName), 0755)
-		if saveErr := oauth.SaveOauthConfig(vpnAdminConfigName, oauthCfg); saveErr != nil {
-			fmt.Printf("Warning: failed to save VPN admin OAuth config: %v\n", saveErr)
-		}
+	if err == nil {
+		return oauthCfg, nil
 	}
 
-	// 2. Start oauth2-proxy as a subprocess in this container.
-	// It listens on :9999 and proxies to localhost:8080 (daemon docs server).
-	redirectURL := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
+	// Not cached — provision via AOC
+	aocClient, aocErr := aoc.NewAOCClient()
+	if aocErr != nil {
+		return nil, fmt.Errorf("AOC not configured: %w", aocErr)
+	}
+
+	// Use the external redirect URI for initial provisioning;
+	// additional URIs are added per-instance below.
+	redirectURI := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
+	oauthResp, oauthErr := aocClient.GetOrCreateOAuthClient("vpn-admin", redirectURI)
+	if oauthErr != nil {
+		return nil, fmt.Errorf("failed to get/create OAuth client from AOC: %w", oauthErr)
+	}
+
+	oauthCfg = &oauth.Config{
+		ClientId:     oauthResp.ClientID,
+		ClientSecret: oauthResp.ClientSecret,
+		IssuerUrl:    oauthResp.IssuerURL,
+		CookieSecret: genRandomString(32),
+		EmailDomains: []string{"*"},
+	}
+
+	homeDir := os.Getenv("HOME")
+	os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", vpnAdminConfigName), 0755)
+	oauth.SaveOauthConfig(vpnAdminConfigName, oauthCfg)
+	return oauthCfg, nil
+}
+
+// startOAuth2Proxy starts an oauth2-proxy instance for a specific hostname/port.
+// domain is the base domain (for AOC provisioning), hostname is the full host
+// for the redirect URL, port is the listening port.
+func startOAuth2Proxy(domain, hostname string, port int) error {
+	oauthCfg, err := getVPNAdminOAuthConfig(domain)
+	if err != nil {
+		return err
+	}
+
+	// Register this hostname's callback with Keycloak (idempotent)
+	redirectURL := fmt.Sprintf("https://%s/oauth2/callback", hostname)
+	aocClient, _ := aoc.NewAOCClient()
+	if aocClient != nil {
+		aocClient.GetOrCreateOAuthClient("vpn-admin", redirectURL)
+	}
+
+	cookieName := fmt.Sprintf("_bitswan_vpn_%d", port)
 
 	args := []string{
 		"--provider=keycloak-oidc",
-		"--http-address=0.0.0.0:9999",
+		fmt.Sprintf("--http-address=0.0.0.0:%d", port),
 		"--upstream=http://127.0.0.1:8080",
 		"--client-id=" + oauthCfg.ClientId,
 		"--client-secret=" + oauthCfg.ClientSecret,
@@ -615,6 +631,7 @@ func setupVPNAdminOAuth(domain string) error {
 		"--skip-provider-button=true",
 		"--pass-user-headers=true",
 		"--set-xauthrequest=true",
+		"--cookie-name=" + cookieName,
 	}
 
 	if oauthCfg.GroupsClaim != nil {
@@ -623,8 +640,7 @@ func setupVPNAdminOAuth(domain string) error {
 		args = append(args, "--oidc-groups-claim=group_membership")
 	}
 
-	// Write custom error template so users see a helpful message
-	// when authentication fails (e.g., unverified email)
+	// Custom error template
 	homeDir := os.Getenv("HOME")
 	templateDir := filepath.Join(homeDir, ".config", "bitswan", "oauth2-proxy-templates")
 	os.MkdirAll(templateDir, 0755)
@@ -645,7 +661,6 @@ func setupVPNAdminOAuth(domain string) error {
 	os.WriteFile(filepath.Join(templateDir, "error.html"), []byte(errorTemplate), 0644)
 	args = append(args, "--custom-templates-dir="+templateDir)
 
-	// Check if oauth2-proxy binary exists
 	oauth2ProxyPath := "/usr/local/bin/oauth2-proxy"
 	if _, err := os.Stat(oauth2ProxyPath); os.IsNotExist(err) {
 		return fmt.Errorf("oauth2-proxy binary not found at %s", oauth2ProxyPath)
@@ -654,18 +669,16 @@ func setupVPNAdminOAuth(domain string) error {
 	cmd := exec.Command(oauth2ProxyPath, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	// Prevent env var leaks — oauth2-proxy reads OAUTH2_PROXY_* from env
-	cmd.Env = append(os.Environ(), "OAUTH2_PROXY_COOKIE_NAME=_bitswan_vpn_admin")
+	cmd.Env = append(os.Environ(), "OAUTH2_PROXY_COOKIE_NAME="+cookieName)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start oauth2-proxy: %w", err)
 	}
 
-	fmt.Printf("oauth2-proxy started for VPN admin (PID %d, listening on :9999)\n", cmd.Process.Pid)
+	fmt.Printf("oauth2-proxy started for %s (PID %d, listening on :%d)\n", hostname, cmd.Process.Pid, port)
 
-	// Don't wait — let it run in the background
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			fmt.Printf("Warning: oauth2-proxy exited: %v\n", err)
+			fmt.Printf("Warning: oauth2-proxy (%s) exited: %v\n", hostname, err)
 		}
 	}()
 
