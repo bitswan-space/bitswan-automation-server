@@ -670,16 +670,21 @@ sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
 <script>
 let configData = '';
 let deviceName = '';
+let serverSlug = '';
+
+function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
 
 try {
   const hash = window.location.hash.substring(1);
   const data = JSON.parse(atob(hash));
   configData = data.config;
   deviceName = data.device || 'device';
+  serverSlug = data.serverSlug || 'bitswan';
+  const filename = 'bitswan-' + slugify(serverSlug) + '-' + slugify(deviceName) + '.conf';
   document.getElementById('device-title').textContent = data.device + ' — ' + data.user;
   // Update Linux cp command with actual filename
   const cpCmd = document.getElementById('linux-cp-cmd');
-  if (cpCmd) cpCmd.textContent = 'sudo cp ~/Downloads/' + deviceName.replace(/\s+/g, '-') + '.conf /etc/wireguard/bitswan.conf';
+  if (cpCmd) cpCmd.textContent = 'sudo cp ~/Downloads/' + filename + ' /etc/wireguard/' + filename;
   // Generate QR codes for both iOS and Android tabs
   const qr = qrcode(0, 'M');
   qr.addData(configData);
@@ -693,11 +698,12 @@ try {
   document.getElementById('loading').innerHTML = '<div class="card"><p>No device configuration found. <a href="/vpn-admin-internal/" style="color:#093DF5">Go back to admin</a> and add a device first.</p></div>';
 }
 
+function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
 function downloadConfig() {
   const blob = new Blob([configData], {type:'text/plain'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = deviceName.replace(/\s+/g, '-') + '.conf';
+  a.download = 'bitswan-' + slugify(serverSlug) + '-' + slugify(deviceName) + '.conf';
   a.click();
 }
 
@@ -727,6 +733,13 @@ func vpnAdminWrongUserHTML(currentEmail, intendedEmail string) string {
 }
 
 func vpnAdminInternalHTML(email string) string {
+	cfgSlug := config.NewAutomationServerConfig()
+	scSlug, _ := cfgSlug.LoadConfig()
+	serverSlug := "bitswan"
+	if scSlug != nil && scSlug.Slug != "" {
+		serverSlug = scSlug.Slug
+	}
+
 	signOutLink := ""
 	if email != "" {
 		signOutLink = `<a href="/oauth2/sign_out" class="sign-out">Sign out</a>`
@@ -812,7 +825,7 @@ function addDevice() {
     .then(d => {
       if (d.error) { alert(d.error); return; }
       // Redirect to device setup page with config in URL hash (not sent to server)
-      const data = btoa(JSON.stringify({config: d.config, user: userId, device: deviceName}));
+      const data = btoa(JSON.stringify({config: d.config, user: userId, device: deviceName, serverSlug: '%s'}));
       window.location.href = '/vpn-admin-internal/device-setup#' + data;
     })
     .catch(e => alert(e.message));
@@ -883,5 +896,5 @@ function revokeDevice(deviceId) {
 
 loadUsers();
 loadLinks();
-</script></body></html>`, signOutLink, userInfo, email)
+</script></body></html>`, signOutLink, userInfo, email, serverSlug)
 }
