@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -193,6 +194,11 @@ providers:
 		http.Error(w, fmt.Sprintf("failed to start CoreDNS: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// 7b. Set up DNS forwarding from WireGuard (10.8.0.1:53) to CoreDNS.
+	// VPN clients have DNS=10.8.0.1 in their config. WireGuard forwards
+	// those queries to the CoreDNS container via iptables DNAT.
+	setupVPNDNSForwarding()
 
 	// 8. Register VPN admin routes on both ingresses
 	// (cfg and serverConfig already loaded above for TLS cert hostnames)
@@ -446,6 +452,56 @@ func (s *Server) handleVPNDestroy(w http.ResponseWriter, r *http.Request) {
 		"status":  "destroyed",
 		"message": "VPN infrastructure removed. Containers stopped, config deleted.",
 	})
+}
+
+// setupVPNDNSForwarding adds iptables rules in the WireGuard container to
+// forward DNS queries from VPN clients (10.8.0.1:53) to the CoreDNS container.
+func setupVPNDNSForwarding() {
+	// Get CoreDNS container IP on the VPN network
+	out, err := exec.Command("docker", "inspect", "coredns-vpn",
+		"--format", `{{(index .NetworkSettings.Networks "bitswan_vpn_network").IPAddress}}`).Output()
+	if err != nil {
+		fmt.Printf("Warning: could not get CoreDNS IP for DNS forwarding: %v\n", err)
+		return
+	}
+	corednsIP := strings.TrimSpace(string(out))
+	if corednsIP == "" {
+		fmt.Println("Warning: CoreDNS IP is empty, skipping DNS forwarding")
+		return
+	}
+
+	// Add iptables rules in the WireGuard container
+	rules := [][]string{
+		// DNAT: redirect DNS queries arriving on wg0 to CoreDNS
+		{"iptables", "-t", "nat", "-C", "PREROUTING", "-i", "wg0", "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", corednsIP + ":53"},
+		{"iptables", "-t", "nat", "-C", "PREROUTING", "-i", "wg0", "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", corednsIP + ":53"},
+		// FORWARD: allow forwarded DNS packets
+		{"iptables", "-C", "FORWARD", "-i", "wg0", "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+		{"iptables", "-C", "FORWARD", "-i", "wg0", "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
+		// MASQUERADE: so return packets find their way back
+		{"iptables", "-t", "nat", "-C", "POSTROUTING", "-p", "udp", "-d", corednsIP, "--dport", "53", "-j", "MASQUERADE"},
+		{"iptables", "-t", "nat", "-C", "POSTROUTING", "-p", "tcp", "-d", corednsIP, "--dport", "53", "-j", "MASQUERADE"},
+	}
+	addRules := [][]string{
+		{"iptables", "-t", "nat", "-A", "PREROUTING", "-i", "wg0", "-p", "udp", "--dport", "53", "-j", "DNAT", "--to-destination", corednsIP + ":53"},
+		{"iptables", "-t", "nat", "-A", "PREROUTING", "-i", "wg0", "-p", "tcp", "--dport", "53", "-j", "DNAT", "--to-destination", corednsIP + ":53"},
+		{"iptables", "-A", "FORWARD", "-i", "wg0", "-p", "udp", "--dport", "53", "-j", "ACCEPT"},
+		{"iptables", "-A", "FORWARD", "-i", "wg0", "-p", "tcp", "--dport", "53", "-j", "ACCEPT"},
+		{"iptables", "-t", "nat", "-A", "POSTROUTING", "-p", "udp", "-d", corednsIP, "--dport", "53", "-j", "MASQUERADE"},
+		{"iptables", "-t", "nat", "-A", "POSTROUTING", "-p", "tcp", "-d", corednsIP, "--dport", "53", "-j", "MASQUERADE"},
+	}
+
+	for i, checkRule := range rules {
+		// Check if rule already exists (-C), add if not
+		checkCmd := append([]string{"exec", "wireguard"}, checkRule...)
+		if exec.Command("docker", checkCmd...).Run() != nil {
+			addCmd := append([]string{"exec", "wireguard"}, addRules[i]...)
+			if err := exec.Command("docker", addCmd...).Run(); err != nil {
+				fmt.Printf("Warning: failed to add DNS forwarding rule: %v\n", err)
+			}
+		}
+	}
+	fmt.Printf("VPN DNS forwarding configured (CoreDNS at %s)\n", corednsIP)
 }
 
 const adminWorkspaceName = "automation-server-admin"
