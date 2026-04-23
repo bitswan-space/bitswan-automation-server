@@ -239,6 +239,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; m
 .card.highlight { border-color: #093DF5; border-width: 2px; }
 button, .btn { background: #093DF5; color: #FAFAFA; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; display: inline-block; text-decoration: none; }
 button:hover, .btn:hover { background: #0731C4; }
+.tab, .tab:hover { background: none; color: #71717A; border-radius: 0; padding: 10px 18px; }
+.tab:hover { color: #18181B; background: none; }
+.tab.active, .tab.active:hover { color: #093DF5; background: none; }
 .btn-secondary { background: #F5F5F6; color: #093DF5; border: 1px solid #E4E4E7; }
 .btn-secondary:hover { background: #E4E4E7; }
 input[type=text] { width: 100%%; padding: 10px 12px; margin: 8px 0; border: 1px solid #D1D5DB; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
