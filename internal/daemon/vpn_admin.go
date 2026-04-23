@@ -700,7 +700,6 @@ function addDevice() {
       // Show QR code
       showQR(d.config, userId + ' / ' + deviceName);
       loadUsers();
-      document.getElementById('add-user').value = '';
       document.getElementById('add-device').value = '';
     })
     .catch(e => alert(e.message));
