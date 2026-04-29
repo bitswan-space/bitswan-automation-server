@@ -88,6 +88,18 @@ func checkNetworkExists(networkName string) (bool, error) {
 
 // EnsureDockerNetwork ensures a Docker network exists, creating it if necessary
 func EnsureDockerNetwork(name string, verbose bool) (bool, error) {
+	return ensureDockerNetwork(name, nil, verbose)
+}
+
+// EnsureDockerIPv6Network ensures a Docker network exists with IPv6 enabled on
+// the given ULA subnet, creating it if necessary. Existing networks are left
+// alone — callers wanting to switch an existing v4 network to v6 must remove
+// it first.
+func EnsureDockerIPv6Network(name, subnet string, verbose bool) (bool, error) {
+	return ensureDockerNetwork(name, []string{"--ipv6", "--subnet", subnet}, verbose)
+}
+
+func ensureDockerNetwork(name string, extraArgs []string, verbose bool) (bool, error) {
 	exists, err := checkNetworkExists(name)
 	if err != nil {
 		return false, fmt.Errorf("error checking network %s: %w", name, err)
@@ -98,7 +110,9 @@ func EnsureDockerNetwork(name string, verbose bool) (bool, error) {
 		}
 		return true, nil
 	}
-	createDockerNetworkCom := exec.Command("docker", "network", "create", name)
+	args := append([]string{"network", "create"}, extraArgs...)
+	args = append(args, name)
+	createDockerNetworkCom := exec.Command("docker", args...)
 	if verbose {
 		fmt.Printf("Creating Docker network '%s'...\n", name)
 	}

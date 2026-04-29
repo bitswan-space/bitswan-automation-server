@@ -5,29 +5,25 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/siem"
 	"github.com/bitswan-space/bitswan-workspaces/internal/vpn"
 )
 
-func magicLinkStore() *vpn.MagicLinkStore {
-	homeDir, _ := os.UserHomeDir()
-	return vpn.NewMagicLinkStore(filepath.Join(homeDir, ".config", "bitswan"))
-}
-
-// handleVPNAdminExternal serves the external VPN admin page.
-// This page is exposed on the internet (via external Traefik) and is OAuth-protected.
-// It allows: first-admin bootstrap download, magic link claim + credential download.
+// handleVPNAdminExternal serves the public VPN admin page (vpn-admin.<domain>),
+// which lives on the internet behind oauth2-proxy. End users land here to
+// install the ZTNA agent and download the CA cert. Admins still configure
+// the integration on the *internal* admin page.
+//
+// Two paths bypass the oauth2-proxy auth requirement:
+//   - /favicon.svg: served unauthenticated so browsers don't 403 in the
+//     network tab.
+//   - /ca.crt: anyone can fetch the CA cert; needed before the user can
+//     trust internal HTTPS, which is itself a prerequisite for sign-in.
 func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) {
-	// The external VPN admin page is internet-facing and MUST be behind OAuth
-	// (Keycloak via oauth2-proxy). The OAuth proxy sets X-Forwarded-Email.
-	// If it's missing, the user hasn't authenticated — reject the request.
-	//
-	// Exception: /vpn-admin/ca.crt is public (CA cert needed before VPN setup).
-	// Serve favicon without auth
 	if r.URL.Path == "/vpn-admin/favicon.svg" {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -40,66 +36,23 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusForbidden)
 		fmt.Fprint(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8">` + bitswanFavicon + `<title>BitSwan VPN</title>
+<html><head><meta charset="utf-8">`+bitswanFavicon+`<title>BitSwan VPN</title>
 <style>`+bitswanPageCSS+`</style></head><body>
 <div class="header">`+bitswanLogoSVG+`<h1>Sign In Required</h1></div>
 <div class="card">
 <p>This page requires sign-in via your organization's identity provider.</p>
-<p>To enable sign-in, register this automation server with the <a href="https://aoc.bitswan.ai" style="color:#093DF5">Automation Operation Center (AOC)</a>:</p>
-<pre><code>bitswan register --aoc-api https://api.bitswan.ai --otp &lt;your-otp&gt;</code></pre>
-</div>
-<div class="card">
-<h2>Already an admin?</h2>
-<p>Get your VPN config via CLI:</p>
-<pre><code>bitswan vpn bootstrap --device my-laptop</code></pre>
-<p>Once connected to the VPN, the admin page is available without sign-in.</p>
+<p>If you've just been invited, ask your admin to register this automation server with the <a href="https://aoc.bitswan.ai" style="color:#093DF5">Automation Operation Center</a>.</p>
 </div></body></html>`)
 		return
 	}
 
 	switch {
 	case r.URL.Path == "/vpn-admin" || r.URL.Path == "/vpn-admin/":
-		mgr := vpnManager()
-		users, _ := mgr.ListDevices()
-		cfgPage := config.NewAutomationServerConfig()
-		scPage, _ := cfgPage.LoadConfig()
-		internalDomain := ""
-		srvName := ""
-		if scPage != nil {
-			internalDomain = scPage.InternalDomain()
-			srvName = scPage.Name
-		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnAdminExternalHTML(email, len(users) == 0, internalDomain, srvName))
-
-	case r.URL.Path == "/vpn-admin/bootstrap":
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		mgr := vpnManager()
-		users, _ := mgr.ListDevices()
-		if len(users) > 0 {
-			http.Error(w, "VPN bootstrap already completed — ask an admin for a magic link.", http.StatusForbidden)
-			return
-		}
-		conf, err := mgr.GenerateClient(email, "web")
-		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to generate credentials: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		cfgName := config.NewAutomationServerConfig()
-		scName, _ := cfgName.LoadConfig()
-		wgFilename := "wireguard.conf"
-		if scName != nil && scName.Name != "" {
-			wgFilename = scName.Name + ".conf"
-		}
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", wgFilename))
-		w.Write(conf)
+		fmt.Fprint(w, vpnAdminExternalPage(email))
 
 	case r.URL.Path == "/vpn-admin/ca.crt":
-		// Download the VPN CA certificate for trusting internal HTTPS
+		// Download the VPN CA certificate for trusting internal HTTPS.
 		homeDir, _ := os.UserHomeDir()
 		caMgr := vpn.NewCAManager(filepath.Join(homeDir, ".config", "bitswan", "vpn"))
 		caCert, err := caMgr.CACertPEM()
@@ -107,7 +60,6 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "VPN CA certificate not available", http.StatusNotFound)
 			return
 		}
-		// Name the cert file after the automation server
 		cfgLoader := config.NewAutomationServerConfig()
 		sc, _ := cfgLoader.LoadConfig()
 		certFilename := "bitswan-vpn-ca.crt"
@@ -118,82 +70,55 @@ func (s *Server) handleVPNAdminExternal(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", certFilename))
 		w.Write(caCert)
 
-	case strings.HasPrefix(r.URL.Path, "/vpn-admin/claim/"):
-		// Magic link claim: validate token, generate credentials
-		token := strings.TrimPrefix(r.URL.Path, "/vpn-admin/claim/")
-		if token == "" {
-			http.Error(w, "missing token", http.StatusBadRequest)
-			return
-		}
-		store := magicLinkStore()
-		if err := store.Validate(token); err != nil {
-			http.Error(w, fmt.Sprintf("invalid token: %v", err), http.StatusForbidden)
-			return
-		}
+	case r.URL.Path == "/vpn-admin/setup":
+		// Returns the current end-user setup payload + an is_admin flag so
+		// the public page can decide between "show install card" and
+		// "show admin bootstrap form". Auth comes from oauth2-proxy; admin
+		// status comes from the X-Forwarded-Groups header.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(currentEndUserSetup(r.Context(), isAdmin(r)))
 
-		if r.Method == http.MethodGet {
-			// Check if the link is for a specific user and if the current user matches
-			link, _ := store.Get(token)
-			oauthEmail := r.Header.Get("X-Forwarded-Email")
-			if link != nil && link.ForEmail != "" && oauthEmail != "" && oauthEmail != link.ForEmail {
-				w.Header().Set("Content-Type", "text/html")
-				w.WriteHeader(http.StatusForbidden)
-				fmt.Fprint(w, vpnAdminWrongUserHTML(oauthEmail, link.ForEmail))
-				return
-			}
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnAdminClaimHTML(token))
+	case r.URL.Path == "/vpn-admin/api/ztna-config":
+		// Admin-only bootstrap path. Same shape as the internal admin's
+		// equivalent endpoint — by design, so the first admin can configure
+		// ZTNA from the public page before the tunnel they need to reach
+		// the internal admin even exists.
+		if !requireAdmin(w, r) {
 			return
 		}
+		handleZTNAConfig(w, r)
 
-		// POST: actually claim and generate credentials.
-		// Use the email bound to the magic link if set, otherwise fall back
-		// to the OAuth email from X-Forwarded-Email.
-		link, _ := store.Get(token)
-		claimEmail := ""
-		if link != nil && link.ForEmail != "" {
-			claimEmail = link.ForEmail
-			// If the user is authenticated via OAuth, verify the email matches
-			oauthEmail := r.Header.Get("X-Forwarded-Email")
-			if oauthEmail != "" && oauthEmail != claimEmail {
-				http.Error(w, fmt.Sprintf("This magic link is for %s, but you are signed in as %s", claimEmail, oauthEmail), http.StatusForbidden)
-				return
-			}
-		} else {
-			claimEmail = r.Header.Get("X-Forwarded-Email")
-			if claimEmail == "" {
-				claimEmail = "user-" + token[:8]
-			}
-		}
-		if err := store.Claim(token, claimEmail); err != nil {
-			http.Error(w, fmt.Sprintf("failed to claim token: %v", err), http.StatusForbidden)
+	case r.URL.Path == "/vpn-admin/api/ztna-validate":
+		if !requireAdmin(w, r) {
 			return
 		}
-		mgr := vpnManager()
-		conf, err := mgr.GenerateClient(claimEmail, "web")
-		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to generate credentials: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		cfgName := config.NewAutomationServerConfig()
-		scName, _ := cfgName.LoadConfig()
-		wgFilename := "wireguard.conf"
-		if scName != nil && scName.Name != "" {
-			wgFilename = scName.Name + ".conf"
-		}
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", wgFilename))
-		w.Write(conf)
+		handleZTNAValidate(w, r)
+
+	case r.URL.Path == "/vpn-admin/signout":
+		// Use "/" as the post-logout path: AOC registers exactly
+		// "https://<host>/" as the post_logout_redirect_uri on the
+		// Keycloak client, and Keycloak does exact-match validation. The
+		// docs catch-all handler routes "/" back to /vpn-admin/ based on
+		// the Host header, so the user still lands where they expect.
+		signoutRedirect(w, r, "/")
 
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-// handleVPNAdminInternal serves the internal VPN admin page (behind VPN).
-// Allows: generating magic links, listing users, revoking users.
+// handleVPNAdminInternal serves the internal VPN admin (behind the VPN/ZTNA
+// tunnel). Used by admins to configure NetBird, the SIEM forwarder, and
+// trust-store certificates. Device-level access lives in the ZTNA
+// provider's own dashboard, not here.
+//
+// The whole page is admin-only with two intentional exceptions:
+//   - /favicon.svg: served unauthenticated so browsers don't 403 in the
+//     network panel.
+//   - /ca.crt: any authenticated user can pull the CA cert so they can
+//     trust internal HTTPS — useful as a fallback to the public admin's
+//     download (which is the primary path for the un-tunnelled).
 func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) {
-	// Serve favicon without auth
 	if r.URL.Path == "/vpn-admin-internal/favicon.svg" {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -203,73 +128,8 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 
 	email := r.Header.Get("X-Forwarded-Email")
 
-	switch {
-	case r.URL.Path == "/vpn-admin-internal" || r.URL.Path == "/vpn-admin-internal/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "my-devices"))
-			return
-		}
-
-	case r.URL.Path == "/vpn-admin-internal/users" || r.URL.Path == "/vpn-admin-internal/users/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "users"))
-			return
-		}
-
-	case r.URL.Path == "/vpn-admin-internal/logs" || r.URL.Path == "/vpn-admin-internal/logs/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "logs"))
-			return
-		}
-
-	case r.URL.Path == "/vpn-admin-internal/api/magic-link":
-		if r.Method == http.MethodPost {
-			var body struct {
-				CreatedBy string `json:"created_by"`
-				ForEmail  string `json:"for_email"`
-			}
-			json.NewDecoder(r.Body).Decode(&body)
-			if body.CreatedBy == "" {
-				body.CreatedBy = "admin"
-			}
-			store := magicLinkStore()
-			token, err := store.CreateForUser(body.CreatedBy, body.ForEmail)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("failed to create magic link: %v", err), http.StatusInternalServerError)
-				return
-			}
-			cfgMagic := config.NewAutomationServerConfig()
-			scMagic, _ := cfgMagic.LoadConfig()
-			magicDomain := ""
-			if scMagic != nil {
-				magicDomain = scMagic.Domain
-			}
-			claimURL := fmt.Sprintf("https://vpn-admin.%s/vpn-admin/claim/%s", magicDomain, token)
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
-				"token":     token,
-				"claim_url": claimURL,
-				"for_email": body.ForEmail,
-				"expires":   "1 hour",
-			})
-			return
-		}
-		if r.Method == http.MethodGet {
-			store := magicLinkStore()
-			links, _ := store.List()
-			if links == nil {
-				links = []vpn.MagicLink{}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(links)
-			return
-		}
-
-	case r.URL.Path == "/vpn-admin-internal/ca.crt":
-		// Download the VPN CA certificate
+	// CA cert is the only data path callable by non-admins.
+	if r.URL.Path == "/vpn-admin-internal/ca.crt" {
 		homeDir, _ := os.UserHomeDir()
 		caMgr := vpn.NewCAManager(filepath.Join(homeDir, ".config", "bitswan", "vpn"))
 		caCert, err := caMgr.CACertPEM()
@@ -287,143 +147,217 @@ func (s *Server) handleVPNAdminInternal(w http.ResponseWriter, r *http.Request) 
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", certFilename))
 		w.Write(caCert)
 		return
+	}
 
-	case r.URL.Path == "/vpn-admin-internal/api/users":
-		mgr := vpnManager()
-		users, _ := mgr.ListDevices()
-		if users == nil {
-			users = []vpn.VPNDevice{}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(users)
+	// Whoami stays available to any authenticated user as a diagnostic so
+	// they can confirm their identity headers without admin privileges.
+	if r.URL.Path == "/vpn-admin-internal/api/whoami" {
+		handleWhoami(w, r)
 		return
+	}
 
-	case strings.HasPrefix(r.URL.Path, "/vpn-admin-internal/api/revoke/"):
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		deviceID := strings.TrimPrefix(r.URL.Path, "/vpn-admin-internal/api/revoke/")
-		mgr := vpnManager()
-		if err := mgr.RevokeDevice(deviceID); err != nil {
-			http.Error(w, fmt.Sprintf("failed to revoke: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
+	// Everything else is admin-only.
+	if !requireAdmin(w, r) {
 		return
+	}
 
-	case r.URL.Path == "/vpn-admin-internal/api/sessions":
-		qType := r.URL.Query().Get("type")
-		mgr := vpnManager()
-		monitor := vpn.NewSessionMonitor(mgr)
-		defer monitor.Close()
-
-		if qType == "history" {
-			// Historical events from SQLite log
-			events, _ := monitor.GetSessionLog(100)
-			if events == nil {
-				events = []vpn.SessionEvent{}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(events)
-			return
-		}
-
-		// Default: live peer status from wg show
-		devices, _ := mgr.ListDevices()
-		deviceMap := make(map[string]vpn.VPNDevice)
-		for _, d := range devices {
-			deviceMap[d.PublicKey] = d
-		}
-
-		type PeerStatus struct {
-			UserID        string `json:"user_id"`
-			DeviceName    string `json:"device_name"`
-			PublicKey     string `json:"public_key"`
-			Endpoint      string `json:"endpoint"`
-			LastHandshake string `json:"last_handshake"`
-			Transfer      string `json:"transfer"`
-			IP            string `json:"ip"`
-			Status        string `json:"status"`
-		}
-
-		out, err := exec.Command("docker", "exec", "wireguard", "wg", "show", "wg0").Output()
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode([]PeerStatus{})
-			return
-		}
-
-		var peers []PeerStatus
-		var current *PeerStatus
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "peer: ") {
-				if current != nil {
-					peers = append(peers, *current)
-				}
-				pubKey := strings.TrimPrefix(line, "peer: ")
-				current = &PeerStatus{PublicKey: pubKey, Status: "inactive"}
-				if d, ok := deviceMap[pubKey]; ok {
-					current.UserID = d.UserID
-					current.DeviceName = d.DeviceName
-					current.IP = d.IP
-				}
-			} else if current != nil {
-				if strings.HasPrefix(line, "endpoint: ") {
-					current.Endpoint = strings.TrimPrefix(line, "endpoint: ")
-					current.Status = "connected"
-				} else if strings.HasPrefix(line, "latest handshake: ") {
-					current.LastHandshake = strings.TrimPrefix(line, "latest handshake: ")
-					current.Status = "connected"
-				} else if strings.HasPrefix(line, "transfer: ") {
-					current.Transfer = strings.TrimPrefix(line, "transfer: ")
-				} else if strings.HasPrefix(line, "allowed ips: ") && current.IP == "" {
-					current.IP = strings.TrimPrefix(line, "allowed ips: ")
-				}
-			}
-		}
-		if current != nil {
-			peers = append(peers, *current)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(peers)
-		return
-
-	case r.URL.Path == "/vpn-admin-internal/device-setup" || r.URL.Path == "/vpn-admin-internal/device-setup/":
+	switch {
+	case r.URL.Path == "/vpn-admin-internal" || r.URL.Path == "/vpn-admin-internal/" ||
+		r.URL.Path == "/vpn-admin-internal/network" || r.URL.Path == "/vpn-admin-internal/network/":
 		if r.Method == http.MethodGet {
-			email := r.Header.Get("X-Forwarded-Email")
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnAdminDeviceSetupHTML(email))
+			fmt.Fprint(w, vpnInternalPage(email, "network", true))
 			return
 		}
 
-	case r.URL.Path == "/vpn-admin-internal/api/add-device":
+	case r.URL.Path == "/vpn-admin-internal/siem" || r.URL.Path == "/vpn-admin-internal/siem/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, "siem", true))
+			return
+		}
+
+	case r.URL.Path == "/vpn-admin-internal/certs" || r.URL.Path == "/vpn-admin-internal/certs/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, "certs", true))
+			return
+		}
+
+	case r.URL.Path == "/vpn-admin-internal/api/ztna-config":
+		handleZTNAConfig(w, r)
+		return
+
+	case r.URL.Path == "/vpn-admin-internal/api/ztna-validate":
+		handleZTNAValidate(w, r)
+		return
+
+	case r.URL.Path == "/vpn-admin-internal/signout":
+		// See the external /vpn-admin/signout case — we use "/" because
+		// that's what AOC registers as the post-logout URI on the
+		// Keycloak client. The docs catch-all redirects from "/" to
+		// /vpn-admin-internal/ when the request is on the internal host.
+		signoutRedirect(w, r, "/")
+		return
+
+	case r.URL.Path == "/vpn-admin-internal/api/siem-config":
+		if !requireAdmin(w, r) {
+			return
+		}
+		if r.Method == http.MethodGet {
+			cfg := siem.Default().Config()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"config": cfg.Redacted(),
+				"stats":  siem.Default().Stats(),
+			})
+			return
+		}
+		if r.Method == http.MethodPost {
+			var body struct {
+				URL        string `json:"url"`
+				AuthHeader string `json:"auth_header"`
+				Enabled    bool   `json:"enabled"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+				return
+			}
+			cur := siem.Default().Config()
+			cur.URL = body.URL
+			cur.Enabled = body.Enabled
+			// The UI prefills the auth header with the redacted form so the
+			// admin can toggle Enabled without re-entering the secret. If the
+			// submitted value still contains the mask character, treat it as
+			// "no change". Anything else (including empty) overrides.
+			if !strings.Contains(body.AuthHeader, "…") {
+				cur.AuthHeader = body.AuthHeader
+			}
+			if err := siem.Default().Configure(cur); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+				return
+			}
+			if err := ensureFluentBit(); err != nil {
+				// Config saved, but the reload failed — surface it so the
+				// admin doesn't think it's live.
+				http.Error(w, fmt.Sprintf(`{"error":"config saved; fluent-bit reload failed: %s"}`, err.Error()), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+			return
+		}
+
+	case r.URL.Path == "/vpn-admin-internal/api/siem-test":
+		if !requireAdmin(w, r) {
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var body struct {
-			UserID     string `json:"user_id"`
-			DeviceName string `json:"device_name"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == "" || body.DeviceName == "" {
-			http.Error(w, `{"error":"user_id and device_name are required"}`, http.StatusBadRequest)
+		siem.Default().EmitTest()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+		return
+
+	case r.URL.Path == "/vpn-admin-internal/api/cert-authorities":
+		if !requireAdmin(w, r) {
 			return
 		}
-		mgr := vpnManager()
-		conf, err := mgr.GenerateClient(body.UserID, body.DeviceName)
-		if err != nil {
+		if r.Method == http.MethodGet {
+			cas, err := listCertAuthorities()
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(cas)
+			return
+		}
+		if r.Method == http.MethodPost {
+			var body struct {
+				Name        string `json:"name"`
+				PEMContents string `json:"pem"` // raw PEM, not base64
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" || body.PEMContents == "" {
+				http.Error(w, `{"error":"name and pem are required"}`, http.StatusBadRequest)
+				return
+			}
+			if err := addCertAuthorityPEM(body.Name, []byte(body.PEMContents)); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "added"})
+			return
+		}
+
+	case strings.HasPrefix(r.URL.Path, "/vpn-admin-internal/api/cert-authorities/"):
+		if !requireAdmin(w, r) {
+			return
+		}
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		name := strings.TrimPrefix(r.URL.Path, "/vpn-admin-internal/api/cert-authorities/")
+		if err := removeCertAuthorityFile(name); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status": "created",
-			"config": string(conf),
-		})
+		json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
+		return
+
+	case r.URL.Path == "/vpn-admin-internal/api/hostname-certs":
+		if !requireAdmin(w, r) {
+			return
+		}
+		if r.Method == http.MethodGet {
+			entries, err := listHostnameCerts()
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(entries)
+			return
+		}
+		if r.Method == http.MethodPost {
+			var body struct {
+				Hostname string `json:"hostname"`
+				CertPEM  string `json:"cert_pem"`
+				KeyPEM   string `json:"key_pem"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Hostname == "" || body.CertPEM == "" || body.KeyPEM == "" {
+				http.Error(w, `{"error":"hostname, cert_pem and key_pem are required"}`, http.StatusBadRequest)
+				return
+			}
+			if err := installHostnameCert(body.Hostname, []byte(body.CertPEM), []byte(body.KeyPEM)); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "installed"})
+			return
+		}
+
+	case strings.HasPrefix(r.URL.Path, "/vpn-admin-internal/api/hostname-certs/"):
+		if !requireAdmin(w, r) {
+			return
+		}
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		host := strings.TrimPrefix(r.URL.Path, "/vpn-admin-internal/api/hostname-certs/")
+		if err := removeHostnameCert(host); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
 		return
 	}
 
@@ -498,359 +432,6 @@ ol li { margin: 8px 0; font-size: 14px; color: #3F3F46; line-height: 1.6; }
 .tip { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #1E40AF; }
 `
 
-func vpnAdminExternalHTML(email string, isFirstUser bool, internalDomain string, serverName string) string {
-	if serverName == "" {
-		serverName = "bitswan-vpn"
-	}
-	caFilename := serverName + "-ca.crt"
-	wgFilename := serverName + ".conf"
-	bootstrapSection := ""
-	if isFirstUser {
-		bootstrapSection = `<div class="card highlight">
-<h2>Welcome &mdash; First-Time VPN Setup</h2>
-<p>You are the first user. Click below to download your WireGuard VPN configuration.</p>
-<button onclick="bootstrap()">Download VPN Config</button>
-<p class="note">This option is available only once. After downloading, use the VPN-internal admin page to invite others.</p>
-</div>`
-	}
-
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html><head><meta charset="utf-8">` + bitswanFavicon + `<title>BitSwan VPN</title>
-<style>`+bitswanPageCSS+`</style></head><body>
-<div class="header">`+bitswanLogoSVG+`<h1>VPN Access</h1><a href="/oauth2/sign_out" class="sign-out">Sign out</a></div>
-<div id="vpn-banner" class="card highlight" style="display:none;text-align:center;">
-<h2>You're connected to the VPN</h2>
-<p>Manage users, create magic links, and add devices from the internal admin.</p>
-<a href="" id="vpn-internal-link" class="btn" style="text-decoration:none;">Open Internal Admin &rarr;</a>
-</div>
-<p class="user-info">Signed in as <b>%s</b></p>
-%s
-<div class="card">
-<h2>Have a Magic Link?</h2>
-<p>If someone shared a magic link with you, paste the token below.</p>
-<input type="text" id="token-input" placeholder="Paste your token here">
-<button onclick="claimToken()">Get VPN Config</button>
-</div>
-<div class="card">
-<h2>VPN Setup Guide</h2>
-<p>After downloading your configuration file, follow these steps to connect.</p>
-<div class="tabs" id="vpn-tabs">
-  <button class="tab active" onclick="showTab('vpn-tabs','vpn-macos')">macOS</button>
-  <button class="tab" onclick="showTab('vpn-tabs','vpn-windows')">Windows</button>
-  <button class="tab" onclick="showTab('vpn-tabs','vpn-linux')">Linux</button>
-</div>
-
-<div id="vpn-macos" class="tab-content active">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard client<br><a href="https://apps.apple.com/app/wireguard/id1451685025" class="install-link">Download from Mac App Store &rarr;</a></div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and select <b>Import Tunnel(s) from File</b> (or drag the file onto the app icon)</div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded configuration file</div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Click <b>Activate</b> to connect to the VPN</div></div>
-</div>
-
-<div id="vpn-windows" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Install the WireGuard client<br><a href="https://www.wireguard.com/install/" class="install-link">Download from wireguard.com &rarr;</a></div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and click <b>Import tunnel(s) from file</b></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Select the downloaded configuration file</div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Click <b>Activate</b> to connect to the VPN</div></div>
-</div>
-
-<div id="vpn-linux" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Install WireGuard<pre><code>sudo apt install wireguard      # Debian / Ubuntu
-sudo dnf install wireguard-tools  # Fedora / RHEL
-sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Copy the configuration file<pre><code>sudo cp ~/Downloads/wireguard.conf /etc/wireguard/bitswan.conf</code></pre></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Connect to the VPN<pre><code>sudo wg-quick up bitswan</code></pre></div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Optional: enable auto-connect on boot<pre><code>sudo systemctl enable wg-quick@bitswan</code></pre></div></div>
-  <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>
-<b>DNS note:</b> If you use a custom DNS resolver (dnsmasq, Unbound, etc.) instead of systemd-resolved, add a forwarding rule for <code>.bswn.internal</code>:<br>
-<b>dnsmasq:</b> add <code>server=/bswn.internal/10.8.0.1</code> to your config<br>
-<b>Unbound:</b> add a <code>forward-zone</code> for <code>bswn.internal</code> pointing to <code>10.8.0.1</code></div>
-</div>
-</div>
-
-<div class="card">
-<h2>Certificate Trust Setup</h2>
-<p>Internal services use HTTPS with a private certificate authority. Install the CA certificate so your browser trusts these connections.</p>
-<div style="margin-bottom:16px;">
-  <button onclick="downloadCA()">Download CA Certificate</button>
-</div>
-<div class="tabs" id="cert-tabs">
-  <button class="tab active" onclick="showTab('cert-tabs','cert-macos')">macOS</button>
-  <button class="tab" onclick="showTab('cert-tabs','cert-windows')">Windows</button>
-  <button class="tab" onclick="showTab('cert-tabs','cert-linux')">Linux</button>
-  <button class="tab" onclick="showTab('cert-tabs','cert-chrome')">Chrome</button>
-  <button class="tab" onclick="showTab('cert-tabs','cert-firefox')">Firefox</button>
-  <button class="tab" onclick="showTab('cert-tabs','cert-ios')">iOS</button>
-  <button class="tab" onclick="showTab('cert-tabs','cert-android')">Android</button>
-</div>
-
-<div id="cert-macos" class="tab-content active">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Double-click the downloaded <code>.crt</code> file to open Keychain Access</div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">The certificate will be added to your login keychain. Find it by searching for the server name.</div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Double-click the certificate, expand <b>Trust</b>, and set <b>When using this certificate</b> to <b>Always Trust</b></div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Close the dialog and enter your password to confirm</div></div>
-  <div class="tip">This trusts the certificate for Safari and Chrome. Firefox uses its own certificate store &mdash; see the Firefox tab.</div>
-</div>
-
-<div id="cert-windows" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Double-click the downloaded <code>.crt</code> file</div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Click <b>Install Certificate</b></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Select <b>Local Machine</b> (requires administrator), click Next</div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Select <b>Place all certificates in the following store</b>, click Browse, choose <b>Trusted Root Certification Authorities</b></div></div>
-  <div class="step"><span class="step-num">5</span><div class="step-text">Click Next, then Finish. Confirm the security warning.</div></div>
-  <div class="tip">This trusts the certificate for Edge and Chrome. Firefox uses its own store &mdash; see the Firefox tab.</div>
-</div>
-
-<div id="cert-linux" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Copy the certificate to the system trust store<pre><code>sudo cp ~/Downloads/*-ca.crt /usr/local/share/ca-certificates/</code></pre></div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Update the certificate store<pre><code>sudo update-ca-certificates</code></pre></div></div>
-  <div class="tip">This trusts the certificate for <code>curl</code>, <code>wget</code>, and Chromium-based browsers. Firefox uses its own store &mdash; see the Firefox tab.<br><br>
-On Fedora/RHEL, use instead:<pre><code>sudo cp ~/Downloads/*-ca.crt /etc/pki/ca-trust/source/anchors/
-sudo update-ca-trust</code></pre></div>
-</div>
-
-<div id="cert-chrome" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Open Chrome and go to <code>chrome://settings/certificates</code> (or Settings &rarr; Privacy and security &rarr; Security &rarr; Manage certificates)</div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Click the <b>Authorities</b> tab</div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Click <b>Import</b> and select the downloaded <code>.crt</code> file</div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Check <b>Trust this certificate for identifying websites</b> and click OK</div></div>
-  <div class="tip">On macOS and Windows, Chrome uses the system certificate store, so installing via the OS-level instructions above is usually sufficient. The Chrome import is mainly needed on Linux.</div>
-</div>
-
-<div id="cert-firefox" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Open Firefox and go to <code>about:preferences#privacy</code> (or Settings &rarr; Privacy &amp; Security)</div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Scroll down to <b>Certificates</b> and click <b>View Certificates</b></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">In the <b>Authorities</b> tab, click <b>Import</b></div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.crt</code> file</div></div>
-  <div class="step"><span class="step-num">5</span><div class="step-text">Check <b>Trust this CA to identify websites</b> and click OK</div></div>
-  <div class="tip">Firefox uses its own certificate store on all platforms. Even if the certificate is trusted at the OS level, you still need to import it into Firefox separately.</div>
-</div>
-
-<div id="cert-ios" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Download the CA certificate on your iPhone or iPad (tap the download button above in Safari)</div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">A prompt will appear: <b>This website is trying to download a configuration profile.</b> Tap <b>Allow</b>.</div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Open <b>Settings</b> &rarr; <b>General</b> &rarr; <b>VPN &amp; Device Management</b> (or <b>Profiles</b> on older iOS)</div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">Tap the downloaded profile and tap <b>Install</b>. Enter your passcode when prompted.</div></div>
-  <div class="step"><span class="step-num">5</span><div class="step-text">Go to <b>Settings</b> &rarr; <b>General</b> &rarr; <b>About</b> &rarr; <b>Certificate Trust Settings</b></div></div>
-  <div class="step"><span class="step-num">6</span><div class="step-text">Enable full trust for the certificate by toggling it on. Confirm when prompted.</div></div>
-  <div class="tip">Both steps are required on iOS: installing the profile (step 4) and enabling trust (step 6). Without step 6, Safari will still show certificate warnings.</div>
-</div>
-
-<div id="cert-android" class="tab-content">
-  <div class="step"><span class="step-num">1</span><div class="step-text">Download the CA certificate on your Android device (tap the download button above in Chrome)</div></div>
-  <div class="step"><span class="step-num">2</span><div class="step-text">Open <b>Settings</b> &rarr; <b>Security</b> (or <b>Security &amp; Privacy</b>) &rarr; <b>Encryption &amp; credentials</b></div></div>
-  <div class="step"><span class="step-num">3</span><div class="step-text">Tap <b>Install a certificate</b> &rarr; <b>CA certificate</b></div></div>
-  <div class="step"><span class="step-num">4</span><div class="step-text">You may see a warning about network monitoring. Tap <b>Install anyway</b>.</div></div>
-  <div class="step"><span class="step-num">5</span><div class="step-text">Select the downloaded <code>.crt</code> file and confirm</div></div>
-  <div class="tip">The exact menu path varies by Android version and manufacturer. On Samsung devices: Settings &rarr; Biometrics and Security &rarr; Other security settings &rarr; Install from device storage. On Pixel: Settings &rarr; Security &rarr; More security settings &rarr; Encryption &amp; credentials.</div>
-</div>
-</div>
-<script>
-function bootstrap() {
-  fetch('/vpn-admin/bootstrap', {method:'POST'})
-    .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
-    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = '%s'; a.click(); location.reload(); })
-    .catch(e => alert(e.message));
-}
-function claimToken() {
-  const token = document.getElementById('token-input').value.trim();
-  if (!token) { alert('Please enter a token'); return; }
-  fetch('/vpn-admin/claim/' + token, {method:'POST'})
-    .then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t) }); return r.blob(); })
-    .then(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = '%s'; a.click(); })
-    .catch(e => alert(e.message));
-}
-function downloadCA() {
-  const a = document.createElement('a'); a.href = '/vpn-admin/ca.crt'; a.download = '%s'; a.click();
-}
-// VPN detection: try to reach the internal admin via a hidden image load.
-// Images bypass CORS, so if the VPN Traefik responds at all we know VPN is up.
-(function() {
-  const internalUrl = 'https://vpn-admin.%s/vpn-admin-internal/';
-  const banner = document.getElementById('vpn-banner');
-  const link = document.getElementById('vpn-internal-link');
-  link.href = internalUrl;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 3000);
-  fetch(internalUrl, {mode:'no-cors', signal:controller.signal})
-    .then(() => { clearTimeout(timeout); banner.style.display = ''; })
-    .catch(() => { clearTimeout(timeout); });
-})();
-
-function showTab(groupId, tabId) {
-  const group = document.getElementById(groupId);
-  const card = group.closest('.card');
-  card.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  group.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-  document.getElementById(tabId).classList.add('active');
-  event.target.classList.add('active');
-}
-</script>
-</body></html>`, email, bootstrapSection, wgFilename, wgFilename, caFilename, internalDomain)
-}
-
-func vpnAdminClaimHTML(token string) string {
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html><head><meta charset="utf-8">` + bitswanFavicon + `<title>BitSwan VPN</title>
-<style>`+bitswanPageCSS+`</style></head><body>
-<div class="header">`+bitswanLogoSVG+`<h1>Claim VPN Access</h1></div>
-<div class="card">
-<p>Click below to download your WireGuard VPN configuration.</p>
-<form method="POST" action="/vpn-admin/claim/%s">
-<button type="submit">Download VPN Config</button>
-</form>
-</div></body></html>`, token)
-}
-
-func vpnAdminDeviceSetupHTML(email string) string {
-	return `<!DOCTYPE html>
-<html><head><meta charset="utf-8">` + bitswanFavicon + `<title>BitSwan VPN — Device Setup</title>
-<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-<style>` + bitswanPageCSS + `
-body { max-width: 700px; }
-.qr-container { text-align: center; margin: 20px 0; padding: 20px; background: #fff; border: 1px solid #E4E4E7; border-radius: 8px; }
-.qr-container svg { max-width: 280px; }
-</style></head><body>
-<div class="header">` + bitswanLogoSVG + `<h1>Device Setup</h1></div>
-
-<div id="loading" class="card"><p>Loading device configuration...</p></div>
-
-<div id="setup-content" style="display:none;">
-
-<div class="breadcrumb"><a href="/vpn-admin-internal/">VPN Admin</a><span>&rsaquo;</span>Device Setup</div>
-
-<div class="card highlight">
-  <h2 id="device-title"></h2>
-  <p>Your VPN configuration is ready. Download the config file or scan the QR code to set up your device.</p>
-  <div style="margin-top:16px;">
-    <button onclick="downloadConfig()">Download Config File</button>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Setup Instructions</h2>
-  <div class="tabs" id="setup-tabs">
-    <button class="tab active" onclick="showTab('setup-tabs','setup-macos')">macOS</button>
-    <button class="tab" onclick="showTab('setup-tabs','setup-windows')">Windows</button>
-    <button class="tab" onclick="showTab('setup-tabs','setup-linux')">Linux</button>
-    <button class="tab" onclick="showTab('setup-tabs','setup-ios')">iOS</button>
-    <button class="tab" onclick="showTab('setup-tabs','setup-android')">Android</button>
-  </div>
-
-  <div id="setup-macos" class="tab-content active">
-    <div class="step"><span class="step-num">1</span><div class="step-text">Click <b>Download Config File</b> above</div></div>
-    <div class="step"><span class="step-num">2</span><div class="step-text">Install WireGuard from the <a href="https://apps.apple.com/app/wireguard/id1451685025" style="color:#093DF5">Mac App Store</a> (if not already installed)</div></div>
-    <div class="step"><span class="step-num">3</span><div class="step-text">Open WireGuard and select <b>Import Tunnel(s) from File</b></div></div>
-    <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.conf</code> file</div></div>
-    <div class="step"><span class="step-num">5</span><div class="step-text">Click <b>Activate</b> to connect</div></div>
-  </div>
-
-  <div id="setup-windows" class="tab-content">
-    <div class="step"><span class="step-num">1</span><div class="step-text">Click <b>Download Config File</b> above</div></div>
-    <div class="step"><span class="step-num">2</span><div class="step-text">Install WireGuard from <a href="https://www.wireguard.com/install/" style="color:#093DF5">wireguard.com</a> (if not already installed)</div></div>
-    <div class="step"><span class="step-num">3</span><div class="step-text">Open WireGuard and click <b>Import tunnel(s) from file</b></div></div>
-    <div class="step"><span class="step-num">4</span><div class="step-text">Select the downloaded <code>.conf</code> file</div></div>
-    <div class="step"><span class="step-num">5</span><div class="step-text">Click <b>Activate</b> to connect</div></div>
-  </div>
-
-  <div id="setup-linux" class="tab-content">
-    <div class="step"><span class="step-num">1</span><div class="step-text">Click <b>Download Config File</b> above</div></div>
-    <div class="step"><span class="step-num">2</span><div class="step-text">Install WireGuard (if not already installed)<pre><code>sudo apt install wireguard      # Debian / Ubuntu
-sudo dnf install wireguard-tools  # Fedora / RHEL
-sudo pacman -S wireguard-tools    # Arch</code></pre></div></div>
-    <div class="step"><span class="step-num">3</span><div class="step-text">Copy the config file<pre><code id="linux-cp-cmd">sudo cp ~/Downloads/device.conf /etc/wireguard/bitswan.conf</code></pre></div></div>
-    <div class="step"><span class="step-num">4</span><div class="step-text">Connect<pre><code>sudo wg-quick up bitswan</code></pre></div></div>
-    <div class="step"><span class="step-num">5</span><div class="step-text">Optional: auto-connect on boot<pre><code>sudo systemctl enable wg-quick@bitswan</code></pre></div></div>
-    <div class="tip">To disconnect: <code>sudo wg-quick down bitswan</code><br><br>
-    <b>DNS note:</b> If you use dnsmasq or Unbound instead of systemd-resolved, add: <code>server=/bswn.internal/10.8.0.1</code></div>
-  </div>
-
-  <div id="setup-ios" class="tab-content">
-    <div class="qr-container" id="qr-code-ios"></div>
-    <div class="step"><span class="step-num">1</span><div class="step-text">Install <a href="https://apps.apple.com/app/wireguard/id1451685025" style="color:#093DF5">WireGuard from the App Store</a></div></div>
-    <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and tap <b>+</b> &rarr; <b>Create from QR code</b></div></div>
-    <div class="step"><span class="step-num">3</span><div class="step-text">Point your camera at the QR code above</div></div>
-    <div class="step"><span class="step-num">4</span><div class="step-text">Name the tunnel and tap <b>Save</b></div></div>
-    <div class="step"><span class="step-num">5</span><div class="step-text">Toggle the tunnel on to connect</div></div>
-  </div>
-
-  <div id="setup-android" class="tab-content">
-    <div class="qr-container" id="qr-code-android"></div>
-    <div class="step"><span class="step-num">1</span><div class="step-text">Install <a href="https://play.google.com/store/apps/details?id=com.wireguard.android" style="color:#093DF5">WireGuard from Google Play</a></div></div>
-    <div class="step"><span class="step-num">2</span><div class="step-text">Open WireGuard and tap <b>+</b> &rarr; <b>Scan from QR code</b></div></div>
-    <div class="step"><span class="step-num">3</span><div class="step-text">Point your camera at the QR code above</div></div>
-    <div class="step"><span class="step-num">4</span><div class="step-text">Name the tunnel and tap <b>Create Tunnel</b></div></div>
-    <div class="step"><span class="step-num">5</span><div class="step-text">Toggle the tunnel on to connect</div></div>
-  </div>
-</div>
-
-</div>
-
-<script>
-let configData = '';
-let deviceName = '';
-let serverSlug = '';
-
-function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
-
-try {
-  const hash = window.location.hash.substring(1);
-  const data = JSON.parse(atob(hash));
-  configData = data.config;
-  deviceName = data.device || 'device';
-  serverSlug = data.serverSlug || 'bitswan';
-  const filename = 'bitswan-' + slugify(serverSlug) + '-' + slugify(deviceName) + '.conf';
-  document.getElementById('device-title').textContent = data.device + ' — ' + data.user;
-  // Update Linux cp command with actual filename
-  const cpCmd = document.getElementById('linux-cp-cmd');
-  if (cpCmd) cpCmd.textContent = 'sudo cp ~/Downloads/' + filename + ' /etc/wireguard/' + filename;
-  // Generate QR codes for both iOS and Android tabs
-  const qr = qrcode(0, 'M');
-  qr.addData(configData);
-  qr.make();
-  const qrSvg = qr.createSvgTag(6, 0);
-  document.getElementById('qr-code-ios').innerHTML = qrSvg;
-  document.getElementById('qr-code-android').innerHTML = qrSvg;
-  document.getElementById('loading').style.display = 'none';
-  document.getElementById('setup-content').style.display = 'block';
-} catch(e) {
-  document.getElementById('loading').innerHTML = '<div class="card"><p>No device configuration found. <a href="/vpn-admin-internal/" style="color:#093DF5">Go back to admin</a> and add a device first.</p></div>';
-}
-
-function slugify(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
-function downloadConfig() {
-  const blob = new Blob([configData], {type:'text/plain'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'bitswan-' + slugify(serverSlug) + '-' + slugify(deviceName) + '.conf';
-  a.click();
-}
-
-function showTab(groupId, tabId) {
-  const group = document.getElementById(groupId);
-  const card = group.closest('.card') || group.parentElement;
-  card.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-  group.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-  document.getElementById(tabId).classList.add('active');
-  event.target.classList.add('active');
-}
-</script></body></html>`
-}
-
-func vpnAdminWrongUserHTML(currentEmail, intendedEmail string) string {
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html><head><meta charset="utf-8">` + bitswanFavicon + `<title>BitSwan VPN</title>
-<style>`+bitswanPageCSS+`</style></head><body>
-<div class="header">`+bitswanLogoSVG+`<h1>Wrong Account</h1><a href="/oauth2/sign_out" class="sign-out">Sign out</a></div>
-<div class="card">
-<p>You are signed in as <b>%s</b>, but this invitation is for <b>%s</b>.</p>
-<p>Please sign out and sign in with the correct account, or ask the administrator to create a new invitation for your email address.</p>
-<div style="margin-top:16px;display:flex;gap:8px;">
-<a href="/oauth2/sign_out" class="btn">Sign Out</a>
-</div>
-</div></body></html>`, currentEmail, intendedEmail)
-}
 
 // sidebarCSS is extra CSS for the sidebar layout used by internal pages.
 const sidebarCSS = `
@@ -869,15 +450,10 @@ body { max-width: none; padding: 0; display: flex; min-height: 100vh; }
 .main table { white-space: nowrap; }
 `
 
-func vpnInternalPage(email, page string) string {
+func vpnInternalPage(email, page string, admin bool) string {
 	cfgSlug := config.NewAutomationServerConfig()
 	scSlug, _ := cfgSlug.LoadConfig()
-	serverSlug := "bitswan"
 	serverName := "BitSwan"
-	if scSlug != nil && scSlug.Slug != "" {
-		serverSlug = scSlug.Slug
-	}
-
 	if scSlug != nil && scSlug.Name != "" {
 		serverName = scSlug.Name
 	}
@@ -893,196 +469,135 @@ func vpnInternalPage(email, page string) string {
 	var pageContent, pageTitle, pageScript string
 
 	switch page {
-	case "my-devices":
-		pageTitle = "My Devices"
-		pageContent = `
-<div id="my-devices">Loading...</div>
-<div class="add-device-form" style="margin-top:16px;">
-  <input type="text" id="add-device" placeholder="New device name (e.g. laptop, phone)">
-  <button onclick="addDevice()">Add Device</button>
-</div>
-<div id="add-result"></div>`
-		pageScript = fmt.Sprintf(`
-const currentUserEmail = '%s';
-const serverSlug = '%s';
-function addDevice() {
-  const deviceName = document.getElementById('add-device').value.trim();
-  if (!deviceName) { alert('Enter a device name (e.g. laptop, phone)'); return; }
-  fetch('/vpn-admin-internal/api/add-device', {method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({user_id: currentUserEmail, device_name: deviceName})})
-    .then(r => r.json())
-    .then(d => {
-      if (d.error) { alert(d.error); return; }
-      const data = btoa(JSON.stringify({config: d.config, user: currentUserEmail, device: deviceName, serverSlug: serverSlug}));
-      window.location.href = '/vpn-admin-internal/device-setup#' + data;
-    })
-    .catch(e => alert(e.message));
-}
-function loadMyDevices() {
-  fetch('/vpn-admin-internal/api/users').then(r=>r.json()).then(users => {
-    const mine = users.filter(u => u.user_id === currentUserEmail);
-    if (!mine.length) { document.getElementById('my-devices').innerHTML = '<p class="note">No devices yet. Add one below.</p>'; return; }
-    let html = '';
-    mine.forEach(d => {
-      const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
-      html += '<div class="device-row"><div class="device-info"><div class="device-name">' + d.device_name + '</div>';
-      html += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
-      html += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="removeDevice(\'' + d.device_id + '\')">Remove</button></div>';
-    });
-    document.getElementById('my-devices').innerHTML = html;
-  });
-}
-function removeDevice(id) {
-  if (!confirm('Remove device ' + id.split('/').pop() + '?')) return;
-  fetch('/vpn-admin-internal/api/revoke/' + encodeURIComponent(id), {method:'POST'}).then(() => loadMyDevices());
-}
-loadMyDevices();`, email, serverSlug)
+	case "network":
+		pageTitle = "Network Access"
+		pageContent = networkAccessHTML
+		pageScript = networkAccessScript
 
-	case "users":
-		pageTitle = "Users & Devices"
+	case "siem":
+		pageTitle = "SIEM Integration"
 		pageContent = `
 <div class="card" style="margin-top:0;">
-<h2>Invite User</h2>
-<p>Create a one-time magic link (valid 1 hour) for a specific user.</p>
-<div class="add-device-form">
-  <input type="text" id="invite-email" placeholder="User's email address">
-  <button onclick="generateLink()">Generate Magic Link</button>
+<h2>Forward events to a SIEM</h2>
+<p class="note">All VPN session events (and, soon, container logs) are streamed to the configured endpoint as newline-delimited JSON over HTTPS. Events are batched for efficiency and retried on transient failures.</p>
+<form id="siem-form" onsubmit="saveConfig(event)">
+  <label style="display:block;margin:12px 0 4px;font-size:13px;color:#3F3F46;">Endpoint URL</label>
+  <input type="text" id="siem-url" placeholder="https://siem.example.com/collector">
+  <label style="display:block;margin:12px 0 4px;font-size:13px;color:#3F3F46;">Auth header (optional)</label>
+  <input type="text" id="siem-auth" placeholder="Authorization: Bearer &lt;token&gt;  — or just the token">
+  <label style="display:block;margin:12px 0 4px;font-size:13px;color:#3F3F46;"><input type="checkbox" id="siem-enabled"> Enable forwarding</label>
+  <div style="margin-top:16px;display:flex;gap:8px;">
+    <button type="submit">Save</button>
+    <button type="button" class="btn-secondary" onclick="sendTest()">Send test event</button>
+  </div>
+  <div id="save-result" class="note" style="margin-top:8px;"></div>
+</form>
 </div>
-<div id="link-result"></div>
-</div>
-<div class="card">
-<h2>All Users</h2>
-<div id="users-table">Loading...</div>
-</div>
-<div class="card">
-<h2>Pending Invitations</h2>
-<div id="links-table">Loading...</div>
-</div>`
-		pageScript = fmt.Sprintf(`
-const currentUserEmail = '%s';
-function generateLink() {
-  const inviteEmail = document.getElementById('invite-email').value.trim();
-  if (!inviteEmail) { alert('Enter the email address of the user to invite'); return; }
-  fetch('/vpn-admin-internal/api/magic-link', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({created_by: currentUserEmail, for_email: inviteEmail})})
-    .then(r => r.json())
-    .then(d => {
-      document.getElementById('link-result').innerHTML =
-        '<div class="link-box">' + d.claim_url + '</div>' +
-        '<button class="btn-secondary" onclick="navigator.clipboard.writeText(\'' + d.claim_url + '\').then(()=>this.textContent=\'Copied!\')">Copy Link</button>' +
-        '<span class="note" style="margin-left:8px;">Expires in ' + d.expires + '</span>';
-      loadLinks();
-    });
-}
-function loadUsers() {
-  fetch('/vpn-admin-internal/api/users').then(r=>r.json()).then(users => {
-    if (!users.length) { document.getElementById('users-table').innerHTML = '<p class="note">No users yet.</p>'; return; }
-    const grouped = {};
-    users.forEach(u => { if (!grouped[u.user_id]) grouped[u.user_id] = []; grouped[u.user_id].push(u); });
-    let html = '';
-    Object.keys(grouped).sort().forEach(userId => {
-      html += '<div class="user-group"><div class="user-group-header">' + userId + '</div>';
-      grouped[userId].forEach(d => {
-        const issued = d.issued_at ? new Date(d.issued_at).toLocaleDateString() : '';
-        html += '<div class="device-row"><div class="device-info"><div class="device-name">' + d.device_name + '</div>';
-        html += '<div class="device-meta">IP: <code>' + d.ip + '</code> &middot; Added: ' + issued + '</div></div>';
-        html += '<button class="danger" style="padding:6px 12px;font-size:13px;" onclick="revokeDevice(\'' + d.device_id + '\')">Revoke</button></div>';
-      });
-      html += '</div>';
-    });
-    document.getElementById('users-table').innerHTML = html;
-  });
-}
-function loadLinks() {
-  fetch('/vpn-admin-internal/api/magic-link').then(r=>r.json()).then(links => {
-    if (!links.length) { document.getElementById('links-table').innerHTML = '<p class="note">No pending invitations.</p>'; return; }
-    let html = '<table><tr><th>For</th><th>Invited By</th><th>Expires</th></tr>';
-    links.forEach(l => {
-      html += '<tr><td>'+(l.for_email||'<span class="note">any</span>')+'</td><td>'+l.created_by+'</td><td>'+new Date(l.expires_at).toLocaleString()+'</td></tr>';
-    });
-    html += '</table>';
-    document.getElementById('links-table').innerHTML = html;
-  });
-}
-function revokeDevice(id) {
-  if (!confirm('Revoke ' + id + '?')) return;
-  fetch('/vpn-admin-internal/api/revoke/' + encodeURIComponent(id), {method:'POST'}).then(() => loadUsers());
-}
-loadUsers(); loadLinks();`, email)
 
-	case "logs":
-		pageTitle = "Access Logs"
-		pageContent = `
-<div class="card" style="margin-top:0;">
-<h2>Live Status</h2>
-<p class="note">Current VPN peer connections. Refreshes every 15 seconds.</p>
-<div id="live-status">Loading...</div>
-</div>
 <div class="card">
-<h2>Connection History</h2>
-<p class="note">Connect/disconnect events logged by the session monitor.</p>
-<div id="history-table">Loading...</div>
+<h2>Status</h2>
+<div id="stats"></div>
 </div>`
 		pageScript = `
-function loadLive() {
-  fetch('/vpn-admin-internal/api/sessions').then(r=>r.json()).then(peers => {
-    if (!peers || !peers.length) { document.getElementById('live-status').innerHTML = '<p class="note">No VPN peers configured.</p>'; return; }
-    let html = '<table><tr><th>Status</th><th>User</th><th>Device</th><th>VPN IP</th><th>Endpoint</th><th>Last Handshake</th><th>Transfer</th></tr>';
-    peers.forEach(p => {
-      const dot = p.status === 'connected' ? '<span style="color:#22C55E;">&bull;</span>' : '<span style="color:#D1D5DB;">&bull;</span>';
-      html += '<tr><td>' + dot + ' ' + p.status + '</td>';
-      html += '<td>' + (p.user_id || '<span class="note">unknown</span>') + '</td>';
-      html += '<td>' + (p.device_name || '') + '</td>';
-      html += '<td><code>' + (p.ip || '') + '</code></td>';
-      html += '<td><code>' + (p.endpoint || '-') + '</code></td>';
-      html += '<td>' + (p.last_handshake || '-') + '</td>';
-      html += '<td>' + (p.transfer || '-') + '</td></tr>';
-    });
-    html += '</table>';
-    document.getElementById('live-status').innerHTML = html;
-  }).catch(() => { document.getElementById('live-status').innerHTML = '<p class="note">Could not load.</p>'; });
+function loadConfig() {
+  fetch('/vpn-admin-internal/api/siem-config').then(r=>r.json()).then(d => {
+    document.getElementById('siem-url').value = d.config.url || '';
+    document.getElementById('siem-auth').value = d.config.auth_header || '';
+    document.getElementById('siem-enabled').checked = !!d.config.enabled;
+    renderStats(d.stats);
+  });
 }
-function loadHistory() {
-  fetch('/vpn-admin-internal/api/sessions?type=history').then(r=>r.json()).then(events => {
-    if (!events || !events.length) { document.getElementById('history-table').innerHTML = '<p class="note">No events recorded yet. Events are logged as peers connect and disconnect.</p>'; return; }
-    function fmtBytes(b) { if (!b) return '-'; if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; }
-    let html = '<table><tr><th>Time</th><th>Event</th><th>User</th><th>Device</th><th>IP</th><th>Downloaded</th><th>Uploaded</th></tr>';
-    events.reverse().forEach(e => {
-      const time = e.timestamp ? new Date(e.timestamp).toLocaleString() : '';
-      const badge = e.event === 'connected' ? '<span style="color:#22C55E;">connected</span>' : e.event === 'disconnected' ? '<span style="color:#EF4444;">disconnected</span>' : e.event;
-      html += '<tr><td>' + time + '</td><td>' + badge + '</td><td>' + (e.user_id||'') + '</td><td>' + (e.device_name||'') + '</td><td><code>' + (e.ip||'') + '</code></td><td>' + fmtBytes(e.transfer_rx) + '</td><td>' + fmtBytes(e.transfer_tx) + '</td></tr>';
-    });
-    html += '</table>';
-    document.getElementById('history-table').innerHTML = html;
-  }).catch(() => { document.getElementById('history-table').innerHTML = '<p class="note">Could not load.</p>'; });
+function renderStats(s) {
+  if (!s) { document.getElementById('stats').innerHTML = ''; return; }
+  const dot = s.configured ? '<span style="color:#22C55E;">&bull;</span> configured' : '<span style="color:#D1D5DB;">&bull;</span> not configured';
+  let html = '<table style="width:auto;">';
+  html += '<tr><td><b>Status</b></td><td>' + dot + '</td></tr>';
+  html += '<tr><td><b>Queued</b></td><td>' + (s.queued||0) + '</td></tr>';
+  html += '<tr><td><b>Sent</b></td><td>' + (s.sent||0) + '</td></tr>';
+  html += '<tr><td><b>Dropped</b></td><td>' + (s.dropped||0) + '</td></tr>';
+  html += '<tr><td><b>Failed</b></td><td>' + (s.failed||0) + '</td></tr>';
+  if (s.last_error) html += '<tr><td><b>Last error</b></td><td><code>' + s.last_error + '</code></td></tr>';
+  html += '</table>';
+  document.getElementById('stats').innerHTML = html;
 }
-loadLive(); loadHistory();
-setInterval(loadLive, 15000);`
+function saveConfig(e) {
+  e.preventDefault();
+  const body = {
+    url: document.getElementById('siem-url').value.trim(),
+    auth_header: document.getElementById('siem-auth').value,
+    enabled: document.getElementById('siem-enabled').checked
+  };
+  fetch('/vpn-admin-internal/api/siem-config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('save-result').textContent = d.status === 'saved' ? 'Saved.' : (d.error || 'Error');
+      loadConfig();
+    });
+}
+function sendTest() {
+  fetch('/vpn-admin-internal/api/siem-test', {method:'POST'}).then(() => {
+    document.getElementById('save-result').textContent = 'Test event queued. Watch stats.';
+    setTimeout(loadConfig, 1500);
+  });
+}
+loadConfig();
+setInterval(() => fetch('/vpn-admin-internal/api/siem-config').then(r=>r.json()).then(d => renderStats(d.stats)), 5000);`
+
+	case "certs":
+		pageTitle = "Certificates"
+		// Build cert-trust instructions block (same tabs as the external admin).
+		caFilename := "bitswan-vpn-ca.crt"
+		if scSlug != nil && scSlug.Name != "" {
+			caFilename = scSlug.Name + "-ca.crt"
+		}
+		trustBlock := fmt.Sprintf(certTrustInstructionsHTML, caFilename, caFilename, caFilename, caFilename)
+
+		adminBlock := ""
+		if admin {
+			adminBlock = certsAdminBlockHTML
+		}
+		pageContent = trustBlock + adminBlock
+
+		pageScript = fmt.Sprintf(`
+const caFilename = '%s';
+function downloadCA() {
+  const a = document.createElement('a');
+  a.href = '/vpn-admin-internal/ca.crt';
+  a.download = caFilename;
+  a.click();
+}
+function showTab(groupId, tabId) {
+  const group = document.getElementById(groupId);
+  const card = group.closest('.card') || group.parentElement;
+  card.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  group.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.getElementById(tabId).classList.add('active');
+  group.querySelectorAll('.tab').forEach(el => {
+    if (el.getAttribute('onclick') && el.getAttribute('onclick').includes(tabId)) el.classList.add('active');
+  });
+}
+%s
+`, caFilename, certsAdminScript(admin))
 	}
+
+	// admin is always true for the internal admin (handler gates non-admins),
+	// but we keep the parameter so future shared layouts can vary the nav.
+	_ = admin
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8">`+bitswanFavicon+`<title>%s — %s VPN</title>
 <style>`+bitswanPageCSS+sidebarCSS+`
-.device-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #E4E4E7; }
-.device-row:last-child { border-bottom: none; }
-.device-info { flex: 1; }
-.device-name { font-weight: 600; color: #18181B; }
-.device-meta { font-size: 13px; color: #71717A; margin-top: 2px; }
-.device-meta code { font-size: 12px; }
-.user-group { margin-bottom: 24px; }
-.user-group-header { font-weight: 600; color: #093DF5; font-size: 15px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #093DF5; }
-.add-device-form { display: flex; gap: 8px; align-items: center; }
-.add-device-form input { flex: 1; margin: 0; }
 </style></head><body>
 <div class="sidebar">
   <div class="sidebar-logo">`+bitswanLogoSVG+`</div>
   <nav class="sidebar-nav">
-    <a href="/vpn-admin-internal/" class="%s">My Devices</a>
-    <a href="/vpn-admin-internal/users" class="%s">Users &amp; Devices</a>
-    <a href="/vpn-admin-internal/logs" class="%s">Access Logs</a>
+    <a href="/vpn-admin-internal/network" class="%s">Network Access</a>
+    <a href="/vpn-admin-internal/siem" class="%s">SIEM</a>
+    <a href="/vpn-admin-internal/certs" class="%s">Certificates</a>
   </nav>
   <div class="sidebar-footer">
     <div style="margin-bottom:4px;">%s</div>
-    <a href="/oauth2/sign_out">Sign out</a>
+    <a href="/vpn-admin-internal/signout">Sign out</a>
   </div>
 </div>
 <div class="main">
@@ -1092,6 +607,6 @@ setInterval(loadLive, 15000);`
 <script>%s</script>
 </body></html>`,
 		pageTitle, serverName,
-		active("my-devices"), active("users"), active("logs"),
+		active("network"), active("siem"), active("certs"),
 		email, pageTitle, pageContent, pageScript)
 }
