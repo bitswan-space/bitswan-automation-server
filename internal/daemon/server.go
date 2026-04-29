@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/siem"
 )
 
 const (
@@ -170,18 +171,6 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/service", s.authMiddleware(s.handleService))
 	mux.HandleFunc("/service/", s.authMiddleware(s.handleService))
 
-	// VPN endpoints (authenticated)
-	// VPN read-only endpoints — socket-trusted (gitops needs status)
-	mux.HandleFunc("/vpn/status", s.authMiddleware(s.handleVPNStatus))
-	mux.HandleFunc("/vpn/sessions", s.authMiddleware(s.handleVPNSessions))
-	mux.HandleFunc("/vpn/users", s.authMiddleware(s.handleVPNListUsers))
-	// VPN destructive endpoints — strict auth (token required even over socket)
-	mux.HandleFunc("/vpn/init", s.strictAuthMiddleware(s.handleVPNInit))
-	mux.HandleFunc("/vpn/credentials", s.strictAuthMiddleware(s.handleVPNGenerateCredentials))
-	mux.HandleFunc("/vpn/revoke", s.strictAuthMiddleware(s.handleVPNRevoke))
-	mux.HandleFunc("/vpn/magic-link", s.strictAuthMiddleware(s.handleVPNMagicLink))
-	mux.HandleFunc("/vpn/destroy", s.strictAuthMiddleware(s.handleVPNDestroy))
-
 	// MQTT endpoints (authenticated)
 	mux.HandleFunc("/mqtt/reinitialize", s.authMiddleware(s.handleMQTTReinitialize))
 
@@ -236,6 +225,21 @@ func (s *Server) Run() error {
 		fmt.Printf("Warning: Failed to install certificates in daemon: %v\n", err)
 	}
 
+	// Boot the SIEM sink. Events buffer in fluent-bit so they survive the
+	// short window before fluent-bit comes up below.
+	siem.Default()
+
+	// Bring fluent-bit up (idempotent). If the SIEM is unconfigured,
+	// fluent-bit still starts with a null output so the forward-protocol
+	// endpoint is available — Docker's fluentd log driver requires it, and
+	// config can be edited later without restarting fluent-bit.
+	go func() {
+		time.Sleep(2 * time.Second)
+		if err := ensureFluentBit(); err != nil {
+			fmt.Printf("Warning: fluent-bit bootstrap failed: %v\n", err)
+		}
+	}()
+
 	// Initialize MQTT publisher if AOC is configured (non-blocking, will retry on failure)
 	// This ensures MQTT publisher is set up even if AOC wasn't configured at first
 	// Pass server reference so MQTT handlers can call internal functions
@@ -278,10 +282,18 @@ func (s *Server) Run() error {
 	docsMux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
 	docsMux.HandleFunc("/api-docs", s.handleDocs)
 	docsMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// If the request comes via the vpn-admin hostname, redirect to /vpn-admin/
-		// instead of showing Swagger docs.
-		if strings.HasPrefix(r.Host, "vpn-admin") || strings.HasPrefix(r.Host, "vpn-admin.") {
-			http.Redirect(w, r, "/vpn-admin/", http.StatusFound)
+		// "/" on the vpn-admin host is the post-logout landing page (the
+		// only URI Keycloak will accept after RP-initiated logout, since
+		// AOC registers it with a trailing slash and Keycloak does exact
+		// matching). Send the user to the appropriate admin homepage —
+		// internal hosts under .bswn.internal go to /vpn-admin-internal/,
+		// everything else to the public /vpn-admin/.
+		if strings.HasPrefix(r.Host, "vpn-admin") {
+			if strings.Contains(r.Host, ".bswn.internal") {
+				http.Redirect(w, r, "/vpn-admin-internal/", http.StatusFound)
+			} else {
+				http.Redirect(w, r, "/vpn-admin/", http.StatusFound)
+			}
 			return
 		}
 		s.handleDocs(w, r)
@@ -313,18 +325,25 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	// Auto-initialize VPN on startup if a workspace exists with a domain.
-	// Runs in a goroutine so it doesn't block server startup.
+	// VPN admin pages live behind oauth2-proxy on this server. Children
+	// die with the previous daemon container, so always restart them on
+	// boot and re-register the ingress routes with the right upstream
+	// ports. ZTNA tunnel + routing-peer container are owned by the ZTNA
+	// integration; their lifecycle is driven by the admin saving config,
+	// not by daemon boot.
 	go func() {
-		// Wait for servers to be ready (ingress registration needs the socket)
 		time.Sleep(3 * time.Second)
-		if !IsVPNEnabled() {
-			cfg := config.NewAutomationServerConfig()
-			serverConfig, _ := cfg.LoadConfig()
-			if serverConfig != nil && serverConfig.Domain != "" {
-				fmt.Println("Auto-initializing VPN...")
-				initVPNAutomatically(serverConfig.Domain, false, os.Stdout)
-			}
+		cfg := config.NewAutomationServerConfig()
+		serverConfig, _ := cfg.LoadConfig()
+		if serverConfig == nil || serverConfig.Domain == "" {
+			return
+		}
+		setupVPNAdminRoutes(serverConfig.Domain, serverConfig.InternalDomain())
+		// Re-up the routing peer if ZTNA was previously enabled; the
+		// container survived in Docker's local cache but a setup-key
+		// rotation would need a recreate that this triggers.
+		if err := ensureZTNARouter(context.Background()); err != nil {
+			fmt.Printf("Warning: ZTNA router (re)start failed: %v\n", err)
 		}
 	}()
 

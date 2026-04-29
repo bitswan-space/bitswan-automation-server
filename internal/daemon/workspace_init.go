@@ -12,7 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"io"
-	"net/http"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
@@ -947,19 +946,18 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 	return nil
 }
 
-// initVPNAutomatically sets up WireGuard VPN during workspace init.
+// initVPNAutomatically sets up the local internal-routing infrastructure
+// during workspace init: the bitswan_vpn_network bridge, the per-server CA
+// and *.bswn.internal TLS cert, and the traefik-vpn container that
+// terminates HTTPS for internal services. The actual user tunnel is owned
+// by an external ZTNA provider (NetBird etc.) — wired up later from the
+// admin UI's Network Access page.
 func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 	if IsVPNEnabled() {
 		return
 	}
 
-	fmt.Fprintln(writer, "Initializing VPN...")
-
-	vpnEndpoint := detectPublicIPForVPN()
-	if vpnEndpoint == "" {
-		fmt.Fprintln(writer, "Warning: Could not detect public IP for VPN. Run 'bitswan vpn init --endpoint <ip>' manually.")
-		return
-	}
+	fmt.Fprintln(writer, "Initializing internal routing infrastructure...")
 
 	cfg := config.NewAutomationServerConfig()
 	serverConfig, _ := cfg.LoadConfig()
@@ -980,16 +978,13 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 		hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
 		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
 	}
-
-	mgr := vpn.NewManager(filepath.Join(homeDir, ".config", "bitswan"))
-	if !mgr.IsInitialized() {
-		if err := mgr.Init(vpnEndpoint); err != nil {
-			fmt.Fprintf(writer, "Warning: VPN init failed: %v\n", err)
-			return
-		}
+	if err := os.MkdirAll(vpnPath, 0700); err != nil {
+		fmt.Fprintf(writer, "Warning: create %s: %v\n", vpnPath, err)
+		return
 	}
 
-	// Initialize VPN CA and issue TLS certs for VPN Traefik
+	// Per-server CA + wildcard cert for *.bswn.internal traffic that the
+	// ZTNA tunnel routes to traefik-vpn.
 	caMgr := vpn.NewCAManager(vpnPath)
 	wsServerName := "BitSwan"
 	if serverConfig != nil && serverConfig.Name != "" {
@@ -1012,7 +1007,6 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 		fmt.Fprintf(writer, "Warning: VPN CA not available, skipping TLS cert\n")
 	} else {
 		caMgr.IssueTLSCert(tlsHostnames)
-		// Install CA cert into daemon trust store
 		if caCert, err := caMgr.CACertPEM(); err == nil && len(caCert) > 0 {
 			certAuthDir, _ := getCertAuthoritiesDir()
 			os.WriteFile(filepath.Join(certAuthDir, "bitswan-vpn-ca.crt"), caCert, 0644)
@@ -1020,58 +1014,50 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 		}
 	}
 
-	docker.EnsureDockerNetwork("bitswan_vpn_network", verbose)
-
-	wgCompose, _ := dockercompose.CreateWireGuardDockerComposeFile(hostVpnPath, 51820)
-	if wgCompose != "" {
-		dockerComposeUpQuiet("wireguard", wgCompose, vpnPath)
-	}
+	docker.EnsureDockerIPv6Network("bitswan_vpn_network", vpn.ServiceSubnet, verbose)
 
 	os.MkdirAll(vpnTraefikPath, 0755)
-	traefikYml := "entryPoints:\n  web:\n    address: \":80\"\n  websecure:\n    address: \":443\"\ntls:\n  certificates:\n    - certFile: /certs/tls.crt\n      keyFile: /certs/tls.key\napi:\n  insecure: true\nproviders:\n  rest:\n    insecure: true\n"
+	// Traefik v3 ignores tls.* in the static config — the defaultCertificate
+	// must live in a dynamic config loaded by the file provider.
+	traefikYml := `entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+api:
+  insecure: true
+providers:
+  rest:
+    insecure: true
+  file:
+    filename: /etc/traefik/tls-config.yml
+    watch: true
+`
+	tlsConfigYml := `tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/tls.crt
+        keyFile: /certs/tls.key
+`
 	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
+	os.WriteFile(filepath.Join(vpnTraefikPath, "tls-config.yml"), []byte(tlsConfigYml), 0644)
 	hostCaDir := filepath.Join(hostVpnPath, "ca")
 	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath, hostCaDir)
 	if vpnTraefikCompose != "" {
 		dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
 	}
 
-	dockercompose.WriteCorefile(vpnPath, "")
-	corednsCompose, _ := dockercompose.CreateCoreDNSDockerComposeFile(hostVpnPath)
-	if corednsCompose != "" {
-		dockerComposeUpQuiet("coredns-vpn", corednsCompose, vpnPath)
-	}
-
 	serverConfig, _ = cfg.LoadConfig()
 	if serverConfig != nil {
-		internalDomain := serverConfig.InternalDomain()
-		addRouteToIngress(IngressAddRouteRequest{
-			Hostname:      "vpn-admin." + domain,
-			Upstream:      "bitswan-automation-server-daemon:8080",
-			IngressTarget: "external",
-		}, "")
-		addRouteToIngress(IngressAddRouteRequest{
-			Hostname:      "vpn-admin." + internalDomain,
-			Upstream:      "bitswan-automation-server-daemon:8080",
-			IngressTarget: "internal",
-		}, "")
+		setupVPNAdminRoutes(domain, serverConfig.InternalDomain())
 	}
 
-	fmt.Fprintf(writer, "VPN initialized (endpoint: %s)\n", vpnEndpoint)
-	fmt.Fprintln(writer, "Run 'bitswan vpn bootstrap' to download your VPN config.")
-}
+	// Mark VPN-side infra as initialized so other code (ingress routing
+	// decisions, idempotency on re-init) can short-circuit.
+	os.WriteFile(filepath.Join(vpnPath, "enabled"), []byte("true\n"), 0644)
 
-func detectPublicIPForVPN() string {
-	resp, err := http.Get("https://api.ipify.org")
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(body))
+	fmt.Fprintln(writer, "Internal routing ready. Configure a ZTNA provider in the VPN admin Network Access page to allow user devices in.")
 }
 
 func dockerComposeUpQuiet(projectName, composeContent, workDir string) {
