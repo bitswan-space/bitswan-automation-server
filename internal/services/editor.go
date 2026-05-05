@@ -20,6 +20,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultDashboardImage is the workspace-dashboard image deployed alongside the editor.
+// The image bundles the React/Vite UI plus a Fastify+node-pty backend behind oauth2-proxy.
+const DefaultDashboardImage = "bitswan/workspace-dashboard:latest"
+
 // EditorService manages Editor service deployment for workspaces
 type EditorService struct {
 	WorkspaceName string
@@ -128,11 +132,42 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		}
 	}
 
+	// Build the workspace-dashboard sidecar (React UI + node-pty terminal behind oauth2-proxy).
+	bitswanDashboard := map[string]interface{}{
+		"image":    DefaultDashboardImage,
+		"restart":  "always",
+		"hostname": workspaceName + "-dashboard",
+		"networks": []string{"bitswan_network"},
+		"environment": []string{
+			"BITSWAN_WORKSPACE_NAME=" + workspaceName,
+			"PORT=8080",
+			"INTERNAL_PORT=8081",
+		},
+		"volumes": []string{
+			gitopsPath + "/workspace:/workspace/workspace:z",
+		},
+	}
+
+	if oauthConfig != nil {
+		dashboardOAuthEnvVars := oauth.CreateOAuthEnvVars(oauthConfig, "dashboard", workspaceName, domain)
+		bitswanDashboard["environment"] = append(bitswanDashboard["environment"].([]string), dashboardOAuthEnvVars...)
+	}
+
+	if len(mqttEnvVars) > 0 {
+		bitswanDashboard["environment"] = append(bitswanDashboard["environment"].([]string), mqttEnvVars...)
+	}
+
+	if len(caVolumes) > 0 {
+		bitswanDashboard["volumes"] = append(bitswanDashboard["volumes"].([]string), caVolumes...)
+		bitswanDashboard["environment"] = append(bitswanDashboard["environment"].([]string), caEnvVars...)
+	}
+
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",
 		"services": map[string]interface{}{
-			"bitswan-editor": bitswanEditor,
+			"bitswan-editor":    bitswanEditor,
+			"bitswan-dashboard": bitswanDashboard,
 		},
 		"networks": map[string]interface{}{
 			"bitswan_network": map[string]interface{}{
