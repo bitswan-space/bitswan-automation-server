@@ -636,7 +636,7 @@ func DeleteTraefikRecordsWithWriter(workspaceName string, writer io.Writer) erro
 	// Remove per-service routes.
 	if domain != "" {
 		log("Deleting service routes for domain %s...", domain)
-		for _, service := range []string{"gitops", "editor"} {
+		for _, service := range []string{"gitops", "editor", "dashboard"} {
 			hostname := fmt.Sprintf("%s-%s.%s", workspaceName, service, domain)
 			log("Removing route for %s...", hostname)
 			if err := RemoveRoute(hostname); err != nil {

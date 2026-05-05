@@ -703,6 +703,19 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			return fmt.Errorf("failed to register Editor service: %w", err)
 		}
 
+		// Register workspace-dashboard route (deployed in the same compose as the editor).
+		dashboardHostname := fmt.Sprintf("%s-dashboard.%s", workspaceName, *domain)
+		dashboardUpstream := fmt.Sprintf("%s-dashboard:8080", workspaceName)
+		if err := addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      dashboardHostname,
+			Upstream:      dashboardUpstream,
+			Mkcert:        *mkCerts,
+			CertsDir:      *certsDir,
+			WorkspaceName: workspaceName,
+		}, ""); err != nil {
+			return fmt.Errorf("failed to register Dashboard service: %w", err)
+		}
+
 		// Start the editor container
 		if err := editorService.StartContainer(); err != nil {
 			return fmt.Errorf("failed to start editor container: %w", err)
@@ -717,6 +730,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 		fmt.Println("------------BITSWAN EDITOR INFO------------")
 		fmt.Printf("Bitswan Editor URL: https://%s-editor.%s\n", workspaceName, *domain)
+		fmt.Printf("Workspace Dashboard URL: https://%s-dashboard.%s\n", workspaceName, *domain)
 
 		if oauthConfig == nil {
 			editorPassword, err := editorService.GetEditorPassword()
