@@ -32,6 +32,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	disableDevMode := fs.Bool("disable-dev-mode", false, "")
 	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
 	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
+	dashboardDevSourceDir := fs.String("dashboard-dev-source-dir", "", "")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -50,7 +51,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	metadataPath := filepath.Join(workspacePath, "metadata.yaml")
 
 	// Handle dev mode settings - update metadata if dev mode flags are provided
-	if *devMode || *disableDevMode || *gitopsDevSourceDir != "" || *editorDevSourceDir != "" {
+	if *devMode || *disableDevMode || *gitopsDevSourceDir != "" || *editorDevSourceDir != "" || *dashboardDevSourceDir != "" {
 		fmt.Println("Updating dev mode settings...")
 		metadata, err := config.GetWorkspaceMetadata(workspaceName)
 		if err != nil {
@@ -66,6 +67,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 			// Clear dev source directories when disabling dev mode
 			metadata.GitopsDevSourceDir = nil
 			metadata.EditorDevSourceDir = nil
+			metadata.DashboardDevSourceDir = nil
 			fmt.Println("Dev mode disabled")
 		}
 		if *gitopsDevSourceDir != "" {
@@ -77,6 +79,11 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 			metadata.EditorDevSourceDir = editorDevSourceDir
 			metadata.DevMode = true
 			fmt.Printf("Editor dev source directory set to: %s\n", *editorDevSourceDir)
+		}
+		if *dashboardDevSourceDir != "" {
+			metadata.DashboardDevSourceDir = dashboardDevSourceDir
+			metadata.DevMode = true
+			fmt.Printf("Dashboard dev source directory set to: %s\n", *dashboardDevSourceDir)
 		}
 
 		if err := metadata.SaveToFile(metadataPath); err != nil {

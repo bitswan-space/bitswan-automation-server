@@ -31,6 +31,7 @@ type WorkspaceCreateRequest struct {
 	EditorImage            string `json:"editor-image,omitempty"`
 	GitopsDevSourceDir     string `json:"gitops-dev-source-dir,omitempty"`
 	EditorDevSourceDir     string `json:"editor-dev-source-dir,omitempty"`
+	DashboardDevSourceDir  string `json:"dashboard-dev-source-dir,omitempty"`
 	OauthConfigFile        string `json:"oauth-config,omitempty"`
 	NoOauth                bool   `json:"no-oauth,omitempty"`
 	SshPort                string `json:"ssh-port,omitempty"`
@@ -118,6 +119,9 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	}
 	if req.EditorDevSourceDir != "" {
 		args = append(args, "--editor-dev-source-dir", req.EditorDevSourceDir)
+	}
+	if req.DashboardDevSourceDir != "" {
+		args = append(args, "--dashboard-dev-source-dir", req.DashboardDevSourceDir)
 	}
 	if req.OauthConfigFile != "" {
 		args = append(args, "--oauth-config", req.OauthConfigFile)

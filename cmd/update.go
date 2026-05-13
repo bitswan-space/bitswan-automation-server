@@ -18,8 +18,9 @@ type updateOptions struct {
 	trustCA            bool
 	devMode            bool
 	disableDevMode     bool
-	gitopsDevSourceDir string
-	editorDevSourceDir string
+	gitopsDevSourceDir    string
+	editorDevSourceDir    string
+	dashboardDevSourceDir string
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -57,6 +58,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.disableDevMode, "disable-dev-mode", false, "Disable development mode")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
+	cmd.Flags().StringVar(&o.dashboardDevSourceDir, "dashboard-dev-source-dir", "", "Directory to mount as /workspace/dashboard-src in the workspace-dashboard container for hot-reload development")
 
 	cmd.ValidArgsFunction = validWorkspaceArgs
 

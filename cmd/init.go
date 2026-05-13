@@ -20,8 +20,9 @@ type initOptions struct {
 	local              bool
 	gitopsImage        string
 	editorImage        string
-	gitopsDevSourceDir string
-	editorDevSourceDir string
+	gitopsDevSourceDir    string
+	editorDevSourceDir    string
+	dashboardDevSourceDir string
 	oauthConfigFile    string
 	noOauth            bool
 	sshPort            string
@@ -69,6 +70,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
+	cmd.Flags().StringVar(&o.dashboardDevSourceDir, "dashboard-dev-source-dir", "", "Directory to mount as /workspace/dashboard-src in the workspace-dashboard container for hot-reload development")
 	cmd.Flags().StringVar(&o.oauthConfigFile, "oauth-config", "", "OAuth config file")
 	cmd.Flags().BoolVar(&o.noOauth, "no-oauth", false, "Disable automatically fetching OAuth configuration from AOC")
 	cmd.Flags().StringVar(&o.sshPort, "ssh-port", "", "Use SSH over a custom port with custom SSH config for repositories behind firewalls (e.g., 443, 22)")
