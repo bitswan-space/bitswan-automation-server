@@ -48,10 +48,12 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 	}, nil
 }
 
-// EditorDevConfig holds dev mode configuration for the editor
+// EditorDevConfig holds dev mode configuration for the editor and the
+// workspace-dashboard sidecar deployed alongside it.
 type EditorDevConfig struct {
-	DevMode            bool
-	EditorDevSourceDir string
+	DevMode               bool
+	EditorDevSourceDir    string
+	DashboardDevSourceDir string
 }
 
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
@@ -133,13 +135,19 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	}
 
 	// Build the workspace-dashboard sidecar (React UI + node-pty terminal behind oauth2-proxy).
+	// pull_policy: never — the image is not yet published; users build it
+	// locally with `docker build -t bitswan/workspace-dashboard:latest`.
+	// Remove this line once the image is on a registry.
 	bitswanDashboard := map[string]interface{}{
-		"image":    DefaultDashboardImage,
-		"restart":  "always",
-		"hostname": workspaceName + "-dashboard",
-		"networks": []string{"bitswan_network"},
+		"image":       DefaultDashboardImage,
+		"pull_policy": "never",
+		"restart":     "always",
+		"hostname":    workspaceName + "-dashboard",
+		"networks":    []string{"bitswan_network"},
 		"environment": []string{
 			"BITSWAN_WORKSPACE_NAME=" + workspaceName,
+			"BITSWAN_DEPLOY_URL=" + fmt.Sprintf("http://%s-gitops:8079", workspaceName),
+			"BITSWAN_DEPLOY_SECRET=" + gitopsSecretToken,
 			"PORT=8080",
 			"INTERNAL_PORT=8081",
 		},
@@ -160,6 +168,19 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	if len(caVolumes) > 0 {
 		bitswanDashboard["volumes"] = append(bitswanDashboard["volumes"].([]string), caVolumes...)
 		bitswanDashboard["environment"] = append(bitswanDashboard["environment"].([]string), caEnvVars...)
+	}
+
+	// Dashboard hot-reload dev mode: mount the source directory and let the
+	// container's entrypoint run `npm install` + `npm run dev` instead of the
+	// pre-built bundle.
+	if devConfig != nil && devConfig.DevMode && devConfig.DashboardDevSourceDir != "" {
+		dashboardDevContainerPath := "/workspace/dashboard-src"
+		bitswanDashboard["volumes"] = append(bitswanDashboard["volumes"].([]string),
+			devConfig.DashboardDevSourceDir+":"+dashboardDevContainerPath+":z")
+		bitswanDashboard["environment"] = append(bitswanDashboard["environment"].([]string),
+			"BITSWAN_DEV_MODE=true",
+			"BITSWAN_DASHBOARD_DEV_DIR="+dashboardDevContainerPath,
+		)
 	}
 
 	// Construct the docker-compose data structure
@@ -275,7 +296,11 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		if metadata.EditorDevSourceDir != nil {
 			devConfig.EditorDevSourceDir = *metadata.EditorDevSourceDir
 		}
-		fmt.Printf("Dev mode enabled for editor (extension source: %s)\n", devConfig.EditorDevSourceDir)
+		if metadata.DashboardDevSourceDir != nil {
+			devConfig.DashboardDevSourceDir = *metadata.DashboardDevSourceDir
+		}
+		fmt.Printf("Dev mode enabled (editor source: %q, dashboard source: %q)\n",
+			devConfig.EditorDevSourceDir, devConfig.DashboardDevSourceDir)
 	}
 
 	// Generate docker-compose content
@@ -752,7 +777,11 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 		if metadata.EditorDevSourceDir != nil {
 			devConfig.EditorDevSourceDir = *metadata.EditorDevSourceDir
 		}
-		fmt.Printf("Dev mode enabled for editor (extension source: %s)\n", devConfig.EditorDevSourceDir)
+		if metadata.DashboardDevSourceDir != nil {
+			devConfig.DashboardDevSourceDir = *metadata.DashboardDevSourceDir
+		}
+		fmt.Printf("Dev mode enabled (editor source: %q, dashboard source: %q)\n",
+			devConfig.EditorDevSourceDir, devConfig.DashboardDevSourceDir)
 	}
 
 	// Generate docker-compose content
