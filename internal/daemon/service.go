@@ -25,6 +25,7 @@ type ServiceEnableRequest struct {
 	Workspace      string                 `json:"workspace"`
 	Stage          string                 `json:"stage,omitempty"`
 	EditorImage    string                 `json:"editor_image,omitempty"`
+	DashboardImage string                 `json:"dashboard_image,omitempty"`
 	OAuthConfig    map[string]interface{} `json:"oauth_config,omitempty"` // OAuth config as JSON object
 	TrustCA        bool                   `json:"trust_ca,omitempty"`
 	KafkaImage     string                 `json:"kafka_image,omitempty"`
@@ -789,6 +790,11 @@ func (s *Server) enableEditorService(req ServiceEnableRequest) error {
 		bitswanEditorImage = "bitswan/bitswan-editor:latest"
 	}
 
+	bitswanDashboardImage := req.DashboardImage
+	if bitswanDashboardImage == "" {
+		bitswanDashboardImage = "bitswan/workspace-dashboard:latest"
+	}
+
 	var oauthConfig *oauth.Config
 	if req.OAuthConfig != nil {
 		oauthJSON, err := json.Marshal(req.OAuthConfig)
@@ -800,7 +806,7 @@ func (s *Server) enableEditorService(req ServiceEnableRequest) error {
 		}
 	}
 
-	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, req.TrustCA); err != nil {
+	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain, oauthConfig, req.TrustCA); err != nil {
 		return err
 	}
 

@@ -84,6 +84,32 @@ func ResolveGitopsImage(staging bool) (string, error) {
 	return "bitswan/gitops:" + version, nil
 }
 
+// GetLatestDashboardVersion gets the latest version of the workspace-dashboard image
+func GetLatestDashboardVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/workspace-dashboard/tags/")
+}
+
+// GetLatestDashboardStagingVersion gets the latest version of the workspace-dashboard-staging image
+func GetLatestDashboardStagingVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/workspace-dashboard-staging/tags/")
+}
+
+// ResolveDashboardImage returns the full workspace-dashboard image string based on the staging flag.
+func ResolveDashboardImage(staging bool) (string, error) {
+	if staging {
+		version, err := GetLatestDashboardStagingVersion()
+		if err != nil {
+			return "", err
+		}
+		return "bitswan/workspace-dashboard-staging:" + version, nil
+	}
+	version, err := GetLatestDashboardVersion()
+	if err != nil {
+		return "", err
+	}
+	return "bitswan/workspace-dashboard:" + version, nil
+}
+
 // ResolveEditorImage returns the full editor image string based on the staging flag.
 func ResolveEditorImage(staging bool) (string, error) {
 	if staging {

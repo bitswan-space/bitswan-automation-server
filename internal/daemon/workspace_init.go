@@ -40,6 +40,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	local := fs.Bool("local", false, "")
 	gitopsImage := fs.String("gitops-image", "", "")
 	editorImage := fs.String("editor-image", "", "")
+	dashboardImage := fs.String("dashboard-image", "", "")
 	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
 	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
 	dashboardDevSourceDir := fs.String("dashboard-dev-source-dir", "", "")
@@ -517,6 +518,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
+	bitswanDashboardImage := *dashboardImage
+	if bitswanDashboardImage == "" {
+		var err error
+		bitswanDashboardImage, err = dockerhub.ResolveDashboardImage(*staging)
+		if err != nil {
+			return fmt.Errorf("failed to get latest BitSwan workspace-dashboard image: %w", err)
+		}
+	}
+
 	fmt.Println("Setting up GitOps deployment...")
 	gitopsDeployment := gitopsConfig + "/deployment"
 	if err := os.MkdirAll(gitopsDeployment, 0755); err != nil {
@@ -687,7 +697,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 
 		// Enable the editor service
-		if err := editorService.Enable(token, bitswanEditorImage, *domain, oauthConfig, true); err != nil {
+		if err := editorService.Enable(token, bitswanEditorImage, bitswanDashboardImage, *domain, oauthConfig, true); err != nil {
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
 

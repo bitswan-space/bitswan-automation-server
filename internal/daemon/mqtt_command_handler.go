@@ -29,6 +29,7 @@ type WorkspaceCreateRequest struct {
 	Local                  bool   `json:"local,omitempty"`
 	GitopsImage            string `json:"gitops-image,omitempty"`
 	EditorImage            string `json:"editor-image,omitempty"`
+	DashboardImage         string `json:"dashboard-image,omitempty"`
 	GitopsDevSourceDir     string `json:"gitops-dev-source-dir,omitempty"`
 	EditorDevSourceDir     string `json:"editor-dev-source-dir,omitempty"`
 	DashboardDevSourceDir  string `json:"dashboard-dev-source-dir,omitempty"`
@@ -113,6 +114,9 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	}
 	if req.EditorImage != "" {
 		args = append(args, "--editor-image", req.EditorImage)
+	}
+	if req.DashboardImage != "" {
+		args = append(args, "--dashboard-image", req.DashboardImage)
 	}
 	if req.GitopsDevSourceDir != "" {
 		args = append(args, "--gitops-dev-source-dir", req.GitopsDevSourceDir)

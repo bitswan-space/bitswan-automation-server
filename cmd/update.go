@@ -11,6 +11,7 @@ import (
 type updateOptions struct {
 	gitopsImage        string
 	editorImage        string
+	dashboardImage     string
 	kafkaImage         string
 	zookeeperImage     string
 	couchdbImage       string
@@ -49,6 +50,7 @@ func newUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
+	cmd.Flags().StringVar(&o.dashboardImage, "dashboard-image", "", "Custom image for the workspace-dashboard")
 	cmd.Flags().StringVar(&o.kafkaImage, "kafka-image", "", "Custom image for Kafka")
 	cmd.Flags().StringVar(&o.zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
 	cmd.Flags().StringVar(&o.couchdbImage, "couchdb-image", "", "Custom image for CouchDB")

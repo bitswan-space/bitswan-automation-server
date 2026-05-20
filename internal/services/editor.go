@@ -20,12 +20,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultDashboardImage is the workspace-dashboard image deployed alongside the editor.
-// The image bundles the React/Vite UI plus a Fastify+node-pty backend behind oauth2-proxy.
-// Published by bitswan-workspace-dashboard's `docker-publish.yml` workflow on every
-// push to main.
-const DefaultDashboardImage = "bitswan/workspace-dashboard-staging:latest"
-
 // EditorService manages Editor service deployment for workspaces
 type EditorService struct {
 	WorkspaceName string
@@ -59,12 +53,12 @@ type EditorDevConfig struct {
 }
 
 // CreateDockerCompose generates a docker-compose-editor.yml file for Editor
-func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool) (string, error) {
-	return e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA, nil)
+func (e *EditorService) CreateDockerCompose(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool) (string, error) {
+	return e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain, oauthConfig, mqttEnvVars, trustCA, nil)
 }
 
 // CreateDockerComposeWithDevMode generates a docker-compose-editor.yml file for Editor with optional dev mode support
-func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool, devConfig *EditorDevConfig) (string, error) {
+func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain string, oauthConfig *oauth.Config, mqttEnvVars []string, trustCA bool, devConfig *EditorDevConfig) (string, error) {
 	// For docker-compose files, use HOST_HOME if available (docker-compose runs on host)
 	// Convert container path to host path for volume mounts
 	homeDir := os.Getenv("HOME")
@@ -138,7 +132,7 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 
 	// Build the workspace-dashboard sidecar (React UI + node-pty terminal behind oauth2-proxy).
 	bitswanDashboard := map[string]interface{}{
-		"image":   DefaultDashboardImage,
+		"image":   bitswanDashboardImage,
 		"restart": "always",
 		"hostname":    workspaceName + "-dashboard",
 		"networks":    []string{"bitswan_network"},
@@ -233,7 +227,7 @@ func (e *EditorService) SaveDockerCompose(content string) error {
 }
 
 // Enable enables the Editor service for the workspace
-func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain string, oauthConfig *oauth.Config, trustCA bool) error {
+func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain string, oauthConfig *oauth.Config, trustCA bool) error {
 	// Check if already enabled
 	if e.IsEnabled() {
 		return fmt.Errorf("Editor service is already enabled for workspace '%s'", e.WorkspaceName)
@@ -316,7 +310,7 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 	}
 
 	// Generate docker-compose content
-	dockerComposeContent, err := e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, mqttEnvVars, trustCA, devConfig)
+	dockerComposeContent, err := e.CreateDockerComposeWithDevMode(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain, oauthConfig, mqttEnvVars, trustCA, devConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
@@ -705,7 +699,7 @@ func (e *EditorService) UpdateCertificates(trustCA bool) error {
 
 // RegenerateDockerCompose fully regenerates the docker-compose-editor.yml file from metadata
 // This ensures all configuration changes (volumes, environment, dev mode, etc.) are propagated to existing workspaces
-func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool, trustCA bool) error {
+func (e *EditorService) RegenerateDockerCompose(editorImage, dashboardImage string, staging bool, trustCA bool) error {
 	// Check if enabled
 	if !e.IsEnabled() {
 		return fmt.Errorf("Editor service is not enabled for workspace '%s'", e.WorkspaceName)
@@ -725,6 +719,17 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 		bitswanEditorImage, err = dockerhub.ResolveEditorImage(staging)
 		if err != nil {
 			return fmt.Errorf("failed to get latest editor image: %w", err)
+		}
+	}
+
+	// Get the workspace-dashboard image - same override pattern as the editor.
+	var bitswanDashboardImage string
+	if dashboardImage != "" {
+		bitswanDashboardImage = dashboardImage
+	} else {
+		bitswanDashboardImage, err = dockerhub.ResolveDashboardImage(staging)
+		if err != nil {
+			return fmt.Errorf("failed to get latest workspace-dashboard image: %w", err)
 		}
 	}
 
@@ -800,6 +805,7 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 	dockerComposeContent, err := e.CreateDockerComposeWithDevMode(
 		metadata.GitopsSecret,
 		bitswanEditorImage,
+		bitswanDashboardImage,
 		metadata.Domain,
 		oauthConfig,
 		mqttEnvVars,
