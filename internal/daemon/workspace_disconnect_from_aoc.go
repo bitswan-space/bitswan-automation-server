@@ -77,7 +77,7 @@ func restartWorkspace(workspaceName string) error {
 	if err := fixEditorPermissions(workspaceName); err != nil {
 		return fmt.Errorf("editor permissions: %w", err)
 	}
-	if err := editorService.RegenerateDockerCompose("", false, false); err != nil {
+	if err := editorService.RegenerateDockerCompose("", "", false, false); err != nil {
 		return fmt.Errorf("editor regenerate: %w", err)
 	}
 	if err := editorService.StartContainer(); err != nil {

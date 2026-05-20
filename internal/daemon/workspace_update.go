@@ -23,6 +23,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	fs := flag.NewFlagSet("workspace-update", flag.ContinueOnError)
 	gitopsImage := fs.String("gitops-image", "", "")
 	editorImage := fs.String("editor-image", "", "")
+	dashboardImage := fs.String("dashboard-image", "", "")
 	kafkaImage := fs.String("kafka-image", "", "")
 	zookeeperImage := fs.String("zookeeper-image", "", "")
 	couchdbImage := fs.String("couchdb-image", "", "")
@@ -108,7 +109,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 
 	// 3. Update services if they are enabled
 	fmt.Println("Checking for enabled services to update...")
-	if err := updateServices(workspaceName, *editorImage, *kafkaImage, *zookeeperImage, *couchdbImage, *staging, *trustCA); err != nil {
+	if err := updateServices(workspaceName, *editorImage, *dashboardImage, *kafkaImage, *zookeeperImage, *couchdbImage, *staging, *trustCA); err != nil {
 		fmt.Printf("Warning: some services failed to update: %v\n", err)
 	}
 
@@ -117,10 +118,10 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 }
 
 // updateServices updates all enabled services for the workspace
-func updateServices(workspaceName, editorImage, kafkaImage, zookeeperImage, couchdbImage string, staging, trustCA bool) error {
+func updateServices(workspaceName, editorImage, dashboardImage, kafkaImage, zookeeperImage, couchdbImage string, staging, trustCA bool) error {
 	// Always try to update editor service if enabled
 	fmt.Println("Checking editor service...")
-	if err := updateEditorService(workspaceName, editorImage, staging, trustCA); err != nil {
+	if err := updateEditorService(workspaceName, editorImage, dashboardImage, staging, trustCA); err != nil {
 		fmt.Printf("Warning: failed to update editor service: %v\n", err)
 	} else {
 		fmt.Println("Editor service updated successfully!")
@@ -146,7 +147,7 @@ func updateServices(workspaceName, editorImage, kafkaImage, zookeeperImage, couc
 }
 
 // updateEditorService updates the editor service for a specific workspace
-func updateEditorService(workspaceName, editorImage string, staging bool, trustCA bool) error {
+func updateEditorService(workspaceName, editorImage, dashboardImage string, staging bool, trustCA bool) error {
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
@@ -172,7 +173,7 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 	// Regenerate the entire docker-compose file to ensure all config changes are applied
 	// This handles image updates, dev mode settings, certificates, etc.
 	fmt.Println("Regenerating editor docker-compose configuration...")
-	if err := editorService.RegenerateDockerCompose(editorImage, staging, trustCA); err != nil {
+	if err := editorService.RegenerateDockerCompose(editorImage, dashboardImage, staging, trustCA); err != nil {
 		return fmt.Errorf("failed to regenerate docker-compose file: %w", err)
 	}
 

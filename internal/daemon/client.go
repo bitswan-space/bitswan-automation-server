@@ -877,6 +877,9 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	if editorImage, ok := options["editor_image"].(string); ok {
 		reqBody.EditorImage = editorImage
 	}
+	if dashboardImage, ok := options["dashboard_image"].(string); ok {
+		reqBody.DashboardImage = dashboardImage
+	}
 	if oauthConfig, ok := options["oauth_config"].(map[string]interface{}); ok {
 		reqBody.OAuthConfig = oauthConfig
 	}
