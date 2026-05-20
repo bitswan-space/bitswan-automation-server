@@ -22,7 +22,9 @@ import (
 
 // DefaultDashboardImage is the workspace-dashboard image deployed alongside the editor.
 // The image bundles the React/Vite UI plus a Fastify+node-pty backend behind oauth2-proxy.
-const DefaultDashboardImage = "bitswan/workspace-dashboard:latest"
+// Published by bitswan-workspace-dashboard's `docker-publish.yml` workflow on every
+// push to main.
+const DefaultDashboardImage = "bitswan/workspace-dashboard-staging:latest"
 
 // EditorService manages Editor service deployment for workspaces
 type EditorService struct {
@@ -135,13 +137,9 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	}
 
 	// Build the workspace-dashboard sidecar (React UI + node-pty terminal behind oauth2-proxy).
-	// pull_policy: never — the image is not yet published; users build it
-	// locally with `docker build -t bitswan/workspace-dashboard:latest`.
-	// Remove this line once the image is on a registry.
 	bitswanDashboard := map[string]interface{}{
-		"image":       DefaultDashboardImage,
-		"pull_policy": "never",
-		"restart":     "always",
+		"image":   DefaultDashboardImage,
+		"restart": "always",
 		"hostname":    workspaceName + "-dashboard",
 		"networks":    []string{"bitswan_network"},
 		"environment": []string{
@@ -153,6 +151,20 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		},
 		"volumes": []string{
 			gitopsPath + "/workspace:/workspace/workspace:z",
+			// SSH key for connecting to the coding-agent container. Shared
+			// with bitswan-editor, so the dashboard authenticates as the
+			// same principal — already in the agent's authorized_keys.
+			gitopsPath + "/ssh:/workspace/.ssh:ro",
+			// Read-only view of session transcripts (.meta.json + .cast)
+			// written by the coding-agent wrapper, for the dashboard's
+			// session list + asciinema playback.
+			gitopsPath + "/coding-agent-sessions:/workspace/agent-sessions:ro",
+			// Claude's per-project JSONL conversation history. The agent
+			// writes here as user `agent` (its $HOME is the coding-agent-home
+			// volume); the dashboard reads it to extract human-readable
+			// session titles (first user prompt) without round-tripping
+			// through the agent container.
+			gitopsPath + "/coding-agent-home/.claude:/workspace/.claude:ro",
 		},
 	}
 
