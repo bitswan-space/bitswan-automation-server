@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -35,9 +36,67 @@ type Client struct {
 	token      string
 }
 
-// NewClient creates a new daemon client
+// NewClient creates a new daemon client.
+// On Linux it dials the Unix socket directly.
+// On macOS/Windows, Docker Desktop's VM boundary prevents Unix socket
+// bind-mounts from working, so it connects over TCP instead.
 func NewClient() (*Client, error) {
-	return NewClientWithSocket(SocketPath)
+	if runtime.GOOS == "linux" {
+		return NewClientWithSocket(SocketPath)
+	}
+	return newClientWithTCP(DaemonTCPPort)
+}
+
+// newClientWithTCP creates a client that talks to the daemon over TCP.
+// The URL scheme stays http://unix/… so all request paths are unchanged;
+// only the underlying dialer is different.
+func newClientWithTCP(port int) (*Client, error) {
+	token, err := LoadToken()
+	if err != nil {
+		return nil, fmt.Errorf("automation server daemon is not initialized: %w", err)
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	client := &Client{
+		socketPath: addr,
+		token:      token,
+		httpClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+				},
+			},
+			Timeout: 10 * time.Second,
+		},
+	}
+
+	if err := client.Ping(); err != nil {
+		return nil, fmt.Errorf("automation server daemon is not running: %w", err)
+	}
+
+	if expectedVersion != "" && updateCallback != nil {
+		daemonVersion, err := client.GetVersion()
+		if err != nil {
+			fmt.Println("Could not determine daemon version, updating daemon...")
+			if updateErr := updateCallback(); updateErr != nil {
+				return nil, fmt.Errorf("failed to update daemon: %w", updateErr)
+			}
+			return newClientWithTCP(port)
+		}
+		if daemonVersion != expectedVersion {
+			fmt.Printf("Daemon version (%s) differs from CLI version (%s), updating daemon...\n", daemonVersion, expectedVersion)
+			if updateErr := updateCallback(); updateErr != nil {
+				return nil, fmt.Errorf("failed to update daemon: %w", updateErr)
+			}
+			oldExpected := expectedVersion
+			expectedVersion = ""
+			client, err = newClientWithTCP(port)
+			expectedVersion = oldExpected
+			return client, err
+		}
+	}
+
+	return client, nil
 }
 
 // NewClientWithSocket creates a new daemon client with a custom socket path and verifies the daemon is running

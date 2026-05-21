@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/daemon"
 	"github.com/bitswan-space/bitswan-workspaces/internal/docker"
 	"github.com/dchest/uniuri"
 	"github.com/spf13/cobra"
@@ -202,17 +203,25 @@ func startDaemonContainer(startMessage, successMessage string) error {
 
 	daemonImage := "bitswan/automation-server-runtime:latest"
 
-	// Create the socket directory on the host if it doesn't exist
-	socketDir := "/var/run/bitswan"
-	socketPath := filepath.Join(socketDir, "automation-server.sock")
-
-	// Ensure the socket directory exists
-	if err := os.MkdirAll(socketDir, 0755); err != nil {
-		return fmt.Errorf("failed to create socket directory: %w", err)
+	// On Linux, the canonical /var/run/bitswan directory is used for the Unix socket.
+	// On macOS, /var/run requires root; instead the socket lives in the already-mounted
+	// config dir so no extra volume or permissions are needed.
+	var socketExtraArgs []string
+	if runtime.GOOS == "linux" {
+		socketDir := "/var/run/bitswan"
+		if err := os.MkdirAll(socketDir, 0755); err != nil {
+			return fmt.Errorf("failed to create socket directory: %w", err)
+		}
+		_ = os.Remove(filepath.Join(socketDir, "automation-server.sock"))
+		socketExtraArgs = []string{"-v", socketDir + ":" + socketDir}
+	} else {
+		// macOS: Docker Desktop's VM boundary prevents Unix socket bind-mounts from
+		// working, so the daemon listens on TCP and the CLI connects via localhost.
+		socketExtraArgs = []string{
+			"-e", fmt.Sprintf("BITSWAN_TCP_PORT=%d", daemon.DaemonTCPPort),
+			"-p", fmt.Sprintf("127.0.0.1:%d:%d", daemon.DaemonTCPPort, daemon.DaemonTCPPort),
+		}
 	}
-
-	// Remove existing socket file if it exists (stale socket from previous run)
-	_ = os.Remove(socketPath)
 
 	// Ensure bitswan_network exists before starting the container
 	networkName := "bitswan_network"
@@ -260,26 +269,31 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		return fmt.Errorf("network %s does not exist and could not be created", networkName)
 	}
 
-	// Set HOST_HOME so the daemon knows the host home directory
-	// This is needed when fixing permissions and creating docker-compose files with correct paths
-	dockerCmd := exec.Command("docker", "run",
+	// Build docker run args dynamically so platform-specific socket args can be injected.
+	dockerArgs := []string{
+		"run",
 		"-d",
 		"--name", "bitswan-automation-server-daemon",
 		"--restart", "unless-stopped",
-		"--add-host", "host.docker.internal:host-gateway", // Allow container to reach host services
+		"--add-host", "host.docker.internal:host-gateway",
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
 		"-e", "BITSWAN_TRAEFIK_HOST=traefik:8080",
 		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),
+		"-e", fmt.Sprintf("BITSWAN_HOST_OS=%s", runtime.GOOS),
 		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", containerBinaryPath),
 		"-v", fmt.Sprintf("%s:/root/.config/bitswan", bitswanConfig),
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
-		"-v", fmt.Sprintf("%s:%s", socketDir, socketDir),
 		"-v", "/:/host:rw",
 		"--network", "bitswan_network",
+	}
+	dockerArgs = append(dockerArgs, socketExtraArgs...)
+	dockerArgs = append(dockerArgs,
 		daemonImage,
 		"/usr/local/bin/bitswan", "automation-server-daemon", "__run",
 	)
+
+	dockerCmd := exec.Command("docker", dockerArgs...)
 
 	dockerCmd.Stdout = os.Stdout
 	dockerCmd.Stderr = os.Stderr

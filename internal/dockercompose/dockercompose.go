@@ -75,6 +75,14 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		gitopsSecretToken = uniuri.NewLen(64)
 	}
 
+	// On macOS/Windows hosts the daemon socket lives in the config dir
+	// (because /var/run requires root). Map it to /var/run/bitswan so the
+	// gitops container can find the socket at the canonical path.
+	bitswanSocketMount := "/var/run/bitswan:/var/run/bitswan"
+	if hostOS := os.Getenv("BITSWAN_HOST_OS"); hostOS == "darwin" || hostOS == "windows" {
+		bitswanSocketMount = hostHomeDir + "/.config/bitswan:/var/run/bitswan"
+	}
+
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
@@ -85,7 +93,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			gitopsPathForVolumes + "/secrets:/gitops/secrets:z",
 			sshDir + ":/home/user1000/.ssh:z",
 			"/var/run/docker.sock:/var/run/docker.sock",
-			"/var/run/bitswan:/var/run/bitswan",
+			bitswanSocketMount,
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",

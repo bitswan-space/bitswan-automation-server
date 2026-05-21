@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +23,9 @@ const (
 	SocketDir = "/var/run/bitswan"
 	// SocketPath is the default path for the automation server daemon socket
 	SocketPath = "/var/run/bitswan/automation-server.sock"
+	// DaemonTCPPort is the port used on non-Linux hosts (macOS) where Docker Desktop's
+	// VM boundary prevents Unix socket bind-mounts from working.
+	DaemonTCPPort = 18989
 )
 
 // activeSocketPath returns the socket path to use, preferring the BITSWAN_SOCKET_PATH
@@ -237,9 +241,24 @@ func (s *Server) Run() error {
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
+	routes := s.setupRoutes()
+
 	// Create HTTP server for Unix socket
-	s.server = &http.Server{
-		Handler: s.setupRoutes(),
+	s.server = &http.Server{Handler: routes}
+
+	// If BITSWAN_TCP_PORT is set, also listen on TCP. On macOS with Docker Desktop,
+	// Unix socket bind-mounts don't cross the VM boundary so the CLI uses TCP instead.
+	var tcpAPIListener net.Listener
+	if tcpPortStr := os.Getenv("BITSWAN_TCP_PORT"); tcpPortStr != "" {
+		tcpPort, err := strconv.Atoi(tcpPortStr)
+		if err != nil {
+			return fmt.Errorf("invalid BITSWAN_TCP_PORT %q: %w", tcpPortStr, err)
+		}
+		tcpAPIListener, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", tcpPort))
+		if err != nil {
+			return fmt.Errorf("failed to create TCP API listener on port %d: %w", tcpPort, err)
+		}
+		fmt.Printf("Automation server daemon also listening on TCP :%d\n", tcpPort)
 	}
 
 	// Create HTTP server for docs (listens on TCP port 8080)
@@ -286,6 +305,15 @@ func (s *Server) Run() error {
 			errChan <- err
 		}
 	}()
+
+	if tcpAPIListener != nil {
+		tcpAPIServer := &http.Server{Handler: routes}
+		go func() {
+			if err := tcpAPIServer.Serve(tcpAPIListener); err != nil && err != http.ErrServerClosed {
+				errChan <- err
+			}
+		}()
+	}
 
 	go func() {
 		fmt.Printf("Docs server listening on :%d\n", docsPort)
