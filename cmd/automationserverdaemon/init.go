@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/user"
@@ -191,12 +193,13 @@ func startDaemonContainer(startMessage, successMessage string) error {
 	// We'll mount it anyway so mkcert can use it if it exists
 	_ = os.MkdirAll(mkcertDir, 0755)
 
-	// Launch the daemon container
-	// Mount the binary, config directory, docker socket, and mkcert directory
-	// Use bitswan_network to allow resolving Docker service names like aoc-emqx
-	// Use pre-built image with all tools (git, ssh-keygen, docker-cli, mkcert) pre-installed
-	// Set BITSWAN_CADDY_HOST to use 'caddy' hostname instead of 'localhost' when on bitswan_network
-	// Mount the bitswan automation server socket directory for IPC
+	// On non-Linux hosts (macOS) the host binary is the wrong architecture for the
+	// Linux container, so we obtain a matching Linux binary to mount instead.
+	containerBinaryPath, err := getContainerBinaryPath(binaryPath)
+	if err != nil {
+		return fmt.Errorf("failed to prepare Linux binary for daemon container: %w", err)
+	}
+
 	daemonImage := "bitswan/automation-server-runtime:latest"
 
 	// Create the socket directory on the host if it doesn't exist
@@ -267,7 +270,7 @@ func startDaemonContainer(startMessage, successMessage string) error {
 		"-e", "BITSWAN_CADDY_HOST=caddy:2019",
 		"-e", "BITSWAN_TRAEFIK_HOST=traefik:8080",
 		"-e", fmt.Sprintf("HOST_HOME=%s", homeDir),
-		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", binaryPath),
+		"-v", fmt.Sprintf("%s:/usr/local/bin/bitswan:ro", containerBinaryPath),
 		"-v", fmt.Sprintf("%s:/root/.config/bitswan", bitswanConfig),
 		"-v", fmt.Sprintf("%s:/root/.local/share/mkcert", mkcertDir),
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
@@ -287,6 +290,125 @@ func startDaemonContainer(startMessage, successMessage string) error {
 	}
 
 	fmt.Println(successMessage)
+	return nil
+}
+
+// getContainerBinaryPath returns the path to a Linux binary suitable for mounting
+// into the daemon container. On Linux it is the host binary itself. On other
+// platforms (macOS) it downloads the matching Linux release binary, caching it
+// in ~/.config/bitswan so subsequent calls are instant.
+func getContainerBinaryPath(hostBinaryPath string) (string, error) {
+	if runtime.GOOS == "linux" {
+		return hostBinaryPath, nil
+	}
+
+	goarch := runtime.GOARCH
+	homeDir, err := config.GetRealUserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	cacheDir := filepath.Join(homeDir, ".config", "bitswan")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	cachedBinaryPath := filepath.Join(cacheDir, fmt.Sprintf(".bitswan-linux-%s", goarch))
+
+	// Cache is valid when it exists and is at least as new as the host binary.
+	if hostStat, err := os.Stat(hostBinaryPath); err == nil {
+		if cacheStat, err := os.Stat(cachedBinaryPath); err == nil && !cacheStat.ModTime().Before(hostStat.ModTime()) {
+			return cachedBinaryPath, nil
+		}
+	}
+
+	fmt.Printf("Preparing Linux/%s binary for daemon container...\n", goarch)
+
+	if version == "dev" || version == "" {
+		return "", fmt.Errorf(
+			"daemon container requires a Linux/%s binary, but this is a dev build.\n"+
+				"Cross-compile and place it at: %s\n"+
+				"  GOOS=linux GOARCH=%s go build -o %s .",
+			goarch, cachedBinaryPath, goarch, cachedBinaryPath,
+		)
+	}
+
+	if err := downloadLinuxBinary(cachedBinaryPath, goarch); err != nil {
+		return "", err
+	}
+
+	return cachedBinaryPath, nil
+}
+
+// downloadLinuxBinary downloads the linux/{goarch} release binary matching the
+// current version and writes it to destPath.
+func downloadLinuxBinary(destPath, goarch string) error {
+	// Normalize: strip any leading 'v' so we control the prefix consistently.
+	// The Makefile sets version via `git describe` (includes 'v'); CI sets it without.
+	ver := strings.TrimPrefix(version, "v")
+
+	assetName := fmt.Sprintf("bitswan-automation-server-v%s-linux-%s.tar.gz", ver, goarch)
+	url := fmt.Sprintf("https://github.com/bitswan-space/bitswan-workspaces/releases/download/v%s/%s", ver, assetName)
+
+	fmt.Printf("  Downloading %s...\n", assetName)
+
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: HTTP %d for %s", resp.StatusCode, url)
+	}
+
+	tmpFile, err := os.CreateTemp("", "bitswan-linux-*.tar.gz")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("failed to write download: %w", err)
+	}
+	tmpFile.Close()
+
+	tmpDir, err := os.MkdirTemp("", "bitswan-extract-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := exec.Command("tar", "-xzf", tmpPath, "-C", tmpDir).Run(); err != nil {
+		return fmt.Errorf("failed to extract archive: %w", err)
+	}
+
+	// The release workflow names the binary identically to the archive stem.
+	binaryName := fmt.Sprintf("bitswan-automation-server-v%s-linux-%s", ver, goarch)
+	extractedBinary := filepath.Join(tmpDir, binaryName)
+	if _, err := os.Stat(extractedBinary); err != nil {
+		return fmt.Errorf("binary not found in archive at expected path %s: %w", extractedBinary, err)
+	}
+
+	src, err := os.Open(extractedBinary)
+	if err != nil {
+		return fmt.Errorf("failed to open extracted binary: %w", err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create cached binary: %w", err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("failed to install binary: %w", err)
+	}
+
+	fmt.Printf("  Linux/%s binary cached at %s\n", goarch, destPath)
 	return nil
 }
 
