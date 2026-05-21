@@ -93,7 +93,7 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_GITOPS_SECRET=" + gitopsSecretToken,
 			"BITSWAN_GITOPS_DOMAIN=" + config.Domain,
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
-			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
+			"BITSWAN_CERTS_DIR=" + certsHostDir(homeDir, hostHomeDir),
 		},
 	}
 
@@ -347,4 +347,15 @@ func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain 
 	}
 
 	return buf.String(), nil
+}
+
+// certsHostDir returns the certauthorities path as the docker host sees it.
+// When the daemon runs inside a container, HOST_HOME points at the real host
+// home so any path used as a volume source must be rewritten.
+func certsHostDir(homeDir, hostHomeDir string) string {
+	base := homeDir
+	if hostHomeDir != "" && hostHomeDir != homeDir {
+		base = hostHomeDir
+	}
+	return base + "/.config/bitswan/certauthorities"
 }
