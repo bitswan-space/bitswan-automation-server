@@ -146,6 +146,29 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(listing)
 		return
+
+	// Workspaces page + API: any authenticated user can see/create
+	// workspaces. Listing is filtered per caller (only workspaces
+	// the caller has any ACL grant on). POST creates a new workspace
+	// with the caller as owner of its editor + gitops endpoints.
+	case "/bailey-admin/workspaces", "/bailey-admin/workspaces/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, "workspaces", admin))
+			return
+		}
+	case "/bailey-admin/api/workspaces":
+		switch r.Method {
+		case http.MethodGet:
+			handleListAccessibleWorkspaces(w, r, email)
+			return
+		case http.MethodPost:
+			s.handleCreateWorkspaceFromBaileyAdmin(w, r, email)
+			return
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 	}
 
 	// Everything below this point is admin-only.
@@ -154,13 +177,6 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case r.URL.Path == "/bailey-admin/workspaces" || r.URL.Path == "/bailey-admin/workspaces/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "workspaces", true))
-			return
-		}
-
 	case r.URL.Path == "/bailey-admin/network" || r.URL.Path == "/bailey-admin/network/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
@@ -190,19 +206,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 		signoutRedirect(w, r, "/")
 		return
 
-	case r.URL.Path == "/bailey-admin/api/workspaces":
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		result, err := GetWorkspaceList(false, false)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(result)
-		return
+		// (api/workspaces handler is above — open to any signed-in user.)
 
 	case r.URL.Path == "/bailey-admin/api/siem-config":
 		if !requireAdmin(w, r) {
@@ -477,23 +481,75 @@ func vpnInternalPage(email, page string, admin bool) string {
 		pageTitle = "Workspaces"
 		pageContent = `
 <div class="card" id="workspaces-box" style="margin-top:0;">
-  <h2>Workspaces on this server</h2>
-  <p class="note">Loading…</p>
-  <div id="workspaces-list"></div>
+  <h2>Your workspaces</h2>
+  <p class="note">Workspaces you own or have been granted access to. Click the editor link to open it.</p>
+  <div id="workspaces-list"><p class="note">Loading…</p></div>
+</div>
+
+<div class="card">
+  <h2>Create a new workspace</h2>
+  <p class="note">You'll be the owner of the editor and gitops endpoints. You can share access from those endpoints' share pages later.</p>
+  <form id="create-form" onsubmit="return createWorkspace(event)" style="display:flex;gap:8px;align-items:center;">
+    <input type="text" id="new-name" placeholder="my-workspace" pattern="[a-z][a-z0-9-]{1,32}"
+      title="lowercase, alphanumeric + hyphens, starts with a letter, 2-33 chars"
+      style="padding:6px 8px;font-family:ui-monospace,monospace;" required>
+    <button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px;">Create</button>
+  </form>
+  <p id="create-status" class="note" style="margin-top:10px;"></p>
 </div>`
 		pageScript = `
-fetch('/bailey-admin/api/workspaces', {credentials:'same-origin'}).then(r => r.ok ? r.json() : []).then(d => {
-  const box = document.getElementById('workspaces-list');
-  if (!d || !d.length) { box.innerHTML = '<p class="note">No workspaces registered yet.</p>'; return; }
-  let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="text-align:left;padding:8px 0;">Name</th><th>Slug</th><th></th></tr></thead><tbody>';
-  for (const w of d) {
-    html += '<tr style="border-top:1px solid #F4F4F5;"><td style="padding:8px 0;"><b>' + (w.name||w.slug||'-') + '</b></td><td>' + (w.slug||'') + '</td><td></td></tr>';
-  }
-  html += '</tbody></table>';
-  box.innerHTML = html;
-}).catch(() => {
-  document.getElementById('workspaces-list').innerHTML = '<p class="note">Couldn\'t load workspaces.</p>';
-});`
+function loadList() {
+  fetch('/bailey-admin/api/workspaces', {credentials:'same-origin'}).then(r => r.ok ? r.json() : {workspaces:[]}).then(d => {
+    const box = document.getElementById('workspaces-list');
+    if (!d.workspaces || !d.workspaces.length) {
+      box.innerHTML = '<p class="note">You don\'t have access to any workspaces yet. Create one below, or wait for someone to share one with you.</p>';
+      return;
+    }
+    let html = '<table style="width:100%;border-collapse:collapse;">';
+    html += '<thead><tr style="text-align:left;border-bottom:1px solid #E4E4E7;"><th style="padding:8px 0;">Name</th><th>Your role</th><th>Links</th></tr></thead><tbody>';
+    for (const w of d.workspaces) {
+      const role = w.is_owner ? 'owner' : (w.editor_role || w.gitops_role || 'access');
+      html += '<tr style="border-top:1px solid #F4F4F5;">'
+        + '<td style="padding:8px 0;"><b>' + w.name + '</b></td>'
+        + '<td>' + role + '</td>'
+        + '<td><a href="' + w.editor_url + '" target="_blank" style="color:#093DF5;text-decoration:none;margin-right:12px;">Editor →</a>'
+        + '<a href="' + w.gitops_url + '" target="_blank" style="color:#093DF5;text-decoration:none;">GitOps →</a></td>'
+        + '</tr>';
+    }
+    html += '</tbody></table>';
+    box.innerHTML = html;
+  }).catch(e => {
+    document.getElementById('workspaces-list').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load workspaces: ' + e + '</p>';
+  });
+}
+function createWorkspace(e) {
+  e.preventDefault();
+  const name = document.getElementById('new-name').value.trim();
+  const statusEl = document.getElementById('create-status');
+  statusEl.textContent = 'Creating ' + name + '… (this can take 30-60s while the editor + gitops images come up)';
+  statusEl.style.color = '#71717A';
+  fetch('/bailey-admin/api/workspaces', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      statusEl.textContent = 'Created. Editor: ' + d.editor_url;
+      statusEl.style.color = '#0a7d24';
+      document.getElementById('new-name').value = '';
+      loadList();
+    } else {
+      statusEl.textContent = 'Failed: ' + (d.error || 'unknown error');
+      statusEl.style.color = '#b00020';
+    }
+  }).catch(e => {
+    statusEl.textContent = 'Failed: ' + e;
+    statusEl.style.color = '#b00020';
+  });
+  return false;
+}
+loadList();`
 
 	case "devices":
 		pageTitle = "Devices"
