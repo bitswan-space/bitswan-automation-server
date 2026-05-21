@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,11 +18,21 @@ import (
 )
 
 const (
-	// SocketDir is the directory containing the automation server daemon socket
+	// SocketDir is the default directory for the automation server daemon socket
 	SocketDir = "/var/run/bitswan"
 	// SocketPath is the default path for the automation server daemon socket
 	SocketPath = "/var/run/bitswan/automation-server.sock"
 )
+
+// activeSocketPath returns the socket path to use, preferring the BITSWAN_SOCKET_PATH
+// env var so the container can be pointed at a different location (e.g. on macOS hosts
+// the socket lives inside the already-mounted config dir).
+func activeSocketPath() string {
+	if p := os.Getenv("BITSWAN_SOCKET_PATH"); p != "" {
+		return p
+	}
+	return SocketPath
+}
 
 // Server represents the automation server daemon HTTP server
 type Server struct {
@@ -202,25 +213,27 @@ func (s *Server) Run() error {
 	// Pass server reference so MQTT handlers can call internal functions
 	initializeMQTTPublisherWithServer(s)
 
+	sockPath := activeSocketPath()
+
 	// Ensure the socket directory exists
-	if err := os.MkdirAll(SocketDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(sockPath), 0755); err != nil {
 		return fmt.Errorf("failed to create socket directory: %w", err)
 	}
 
 	// Remove existing socket file if it exists
-	if err := os.Remove(SocketPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove existing socket: %w", err)
 	}
 
 	// Create Unix socket listener
-	listener, err := net.Listen("unix", SocketPath)
+	listener, err := net.Listen("unix", sockPath)
 	if err != nil {
 		return fmt.Errorf("failed to create Unix socket listener: %w", err)
 	}
 	s.listener = listener
 
 	// Set socket permissions to allow access
-	if err := os.Chmod(SocketPath, 0666); err != nil {
+	if err := os.Chmod(sockPath, 0666); err != nil {
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
@@ -267,7 +280,7 @@ func (s *Server) Run() error {
 	// Start servers in goroutines
 	errChan := make(chan error, 1)
 	go func() {
-		fmt.Printf("Automation server daemon listening on %s\n", SocketPath)
+		fmt.Printf("Automation server daemon listening on %s\n", sockPath)
 		fmt.Printf("Version: %s\n", s.version)
 		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			errChan <- err
@@ -302,7 +315,7 @@ func (s *Server) Run() error {
 	}
 
 	// Clean up socket file
-	os.Remove(SocketPath)
+	os.Remove(sockPath)
 
 	fmt.Println("Server stopped")
 	return nil
