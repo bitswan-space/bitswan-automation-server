@@ -181,13 +181,14 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Docs endpoint (unauthenticated - public access)
 	mux.HandleFunc("/api-docs", s.handleDocs)
 
-	// VPN admin web pages (served on this mux, routed via ingress)
-	// External page: OAuth-protected by the ingress proxy (not by daemon auth)
-	mux.HandleFunc("/vpn-admin", s.handleVPNAdminExternal)
-	mux.HandleFunc("/vpn-admin/", s.handleVPNAdminExternal)
-	// Internal page: only reachable via VPN Traefik
-	mux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
-	mux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
+	// Bailey admin — single unified handler at /bailey-admin/*.
+	// MFA gate enforcement happens inside the handler itself.
+	mux.HandleFunc("/bailey-admin", s.handleBaileyAdmin)
+	mux.HandleFunc("/bailey-admin/", s.handleBaileyAdmin)
+	// MFA gate routes (enrol/challenge/account/devices/pair/approve)
+	// served on the same mux so redirects from bailey-admin can hit
+	// them on the same host.
+	mux.HandleFunc("/2fa-gate/", handleGatePathRoot)
 
 	return mux
 }
@@ -272,28 +273,24 @@ func (s *Server) Run() error {
 		Handler: s.setupRoutes(),
 	}
 
-	// Create HTTP server for docs + VPN admin (listens on TCP port 8080).
-	// Traefik routes vpn-admin.{domain} here, so VPN admin must be registered
+	// Create HTTP server for docs + Bailey admin (listens on TCP port 8080).
+	// Traefik routes bailey-admin.{domain} here, so Bailey admin must be registered
 	// on this mux — not just the Unix socket mux.
 	docsMux := http.NewServeMux()
-	docsMux.HandleFunc("/vpn-admin", s.handleVPNAdminExternal)
-	docsMux.HandleFunc("/vpn-admin/", s.handleVPNAdminExternal)
-	docsMux.HandleFunc("/vpn-admin-internal", s.handleVPNAdminInternal)
-	docsMux.HandleFunc("/vpn-admin-internal/", s.handleVPNAdminInternal)
+	docsMux.HandleFunc("/bailey-admin", s.handleBaileyAdmin)
+	docsMux.HandleFunc("/bailey-admin/", s.handleBaileyAdmin)
+	docsMux.HandleFunc("/2fa-gate/", handleGatePathRoot)
+	
 	docsMux.HandleFunc("/api-docs", s.handleDocs)
 	docsMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// "/" on the vpn-admin host is the post-logout landing page (the
+		// "/" on the bailey-admin host is the post-logout landing page (the
 		// only URI Keycloak will accept after RP-initiated logout, since
 		// AOC registers it with a trailing slash and Keycloak does exact
 		// matching). Send the user to the appropriate admin homepage —
-		// internal hosts under .bswn.internal go to /vpn-admin-internal/,
-		// everything else to the public /vpn-admin/.
-		if strings.HasPrefix(r.Host, "vpn-admin") {
-			if strings.Contains(r.Host, ".bswn.internal") {
-				http.Redirect(w, r, "/vpn-admin-internal/", http.StatusFound)
-			} else {
-				http.Redirect(w, r, "/vpn-admin/", http.StatusFound)
-			}
+		// internal hosts under .bswn.internal go to /bailey-admin-internal/,
+		// everything else to the public /bailey-admin/.
+		if strings.HasPrefix(r.Host, "bailey-admin") {
+			http.Redirect(w, r, "/bailey-admin/", http.StatusFound)
 			return
 		}
 		s.handleDocs(w, r)
@@ -325,7 +322,7 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	// VPN admin pages live behind oauth2-proxy on this server. Children
+	// Bailey admin pages live behind oauth2-proxy on this server. Children
 	// die with the previous daemon container, so always restart them on
 	// boot and re-register the ingress routes with the right upstream
 	// ports. ZTNA tunnel + routing-peer container are owned by the ZTNA
@@ -338,12 +335,14 @@ func (s *Server) Run() error {
 		if serverConfig == nil || serverConfig.Domain == "" {
 			return
 		}
-		setupVPNAdminRoutes(serverConfig.Domain, serverConfig.InternalDomain())
-		// Re-up the routing peer if ZTNA was previously enabled; the
-		// container survived in Docker's local cache but a setup-key
-		// rotation would need a recreate that this triggers.
-		if err := ensureZTNARouter(context.Background()); err != nil {
-			fmt.Printf("Warning: ZTNA router (re)start failed: %v\n", err)
+		// Bring traefik-protected + bitswan-protected-proxy up
+		// (provisioning the OAuth client + env file along the way).
+		reconcileTraefikProtected()
+		// Admin oauth2-proxy in front of the daemon for bailey-admin.
+		setupProtectedAdminRoutes(serverConfig.Domain, serverConfig.ProtectedHostnameDomain())
+		// MFA gate (TOTP + device cookie + chrome wrap).
+		if err := startMFAGate(); err != nil {
+			fmt.Printf("Warning: MFA gate failed to start: %v\n", err)
 		}
 	}()
 

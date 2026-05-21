@@ -162,13 +162,23 @@ func extractWorkspaceName(traefikBaseURL string) string {
 }
 
 // getStateFilePath returns the path of the REST provider state file for the given base URL.
-// Global traefik:    ~/.config/bitswan/traefik/rest-state.json
-// Workspace traefik: ~/.config/bitswan/workspaces/{ws}/traefik/rest-state.json
+//
+//   Platform traefik:  ~/.config/bitswan/traefik/rest-state.json
+//   traefik-protected: ~/.config/bitswan/traefik-protected/rest-state.json
+//   Workspace traefik: ~/.config/bitswan/workspaces/{ws}/traefik/rest-state.json
+//
+// Each instance needs its own file. Sharing one means a push to one
+// instance leaks routes into another (e.g., platform traefik routes
+// pointing at bitswan-protected-proxy showing up inside traefik-
+// protected, where they create a loop).
 func getStateFilePath(traefikBaseURL string) string {
 	homeDir := os.Getenv("HOME")
 	if isWorkspaceURL(traefikBaseURL) {
 		workspaceName := extractWorkspaceName(traefikBaseURL)
 		return filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName, "traefik", "rest-state.json")
+	}
+	if strings.Contains(traefikBaseURL, "traefik-protected") {
+		return filepath.Join(homeDir, ".config", "bitswan", "traefik-protected", "rest-state.json")
 	}
 	return filepath.Join(homeDir, ".config", "bitswan", "traefik", "rest-state.json")
 }
@@ -420,7 +430,7 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver
 	fmt.Printf("AddRoute: original upstream='%s', processed upstream='%s'\n", upstream, processedUpstream)
 
 	workspaceTarget := isWorkspaceURL(traefikBaseURL)
-	vpnTarget := strings.Contains(traefikBaseURL, "traefik-vpn")
+	vpnTarget := strings.Contains(traefikBaseURL, "traefik-protected")
 
 	resolver := ""
 	if len(certResolver) > 0 {
@@ -646,18 +656,23 @@ func DeleteTraefikRecordsWithWriter(workspaceName string, writer io.Writer) erro
 
 	traefikBaseURL := getTraefikBaseURL()
 
-	// Remove per-service routes.
+	// Remove per-service routes from BOTH the platform traefik and
+	// traefik-protected. Workspaces routed through bitswan-protected-
+	// proxy have entries in both; cleaning only one leaves orphaned
+	// routes that the list-routes / chrome wrap path will still see.
 	if domain != "" {
 		log("Deleting service routes for domain %s...", domain)
+		traefiks := []string{traefikBaseURL, "http://traefik-protected:8080"}
 		for _, service := range []string{"gitops", "editor"} {
 			hostname := fmt.Sprintf("%s-%s.%s", workspaceName, service, domain)
-			log("Removing route for %s...", hostname)
-			if err := RemoveRoute(hostname); err != nil {
-				log("Warning: failed to remove route for %s: %v", hostname, err)
-			} else {
-				log("Successfully removed route for %s", hostname)
+			for _, base := range traefiks {
+				log("Removing route for %s from %s...", hostname, base)
+				if err := RemoveRouteWithTraefik(hostname, base); err != nil {
+					log("Warning: failed to remove route for %s from %s: %v", hostname, base, err)
+				}
 			}
 		}
+		log("Service route deletion complete.")
 	} else {
 		log("No domain found, skipping service route deletion")
 	}

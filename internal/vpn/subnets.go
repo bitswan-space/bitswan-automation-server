@@ -11,8 +11,8 @@ package vpn
 //	                config that referenced it (e.g. ULAs in old deployments)
 //	                still resolves cleanly during transition. Not actively
 //	                used by anything bitswan ships today.
-//	ServiceSubnet — the bitswan_vpn_network Docker bridge — where
-//	                traefik-vpn, the ZTNA routing peer, and any future
+//	ServiceSubnet — the bitswan_protected_network Docker bridge — where
+//	                traefik-protected, the ZTNA routing peer, and any future
 //	                internal services live. Routes through this subnet are
 //	                what the ZTNA provider advertises so peers can reach
 //	                *.bswn.internal.

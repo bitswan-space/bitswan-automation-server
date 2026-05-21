@@ -27,6 +27,55 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/vpn"
 )
 
+// boolWorkspaceInitFlags lists all flags on `workspace init` that take
+// no value. Used by reorderFlagsFirst to know when NOT to consume the
+// next token as the flag's argument.
+var boolWorkspaceInitFlags = map[string]bool{
+	"verbose": true, "v": true,
+	"mkcerts":   true,
+	"no-ide":    true,
+	"set-hosts": true,
+	"local":     true,
+	"no-oauth":  true,
+	"staging":   true,
+}
+
+// reorderFlagsFirst moves all --flag (and --flag=value or --flag value)
+// tokens to the front, positionals to the back. Lets Go's flag package
+// parse the command line regardless of whether the user typed
+// `<name> --flag val` or `--flag val <name>`.
+func reorderFlagsFirst(args []string) []string {
+	flags := []string{}
+	positionals := []string{}
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") {
+			positionals = append(positionals, a)
+			i++
+			continue
+		}
+		flags = append(flags, a)
+		i++
+		// `--key=val` already carries its value.
+		if strings.Contains(a, "=") {
+			continue
+		}
+		// Known bool flag → no value to consume.
+		name := strings.TrimLeft(a, "-")
+		if boolWorkspaceInitFlags[name] {
+			continue
+		}
+		// Otherwise, the next token (if it doesn't look like a flag)
+		// is this flag's value.
+		if i < len(args) && !strings.HasPrefix(args[i], "-") {
+			flags = append(flags, args[i])
+			i++
+		}
+	}
+	return append(flags, positionals...)
+}
+
 // runWorkspaceInit runs the workspace init logic with stdout already redirected.
 // confirmCh is used to block until the client confirms the SSH key prompt.
 func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) error {
@@ -49,6 +98,13 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	noOauth := fs.Bool("no-oauth", false, "")
 	sshPort := fs.String("ssh-port", "", "")
 	staging := fs.Bool("staging", false, "")
+	ownerEmail := fs.String("owner", "", "")
+
+	// Go's flag package stops parsing at the first non-flag token, so
+	// `init <name> --domain X` would leave --domain unparsed. Reorder
+	// so flags come first, positionals last — matching what the CLI's
+	// help message hints at but doesn't require.
+	args = reorderFlagsFirst(args)
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -64,6 +120,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	if err := os.MkdirAll(bitswanConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create BitSwan config directory: %w", err)
+	}
+
+	// Refuse to clobber an existing workspace. Check BEFORE any setup
+	// runs (networks, sub-traefik, ingress) — those steps would
+	// otherwise auto-create the workspace dir as a side effect and
+	// turn this guard into a false positive on the next attempt.
+	gitopsConfigEarly := bitswanConfig + "workspaces/" + workspaceName
+	if _, err := os.Stat(gitopsConfigEarly); !os.IsNotExist(err) {
+		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
 	}
 
 	// Init bitswan network
@@ -172,11 +237,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
+	// Existence already checked early on (before any side effects). At
+	// this point the sub-traefik step may have created the parent dir,
+	// so MkdirAll is the right idempotent move — not a guard.
 	gitopsConfig := bitswanConfig + "workspaces/" + workspaceName
-
-	if _, err := os.Stat(gitopsConfig); !os.IsNotExist(err) {
-		return fmt.Errorf("GitOps with this name was already initialized: %s", workspaceName)
-	}
 
 	if err := os.MkdirAll(gitopsConfig, 0755); err != nil {
 		return fmt.Errorf("failed to create GitOps directory: %w", err)
@@ -569,10 +633,21 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
+	// Owner is required for ACL — every endpoint we create must have
+	// one. Reject the init if the caller forgot to pass --owner; the
+	// CLI / MQTT handler should always know who's asking.
+	if strings.TrimSpace(*ownerEmail) == "" {
+		return fmt.Errorf("--owner <email> is required (whoever runs this becomes owner of the workspace's editor + gitops endpoints)")
+	}
+
 	// Register GitOps service route via the daemon's ingress abstraction.
 	// addRouteToIngress detects the ingress type and handles certs + routing.
 	// Register gitops route — internal only when VPN is enabled
 	gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
+	if _, err := registerEndpoint(gitopsHostname, *ownerEmail,
+		fmt.Sprintf("GitOps (%s)", workspaceName)); err != nil {
+		fmt.Printf("Warning: failed to register endpoint ACL row for %s: %v\n", gitopsHostname, err)
+	}
 	gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
 	if err := addRouteToIngress(IngressAddRouteRequest{
 		Hostname:      gitopsHostname,
@@ -741,6 +816,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 		// Register editor route — internal only when VPN is enabled
 		editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
+		if _, err := registerEndpoint(editorHostname, *ownerEmail,
+			fmt.Sprintf("Editor (%s)", workspaceName)); err != nil {
+			fmt.Printf("Warning: failed to register endpoint ACL row for %s: %v\n", editorHostname, err)
+		}
 		editorUpstream := fmt.Sprintf("%s-editor:9999", workspaceName)
 		editorRoute := IngressAddRouteRequest{
 			Hostname:      editorHostname,
@@ -947,8 +1026,8 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 }
 
 // initVPNAutomatically sets up the local internal-routing infrastructure
-// during workspace init: the bitswan_vpn_network bridge, the per-server CA
-// and *.bswn.internal TLS cert, and the traefik-vpn container that
+// during workspace init: the bitswan_protected_network bridge, the per-server CA
+// and *.bswn.internal TLS cert, and the traefik-protected container that
 // terminates HTTPS for internal services. The actual user tunnel is owned
 // by an external ZTNA provider (NetBird etc.) — wired up later from the
 // admin UI's Network Access page.
@@ -970,13 +1049,13 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 
 	homeDir := os.Getenv("HOME")
 	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
-	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-vpn")
+	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-protected")
 	hostHome := os.Getenv("HOST_HOME")
 	hostVpnPath := vpnPath
 	hostVpnTraefikPath := vpnTraefikPath
 	if hostHome != "" {
 		hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
-		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-vpn")
+		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-protected")
 	}
 	if err := os.MkdirAll(vpnPath, 0700); err != nil {
 		fmt.Fprintf(writer, "Warning: create %s: %v\n", vpnPath, err)
@@ -984,7 +1063,7 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 	}
 
 	// Per-server CA + wildcard cert for *.bswn.internal traffic that the
-	// ZTNA tunnel routes to traefik-vpn.
+	// ZTNA tunnel routes to traefik-protected.
 	caMgr := vpn.NewCAManager(vpnPath)
 	wsServerName := "BitSwan"
 	if serverConfig != nil && serverConfig.Name != "" {
@@ -1014,7 +1093,7 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 		}
 	}
 
-	docker.EnsureDockerIPv6Network("bitswan_vpn_network", vpn.ServiceSubnet, verbose)
+	docker.EnsureDockerIPv6Network("bitswan_protected_network", vpn.ServiceSubnet, verbose)
 
 	os.MkdirAll(vpnTraefikPath, 0755)
 	// Traefik v3 ignores tls.* in the static config — the defaultCertificate
@@ -1045,19 +1124,19 @@ providers:
 	hostCaDir := filepath.Join(hostVpnPath, "ca")
 	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath, hostCaDir)
 	if vpnTraefikCompose != "" {
-		dockerComposeUpQuiet("traefik-vpn", vpnTraefikCompose, vpnTraefikPath)
+		dockerComposeUpQuiet("traefik-protected", vpnTraefikCompose, vpnTraefikPath)
 	}
 
 	serverConfig, _ = cfg.LoadConfig()
 	if serverConfig != nil {
-		setupVPNAdminRoutes(domain, serverConfig.InternalDomain())
+		setupProtectedAdminRoutes(domain, serverConfig.ProtectedHostnameDomain())
 	}
 
 	// Mark VPN-side infra as initialized so other code (ingress routing
 	// decisions, idempotency on re-init) can short-circuit.
 	os.WriteFile(filepath.Join(vpnPath, "enabled"), []byte("true\n"), 0644)
 
-	fmt.Fprintln(writer, "Internal routing ready. Configure a ZTNA provider in the VPN admin Network Access page to allow user devices in.")
+	fmt.Fprintln(writer, "Internal routing ready. Configure a ZTNA provider in the Bailey admin Network Access page to allow user devices in.")
 }
 
 func dockerComposeUpQuiet(projectName, composeContent, workDir string) {

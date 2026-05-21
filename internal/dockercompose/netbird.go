@@ -9,15 +9,15 @@ import (
 
 // CreateNetBirdRoutingPeerComposeFile writes a docker-compose for the
 // NetBird routing-peer agent that bridges the NetBird overlay to
-// bitswan_vpn_network. The agent enrols itself with the supplied setup key
+// bitswan_protected_network. The agent enrols itself with the supplied setup key
 // on first start; subsequent starts reuse the persistent state mounted
 // from hostStateDir.
 //
 // The container needs:
 //   - NET_ADMIN + tun device (to create wt0)
 //   - IP forwarding (so traffic from the NetBird tunnel can hit
-//     bitswan_vpn_network containers)
-//   - Membership in bitswan_vpn_network (where traefik-vpn lives)
+//     bitswan_protected_network containers)
+//   - Membership in bitswan_protected_network (where traefik-protected lives)
 func CreateNetBirdRoutingPeerComposeFile(setupKey, managementURL, hostStateDir string) (string, error) {
 	if setupKey == "" {
 		return "", fmt.Errorf("setupKey is required")
@@ -45,7 +45,7 @@ func CreateNetBirdRoutingPeerComposeFile(setupKey, managementURL, hostStateDir s
 					"NB_MANAGEMENT_URL=" + managementURL,
 					"NB_LOG_LEVEL=info",
 				},
-				"networks": []string{"bitswan_network", "bitswan_vpn_network"},
+				"networks": []string{"bitswan_network", "bitswan_protected_network"},
 				"volumes": []string{
 					hostStateDir + ":/etc/netbird",
 				},
@@ -62,7 +62,7 @@ func CreateNetBirdRoutingPeerComposeFile(setupKey, managementURL, hostStateDir s
 			"bitswan_network": map[string]interface{}{
 				"external": true,
 			},
-			"bitswan_vpn_network": map[string]interface{}{
+			"bitswan_protected_network": map[string]interface{}{
 				"external": true,
 			},
 		},

@@ -19,7 +19,7 @@ import (
 )
 
 // dockerComposeUp writes the compose content to a file and runs docker
-// compose up -d. Generic helper used by the SIEM, ZTNA, and traefik-vpn
+// compose up -d. Generic helper used by the SIEM, ZTNA, and traefik-protected
 // lifecycles — kept here because the daemon's other compose helpers are
 // here too.
 func dockerComposeUp(projectName, composeContent, workDir string) error {
@@ -65,14 +65,14 @@ func containerIPv6(container, network string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// vpnAdminConfigName is the workspace identity bitswan registers with AOC for
-// the OIDC client that protects the VPN admin pages.
-const vpnAdminConfigName = "vpn-admin"
+// baileyAdminConfigName is the workspace identity bitswan registers with AOC for
+// the OIDC client that protects the Bailey admin pages.
+const baileyAdminConfigName = "bailey-admin"
 
-// getVPNAdminOAuthConfig fetches a cached OAuth config for the VPN admin
+// getBaileyAdminOAuthConfig fetches a cached OAuth config for the Bailey admin
 // pages, or provisions one via AOC on first call.
-func getVPNAdminOAuthConfig(domain string) (*oauth.Config, error) {
-	if cfg, err := oauth.GetOauthConfig(vpnAdminConfigName); err == nil {
+func getBaileyAdminOAuthConfig(domain string) (*oauth.Config, error) {
+	if cfg, err := oauth.GetOauthConfig(baileyAdminConfigName); err == nil {
 		return cfg, nil
 	}
 
@@ -80,8 +80,8 @@ func getVPNAdminOAuthConfig(domain string) (*oauth.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("AOC not configured: %w", err)
 	}
-	redirectURI := fmt.Sprintf("https://vpn-admin.%s/oauth2/callback", domain)
-	resp, err := aocClient.GetOrCreateOAuthClient("vpn-admin", redirectURI)
+	redirectURI := fmt.Sprintf("https://bailey-admin.%s/oauth2/callback", domain)
+	resp, err := aocClient.GetOrCreateOAuthClient("bailey-admin", redirectURI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get/create OAuth client from AOC: %w", err)
 	}
@@ -95,8 +95,8 @@ func getVPNAdminOAuthConfig(domain string) (*oauth.Config, error) {
 	}
 
 	homeDir := os.Getenv("HOME")
-	os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", vpnAdminConfigName), 0755)
-	oauth.SaveOauthConfig(vpnAdminConfigName, cfg)
+	os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", baileyAdminConfigName), 0755)
+	oauth.SaveOauthConfig(baileyAdminConfigName, cfg)
 	return cfg, nil
 }
 
@@ -107,7 +107,7 @@ func getVPNAdminOAuthConfig(domain string) (*oauth.Config, error) {
 // only the redirect URL (different hostname pattern) and HTTP address
 // (different per-instance port).
 func startOAuth2Proxy(domain, hostname string, port int) error {
-	oauthCfg, err := getVPNAdminOAuthConfig(domain)
+	oauthCfg, err := getBaileyAdminOAuthConfig(domain)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 	// Idempotently register this hostname's callback with Keycloak.
 	redirectURL := fmt.Sprintf("https://%s/oauth2/callback", hostname)
 	if aocClient, err := aoc.NewAOCClient(); err == nil {
-		aocClient.GetOrCreateOAuthClient("vpn-admin", redirectURL)
+		aocClient.GetOrCreateOAuthClient("bailey-admin", redirectURL)
 	}
 
 	// Lean on CreateOAuthEnvVars for the canonical bitswan oauth2-proxy
@@ -124,7 +124,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 	// from the workspace/service convention used by the editor and
 	// gitops; we replace those two with our values below since the VPN
 	// admin doesn't follow the {workspace}-{service} hostname pattern.
-	envVars := oauth.CreateOAuthEnvVars(oauthCfg, "vpn-admin", "", domain)
+	envVars := oauth.CreateOAuthEnvVars(oauthCfg, "bailey-admin", "", domain)
 	envVars = setEnvVar(envVars, "OAUTH2_PROXY_REDIRECT_URL", redirectURL)
 	envVars = setEnvVar(envVars, "OAUTH2_PROXY_HTTP_ADDRESS", fmt.Sprintf("0.0.0.0:%d", port))
 
@@ -132,7 +132,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 	envVars = append(envVars,
 		"OAUTH2_PROXY_UPSTREAMS=http://127.0.0.1:8080",
 		"OAUTH2_PROXY_COOKIE_NAME="+cookieName,
-		// Forward identity to our backend so /vpn-admin-internal handlers
+		// Forward identity to our backend so /bailey-admin-internal handlers
 		// can read X-Forwarded-Email / Groups for the admin check.
 		"OAUTH2_PROXY_PASS_USER_HEADERS=true",
 		"OAUTH2_PROXY_SET_XAUTHREQUEST=true",
@@ -158,7 +158,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 <div class="card">
 <h2>Common causes</h2>
 <div class="step"><span class="step-num">1</span><div class="step-text"><b>Email not verified</b> — your identity provider must mark your email as verified.</div></div>
-<div class="step"><span class="step-num">2</span><div class="step-text"><b>Session expired</b> — try signing in again by visiting the <a href="/vpn-admin/" style="color:#093DF5">VPN admin page</a>.</div></div>
+<div class="step"><span class="step-num">2</span><div class="step-text"><b>Session expired</b> — try signing in again by visiting the <a href="/bailey-admin/" style="color:#093DF5">Bailey admin page</a>.</div></div>
 <div class="step"><span class="step-num">3</span><div class="step-text"><b>Not authorized</b> — you may not be a member of this automation server's organization in Keycloak.</div></div>
 </div></body></html>`
 	os.WriteFile(filepath.Join(templateDir, "error.html"), []byte(errorTemplate), 0644)
@@ -330,16 +330,16 @@ func ensureOAuth2ProxyBinary() (string, error) {
 	return "", fmt.Errorf("oauth2-proxy binary not in tarball")
 }
 
-// setupVPNAdminRoutes starts oauth2-proxy in front of the daemon for both
-// the external and internal VPN admin hostnames and registers matching
+// setupProtectedAdminRoutes starts oauth2-proxy in front of the daemon for both
+// the external and internal Bailey admin hostnames and registers matching
 // ingress routes. Falls back to the daemon's plain HTTP port if oauth2-proxy
 // fails to start, so the pages remain reachable (unauthenticated) for
 // debugging instead of returning 502.
-func setupVPNAdminRoutes(domain, internalDomain string) {
-	externalHostname := "vpn-admin." + domain
+func setupProtectedAdminRoutes(domain, internalDomain string) {
+	externalHostname := "bailey-admin." + domain
 	externalUpstream := "bitswan-automation-server-daemon:8080"
 	if err := startOAuth2Proxy(domain, externalHostname, 9999); err != nil {
-		fmt.Printf("Warning: external VPN admin OAuth failed: %v (falling back to unauthenticated)\n", err)
+		fmt.Printf("Warning: external Bailey admin OAuth failed: %v (falling back to unauthenticated)\n", err)
 	} else {
 		externalUpstream = "bitswan-automation-server-daemon:9999"
 	}
@@ -348,13 +348,13 @@ func setupVPNAdminRoutes(domain, internalDomain string) {
 		Upstream:      externalUpstream,
 		IngressTarget: "external",
 	}, ""); err != nil {
-		fmt.Printf("Warning: register external VPN admin route: %v\n", err)
+		fmt.Printf("Warning: register external Bailey admin route: %v\n", err)
 	}
 
-	internalHostname := "vpn-admin." + internalDomain
+	internalHostname := "bailey-admin." + internalDomain
 	internalUpstream := "bitswan-automation-server-daemon:8080"
 	if err := startOAuth2Proxy(domain, internalHostname, 9998); err != nil {
-		fmt.Printf("Warning: internal VPN admin OAuth failed: %v (falling back to unauthenticated)\n", err)
+		fmt.Printf("Warning: internal Bailey admin OAuth failed: %v (falling back to unauthenticated)\n", err)
 	} else {
 		internalUpstream = "bitswan-automation-server-daemon:9998"
 	}
@@ -363,6 +363,6 @@ func setupVPNAdminRoutes(domain, internalDomain string) {
 		Upstream:      internalUpstream,
 		IngressTarget: "internal",
 	}, ""); err != nil {
-		fmt.Printf("Warning: register internal VPN admin route: %v\n", err)
+		fmt.Printf("Warning: register internal Bailey admin route: %v\n", err)
 	}
 }

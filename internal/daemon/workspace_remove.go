@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/caddyapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
@@ -121,29 +122,33 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "Image removal process completed.")
 
-	// 5. Remove ingress records (before removing workspace folder so metadata is available)
-	// Run in background - don't wait for it to complete since it's not critical
-	fmt.Fprintln(writer, "Removing ingress records (running in background)...")
-	go func() {
-		ingressType := DetectIngressType()
-		switch ingressType {
-		case IngressCaddy:
-			caddyapi.DeleteCaddyRecordsWithWriter(workspaceName, writer)
-		case IngressTraefik:
-			traefikapi.DeleteTraefikRecordsWithWriter(workspaceName, writer)
-			// Also stop workspace sub-traefik if it exists
-			containerName := fmt.Sprintf("%s__traefik", workspaceName)
-			traefikProjectName := fmt.Sprintf("bitswan-%s-traefik", workspaceName)
-			stopCmd := exec.Command("docker", "compose", "-p", traefikProjectName, "down")
-			stopCmd.Stdout = writer
-			stopCmd.Stderr = writer
-			if err := stopCmd.Run(); err != nil {
-				// Try force remove
-				exec.Command("docker", "rm", "-f", containerName).Run()
-			}
+	// 5. Remove ingress records + sub-traefik. Synchronous: the
+	// caller's subsequent checks (CLI exit, tests) need the resources
+	// to actually be gone, not "scheduled to go away soon."
+	fmt.Fprintln(writer, "Removing ingress records...")
+	ingressType := DetectIngressType()
+	switch ingressType {
+	case IngressCaddy:
+		caddyapi.DeleteCaddyRecordsWithWriter(workspaceName, writer)
+	case IngressTraefik:
+		traefikapi.DeleteTraefikRecordsWithWriter(workspaceName, writer)
+		// The sub-traefik was started under one of two compose
+		// project names depending on the code path (`<ws>__traefik`
+		// from workspace_init, or `bitswan-<ws>-traefik` from legacy
+		// ingress flows). Try both, then fall back to a direct
+		// force-remove of the container so it goes away regardless.
+		containerName := fmt.Sprintf("%s__traefik", workspaceName)
+		for _, proj := range []string{
+			fmt.Sprintf("%s__traefik", workspaceName),
+			fmt.Sprintf("bitswan-%s-traefik", workspaceName),
+		} {
+			cmd := exec.Command("docker", "compose", "-p", proj, "down")
+			cmd.Stdout = writer
+			cmd.Stderr = writer
+			_ = cmd.Run()
 		}
-	}()
-	// Continue immediately - don't wait for ingress cleanup
+		exec.Command("docker", "rm", "-f", containerName).Run()
+	}
 
 	// 6. Remove per-workspace stage networks
 	for _, stage := range []string{"dev", "staging", "production"} {
@@ -179,8 +184,39 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	}
 	fmt.Fprintln(writer, "Entries removed from /etc/hosts successfully.")
 
-	// Note: Workspace list sync to AOC is done by the MQTT handler AFTER publishing the result
-	// This ensures the frontend receives the result before any potential connection issues from sync
+	// Clean up endpoint ACL rows. We don't know the domain at this
+	// point (metadata file is gone), so we delete by hostname prefix
+	// pattern from the bailey DB instead.
+	for _, suffix := range []string{"-editor.", "-gitops."} {
+		if err := deleteEndpointsLikePrefix(workspaceName + suffix); err != nil {
+			fmt.Fprintf(writer, "Warning: failed to clear endpoint ACL rows for %s%s*: %v\n",
+				workspaceName, suffix, err)
+		}
+	}
+
+	// Unregister from AOC. Best-effort — if AOC is unreachable or
+	// the workspace was never registered, log a warning but don't
+	// fail the local remove (the workspace's local resources are
+	// already gone at this point). The MQTT handler also does a
+	// post-publish sync; this call covers the CLI path where no
+	// MQTT handler is in the loop.
+	if aocClient, err := aoc.NewAOCClient(); err == nil {
+		if list, lerr := aocClient.ListWorkspaces(); lerr == nil && list != nil {
+			for _, w := range list.Results {
+				if w.Name != workspaceName || w.Id == "" {
+					continue
+				}
+				if derr := aocClient.DeleteWorkspace(w.Id); derr != nil {
+					fmt.Fprintf(writer, "Warning: failed to unregister %s from AOC: %v\n", workspaceName, derr)
+				} else {
+					fmt.Fprintf(writer, "Unregistered %s from AOC.\n", workspaceName)
+				}
+				break
+			}
+		} else if lerr != nil {
+			fmt.Fprintf(writer, "Warning: couldn't list AOC workspaces to unregister: %v\n", lerr)
+		}
+	}
 
 	fmt.Fprintln(writer, "Workspace removal completed.")
 	return nil

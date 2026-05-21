@@ -733,7 +733,7 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 func addRouteVPNTraefik(req IngressAddRouteRequest, workspaceName string) error {
 	vpnTraefikURL := os.Getenv("BITSWAN_VPN_TRAEFIK_HOST")
 	if vpnTraefikURL == "" {
-		vpnTraefikURL = "http://traefik-vpn:8080"
+		vpnTraefikURL = "http://traefik-protected:8080"
 	}
 
 	// If workspace has a sub-traefik, use two-tier routing:
@@ -1152,7 +1152,7 @@ func (s *Server) handleIngressListRoutes(w http.ResponseWriter, r *http.Request)
 	if target == "internal" && IsVPNEnabled() {
 		vpnURL := os.Getenv("BITSWAN_VPN_TRAEFIK_HOST")
 		if vpnURL == "" {
-			vpnURL = "http://traefik-vpn:8080"
+			vpnURL = "http://traefik-protected:8080"
 		}
 		routes, err := traefikapi.ListRoutesWithTraefik(vpnURL)
 		if err != nil {

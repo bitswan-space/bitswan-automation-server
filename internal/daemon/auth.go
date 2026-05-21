@@ -6,7 +6,7 @@ import (
 )
 
 // adminGroup is the suffix of any Keycloak group path that grants admin
-// privileges in the VPN admin page. AOC's convention is one child group
+// privileges in the Bailey admin page. AOC's convention is one child group
 // named "admin" under each org (e.g. "/Example Org/admin"); the filtered
 // group-membership mapper that AOC attaches to per-server oauth clients
 // emits these paths in the OIDC `group_membership` claim, which oauth2-proxy
@@ -42,4 +42,26 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	}
 	http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
 	return false
+}
+
+// identityFromHeaders extracts the authenticated user from the
+// oauth2-proxy-forwarded headers. Returns ("", nil) when there is no
+// signed identity on the request (e.g. before the OIDC handshake has
+// run, or in unit tests).
+func identityFromHeaders(r *http.Request) (string, []string) {
+	email := r.Header.Get("X-Forwarded-Email")
+	if email == "" {
+		email = r.Header.Get("X-Auth-Request-Email")
+	}
+	groupsHeader := r.Header.Get("X-Forwarded-Groups")
+	if groupsHeader == "" {
+		groupsHeader = r.Header.Get("X-Auth-Request-Groups")
+	}
+	var groups []string
+	for _, g := range strings.Split(groupsHeader, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			groups = append(groups, g)
+		}
+	}
+	return email, groups
 }

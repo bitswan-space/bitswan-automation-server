@@ -30,10 +30,19 @@ type AutomationServerConfig struct {
 
 // Config represents the combined TOML configuration
 type Config struct {
-	ActiveWorkspace            string                             `toml:"active_workspace"`
-	Name                       string                             `toml:"name,omitempty"`
-	Slug                       string                             `toml:"slug,omitempty"`
-	Domain                     string                             `toml:"domain,omitempty"`
+	ActiveWorkspace string `toml:"active_workspace"`
+	Name            string `toml:"name,omitempty"`
+	Slug            string `toml:"slug,omitempty"`
+	Domain          string `toml:"domain,omitempty"`
+
+	// ProtectedDomain overrides the suffix used for workspaces in
+	// "internal" / "protected" ingress mode. Operators running on a
+	// dedicated zone (e.g. `apps.acme.com`) set this so editor /
+	// gitops hostnames render against that suffix instead of the
+	// public Domain. Empty falls back to Domain, then to
+	// InternalDomain().
+	ProtectedDomain string `toml:"protected_domain,omitempty"`
+
 	AutomationOperationsCenter AutomationOperationsCenterSettings `toml:"aoc"`
 	LocalServer                LocalServerSettings                `toml:"local_server"`
 }
@@ -45,6 +54,23 @@ func (c *Config) InternalDomain() string {
 		return "local.bswn.internal"
 	}
 	return c.Slug + ".bswn.internal"
+}
+
+// ProtectedHostnameDomain returns the suffix used for protected
+// (gateway-only) hostnames. Resolution order:
+//
+//	1. ProtectedDomain  (explicit override)
+//	2. Domain           (common case: single public domain shared with
+//	                    the rest of the bailey)
+//	3. InternalDomain() (no public domain configured at all)
+func (c *Config) ProtectedHostnameDomain() string {
+	if c.ProtectedDomain != "" {
+		return c.ProtectedDomain
+	}
+	if c.Domain != "" {
+		return c.Domain
+	}
+	return c.InternalDomain()
 }
 
 // LocalServerSettings represents the local automation server daemon settings

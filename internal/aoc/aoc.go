@@ -307,11 +307,25 @@ func (c *AOCClient) ListWorkspaces() (*WorkspaceListResponse, error) {
 		return nil, fmt.Errorf("failed to list workspaces: %s - %s", resp.Status, string(body))
 	}
 
-	var workspaceList WorkspaceListResponse
 	body, _ := io.ReadAll(resp.Body)
-	err = json.Unmarshal([]byte(body), &workspaceList)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding JSON: %w", err)
+
+	// The API returns either a bare array `[{...}, ...]` or a DRF
+	// pagination envelope `{"count":N,"results":[...]}`. Probe the
+	// first non-whitespace byte to tell them apart and decode the
+	// right shape.
+	var workspaceList WorkspaceListResponse
+	trimmed := strings.TrimLeft(string(body), " \t\r\n")
+	if strings.HasPrefix(trimmed, "[") {
+		var items []WorkspacePostResponse
+		if err := json.Unmarshal(body, &items); err != nil {
+			return nil, fmt.Errorf("error decoding bare-array workspace list: %w", err)
+		}
+		workspaceList.Count = len(items)
+		workspaceList.Results = items
+	} else {
+		if err := json.Unmarshal(body, &workspaceList); err != nil {
+			return nil, fmt.Errorf("error decoding paginated workspace list: %w", err)
+		}
 	}
 
 	return &workspaceList, nil
@@ -633,7 +647,7 @@ type OAuthClientResponse struct {
 }
 
 // GetOrCreateOAuthClient provisions a Keycloak OIDC client for a named admin
-// service (e.g., "vpn-admin") scoped to this automation server.
+// service (e.g., "bailey-admin") scoped to this automation server.
 // The client_id is deterministic: automation-server-{server_id}-{service_name}-client.
 // If the client already exists, the redirect_uri is added and existing credentials returned.
 func (c *AOCClient) GetOrCreateOAuthClient(serviceName, redirectURI string) (*OAuthClientResponse, error) {
