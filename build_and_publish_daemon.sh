@@ -4,15 +4,19 @@
 YEAR=$(date +%Y)
 COMMIT_HASH=$(git rev-parse --short HEAD)
 IMAGE_TAG="bitswan/automation-server-daemon-runtime"
+VERSIONED_TAG="$IMAGE_TAG:$YEAR-${GITHUB_RUN_ID}-git-$COMMIT_HASH"
 
-# Build and push Docker images
-docker build -t $IMAGE_TAG:latest -t $IMAGE_TAG:$YEAR-${GITHUB_RUN_ID}-git-$COMMIT_HASH .
+# Build and push multi-arch Docker images (linux/amd64 + linux/arm64).
+# buildx with --push handles the manifest list automatically.
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --push \
+  -t "$IMAGE_TAG:latest" \
+  -t "$VERSIONED_TAG" \
+  .
 
-docker push $IMAGE_TAG:latest
-docker push $IMAGE_TAG:$YEAR-${GITHUB_RUN_ID}-git-$COMMIT_HASH
-
-# Push a tag with the image ID
-IMAGE_ID=$(docker images --no-trunc -q $IMAGE_TAG:latest | sed 's/:/_/g')
-docker tag $IMAGE_TAG:latest $IMAGE_TAG:$IMAGE_ID
-docker push $IMAGE_TAG:$IMAGE_ID
-
+# Also tag with the image digest for pinning.
+IMAGE_ID=$(docker buildx imagetools inspect "$IMAGE_TAG:latest" --format '{{.Manifest.Digest}}' | sed 's/:/_/g')
+docker buildx imagetools create \
+  --tag "$IMAGE_TAG:$IMAGE_ID" \
+  "$IMAGE_TAG:latest"
