@@ -144,10 +144,24 @@ func enforceMFAGate(w http.ResponseWriter, r *http.Request) bool {
 // table and decides whether the caller can proceed. Returns true if
 // the request should be served; false if it was handled (denied page
 // rendered, request-access form, or auto-claimed bootstrap).
+//
+// bailey-admin.<domain> gets a free pass — it's the management
+// surface where per-page logic applies. The bailey-admin handler
+// runs its own per-page authorization (devices/recovery for any
+// signed-in user, server-admin pages for the server owner). We
+// still register the bailey-admin endpoint on first sign-in so the
+// share/audit UI works for it, but the gate doesn't 403 it.
 func enforceEndpointACL(w http.ResponseWriter, r *http.Request, email string, groups []string) bool {
 	host := requestEndpointHost(r)
 	if host == "" {
-		// No identifiable endpoint — let through (e.g. health checks).
+		return true
+	}
+	if isBaileyAdminHost(host) {
+		// Register endpoint row on first sign-in so audit / share
+		// pages have an owner to attribute to, but don't gate.
+		if ep, _ := getEndpoint(host); ep == nil {
+			_, _ = registerEndpoint(host, email, "Bailey admin ("+host+")")
+		}
 		return true
 	}
 	ep, err := getEndpoint(host)
@@ -156,14 +170,9 @@ func enforceEndpointACL(w http.ResponseWriter, r *http.Request, email string, gr
 		return false
 	}
 	if ep == nil {
-		// Endpoint not registered. For bailey-admin, this is the
-		// first-sign-in bootstrap — first user to sign in claims
-		// server-owner. For any other host, leave it unprotected
-		// (workspace_init / automation deploy hasn't registered it
-		// yet; the next register call will set the owner).
-		if isBaileyAdminHost(host) {
-			_, _ = registerEndpoint(host, email, "Bailey admin ("+host+")")
-		}
+		// Unknown host — workspace init / automation deploy hasn't
+		// registered it yet. Leave open until the register call sets
+		// an owner.
 		return true
 	}
 	role, err := roleFor(host, email, groups)
