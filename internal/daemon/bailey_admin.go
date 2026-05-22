@@ -74,6 +74,7 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	//     user's TOTP or device cookie is missing. Refusing to log them
 	//     out because they failed the gate would be backwards.
 	if !strings.HasPrefix(r.URL.Path, "/bailey/api/") &&
+		!strings.HasPrefix(r.URL.Path, "/bailey/static/") &&
 		r.URL.Path != "/bailey/signout" &&
 		!enforceMFAGate(w, r) {
 		return
@@ -104,6 +105,15 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	// don't gate the user out of their own log-out path.
 	if r.URL.Path == "/bailey/signout" {
 		signoutRedirect(w, r, "/")
+		return
+	}
+
+	// Static assets (vendored JS/CSS) are public to any authenticated
+	// caller — the bundles aren't sensitive and admin pages depend on
+	// them. Done before the per-path switch so it covers any path
+	// prefix under /bailey/static/.
+	if strings.HasPrefix(r.URL.Path, "/bailey/static/") {
+		handleBaileyStatic(w, r)
 		return
 	}
 
@@ -215,6 +225,17 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/bailey/api/admin/devices/remove":
 		if r.Method == http.MethodPost {
 			handleAdminDeviceRemoveAPI(w, r)
+			return
+		}
+	case r.URL.Path == "/bailey/api/admin/network-map":
+		if r.Method == http.MethodGet {
+			handleNetworkMapAPI(w, r)
+			return
+		}
+	case r.URL.Path == "/bailey/map" || r.URL.Path == "/bailey/map/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "map", true))
 			return
 		}
 	case r.URL.Path == "/bailey/siem" || r.URL.Path == "/bailey/siem/":
@@ -855,7 +876,176 @@ fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).
   <iframe src="/2fa-gate/account/2fa?_bailey_iframe=1" style="width:100%;min-height:380px;border:0;"></iframe>
 </div>`
 
-	case "siem":
+	case "map":
+		pageTitle = "Network map"
+		pageContent = `
+<style>
+  .map-shell { display:grid; grid-template-columns: 1fr 320px; gap:16px; height: calc(100vh - 160px); min-height: 480px; }
+  #map-canvas { background:#FAFAFA; border:1px solid #E4E4E7; border-radius:10px; }
+  .map-side {
+    background:#fff; border:1px solid #E4E4E7; border-radius:10px;
+    padding:16px; overflow-y:auto; font-size:13px;
+  }
+  .map-side h3 { margin:0 0 4px; font-size:14px; font-weight:600; color:#18181B; }
+  .map-side .kind { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#F4F4F5; color:#3F3F46; margin-bottom:8px; }
+  .map-side dl { margin:8px 0; }
+  .map-side dt { font-size:11px; color:#71717A; text-transform:uppercase; letter-spacing:0.4px; margin-top:10px; }
+  .map-side dd { margin:2px 0 0; font-size:13px; color:#18181B; word-break:break-all; }
+  .map-side code { background:#F5F5F6; padding:1px 4px; border-radius:3px; }
+  .map-empty { color:#A1A1AA; font-size:13px; text-align:center; padding:24px 12px; }
+  .map-legend { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#71717A; margin-bottom:10px; }
+  .map-legend span { display:inline-flex; align-items:center; gap:6px; }
+  .map-legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+</style>
+<div class="map-legend">
+  <span><span class="dot" style="background:#093DF5"></span> Endpoint</span>
+  <span><span class="dot" style="background:#F59E0B"></span> Ingress</span>
+  <span><span class="dot" style="background:#10B981"></span> Workspace traefik</span>
+  <span><span class="dot" style="background:#6366F1"></span> Container</span>
+  <span><span class="dot" style="background:#71717A;border-radius:3px"></span> Network</span>
+</div>
+<div class="map-shell">
+  <div id="map-canvas"></div>
+  <aside class="map-side" id="map-side">
+    <div class="map-empty">Click any node for details.</div>
+  </aside>
+</div>
+<script src="/bailey/static/cytoscape.min.js"></script>
+<script src="/bailey/static/layout-base.js"></script>
+<script src="/bailey/static/cose-base.js"></script>
+<script src="/bailey/static/cytoscape-fcose.js"></script>`
+		pageScript = `
+function escapeHTML(s){ return String(s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+function colorFor(kind){
+  return ({
+    ingress:'#F59E0B', endpoint:'#093DF5', workspace_traefik:'#10B981',
+    container:'#6366F1', network:'#71717A', workspace:'#E4E4E7'
+  })[kind] || '#A1A1AA';
+}
+function shapeFor(kind){
+  return ({
+    ingress:'round-rectangle', endpoint:'ellipse', workspace_traefik:'round-rectangle',
+    container:'round-rectangle', network:'round-rectangle', workspace:'round-rectangle'
+  })[kind] || 'ellipse';
+}
+fetch('/bailey/api/admin/network-map', {credentials:'same-origin'}).then(function(r){
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}).then(function(g){
+  cy = cytoscape({
+    container: document.getElementById('map-canvas'),
+    elements: [].concat(
+      g.nodes.map(function(n){ return {data: n}; }),
+      g.edges.map(function(e){ return {data: e}; })
+    ),
+    style: [
+      {selector: 'node', style: {
+        'background-color': function(ele){ return colorFor(ele.data('kind')); },
+        'label': 'data(label)',
+        'color': '#18181B',
+        'font-size': 11,
+        'text-valign': 'bottom',
+        'text-margin-y': 4,
+        'text-wrap': 'wrap',
+        'text-max-width': 140,
+        'shape': function(ele){ return shapeFor(ele.data('kind')); },
+        'border-width': 1,
+        'border-color': '#fff',
+        'width': function(ele){ return ele.data('kind') === 'endpoint' ? 18 : 22; },
+        'height': function(ele){ return ele.data('kind') === 'endpoint' ? 18 : 22; }
+      }},
+      {selector: 'node[kind = "workspace"]', style: {
+        'background-color': '#F4F4F5', 'background-opacity': 0.6,
+        'border-color': '#D4D4D8', 'border-width': 1,
+        'shape': 'round-rectangle', 'padding': 12,
+        'text-valign': 'top', 'text-margin-y': -2,
+        'font-weight': 600, 'font-size': 12, 'color': '#52525B'
+      }},
+      {selector: 'node[kind = "network"]', style: {
+        'background-color': '#FAFAFA', 'background-opacity': 0.9,
+        'border-color': '#E4E4E7', 'border-style': 'dashed',
+        'shape': 'round-rectangle', 'padding': 8,
+        'text-valign': 'top', 'text-margin-y': -2,
+        'font-size': 10, 'color': '#71717A'
+      }},
+      {selector: 'edge', style: {
+        'width': 1.5,
+        'line-color': '#D4D4D8',
+        'target-arrow-color': '#D4D4D8',
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        'font-size': 9,
+        'color': '#71717A',
+        'label': 'data(label)',
+        'text-background-color': '#FAFAFA',
+        'text-background-opacity': 0.9,
+        'text-background-padding': 2
+      }},
+      {selector: 'edge[kind = "chain"]', style: {
+        'line-color': '#FBBF24', 'target-arrow-color': '#FBBF24', 'width': 2
+      }},
+      {selector: 'edge[kind = "route"]', style: {
+        'line-color': '#93C5FD', 'target-arrow-color': '#93C5FD'
+      }},
+      {selector: 'node:selected', style: {
+        'border-color': '#093DF5', 'border-width': 3
+      }}
+    ],
+    layout: { name: 'fcose', animate: false, padding: 24, nodeSeparation: 90, idealEdgeLength: 110 }
+  });
+  cy.on('tap', 'node', function(ev){ showDetails(ev.target.data()); });
+  cy.on('tap', function(ev){ if (ev.target === cy) emptySide(); });
+}).catch(function(e){
+  document.getElementById('map-canvas').innerHTML = '<p class="note" style="padding:20px;color:#b00020;">Couldn\'t load map: '+e+'</p>';
+});
+
+var cy;
+function emptySide(){
+  document.getElementById('map-side').innerHTML = '<div class="map-empty">Click any node for details.</div>';
+}
+function showDetails(n){
+  var side = document.getElementById('map-side');
+  var html = '<span class="kind">'+escapeHTML(n.kind)+'</span><h3>'+escapeHTML(n.label)+'</h3>';
+  if (n.kind === 'endpoint') {
+    html += '<dl>';
+    html += '<dt>Hostname</dt><dd><code>'+escapeHTML(n.hostname||'')+'</code></dd>';
+    if (n.owner_email) html += '<dt>Owner</dt><dd><code>'+escapeHTML(n.owner_email)+'</code></dd>';
+    html += '<dt>ACL</dt><dd id="acl-block"><span class="note">Loading…</span></dd>';
+    html += '<dt>Pending access</dt><dd id="req-block"><span class="note">Loading…</span></dd>';
+    html += '<dt>Visit</dt><dd><a href="https://'+encodeURIComponent(n.hostname)+'/" target="_top" style="color:#093DF5;">Open ↗</a></dd>';
+    html += '<dt>Sharing</dt><dd><a href="/2fa-gate/share/'+encodeURIComponent(n.hostname)+'" target="_top" style="color:#093DF5;">Manage →</a></dd>';
+    html += '</dl>';
+    side.innerHTML = html;
+    fetch('/2fa-gate/api/share/'+encodeURIComponent(n.hostname), {credentials:'same-origin'})
+      .then(function(r){ if(!r.ok) throw new Error('not authorised or unknown'); return r.json(); })
+      .then(function(d){
+        var aclEl = document.getElementById('acl-block');
+        var reqEl = document.getElementById('req-block');
+        var rows = ['<div><code>'+escapeHTML(d.owner_email)+'</code> <span class="note">(original owner)</span></div>'];
+        (d.grants||[]).forEach(function(g){
+          rows.push('<div><code>'+escapeHTML(g.principal_value)+'</code> <span class="note">(' + g.principal_type + ', '+g.role+')</span></div>');
+        });
+        aclEl.innerHTML = rows.join('');
+        if (d.requests && d.requests.length) {
+          reqEl.innerHTML = d.requests.map(function(r){ return '<div><code>'+escapeHTML(r.Email)+'</code> <span class="note">'+escapeHTML(r.RequestedAt)+'</span></div>'; }).join('');
+        } else {
+          reqEl.innerHTML = '<span class="note">None.</span>';
+        }
+      })
+      .catch(function(e){
+        document.getElementById('acl-block').innerHTML = '<span class="note" style="color:#b00020;">'+escapeHTML(e.message)+' (only the owner can see grants)</span>';
+        document.getElementById('req-block').innerHTML = '<span class="note">—</span>';
+      });
+  } else if (n.kind === 'workspace' || n.kind === 'network' || n.kind === 'container') {
+    html += '<dl>';
+    if (n.workspace) html += '<dt>Workspace</dt><dd><code>'+escapeHTML(n.workspace)+'</code></dd>';
+    if (n.stage)     html += '<dt>Stage</dt><dd>'+escapeHTML(n.stage)+'</dd>';
+    html += '</dl>';
+    side.innerHTML = html;
+  } else {
+    side.innerHTML = html + '<p class="note">Infra node.</p>';
+  }
+}`
 		pageTitle = "SIEM Integration"
 		pageContent = `
 <div class="card" style="margin-top:0;">
@@ -979,6 +1169,7 @@ function showTab(groupId, tabId) {
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
     <div class="sidebar-section">Admin</div>
     <a href="/bailey/approvals" class="%s">Users &amp; devices</a>
+    <a href="/bailey/map" class="%s">Network map</a>
     <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/siem" class="%s">SIEM</a>
   </nav>
@@ -1010,6 +1201,6 @@ function showTab(groupId, tabId) {
 		pageTitle, serverName,
 		active("workspaces"), active("endpoints"), active("notifications"),
 		active("devices"), active("recovery"),
-		active("approvals"), active("certs"), active("siem"),
+		active("approvals"), active("map"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)
 }
