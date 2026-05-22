@@ -30,8 +30,29 @@ func GetWorkspaceList(long, showPasswords bool) (*WorkspaceListResponse, error) 
 			return nil, fmt.Errorf("failed to read workspaces directory: %w", err)
 		}
 		for _, file := range files {
-			if file.IsDir() {
-				workspaceName := file.Name()
+			if !file.IsDir() {
+				continue
+			}
+			workspaceName := file.Name()
+			// Filter out incidental dirs that aren't real workspaces.
+			// The workspaces/ tree also contains the bailey-admin OAuth
+			// config dir (only oauth-config.yaml in it) and similar
+			// service-private state. A real workspace has either a
+			// workspace/ subdir (gitops worktree mount point) OR a
+			// traefik/ subdir (sub-traefik config). Either is enough
+			// to identify a workspace.
+			wp := filepath.Join(workspacesDir, workspaceName)
+			isWorkspace := false
+			for _, marker := range []string{"workspace", "traefik", "deployment", "metadata.yaml"} {
+				if _, err := os.Stat(filepath.Join(wp, marker)); err == nil {
+					isWorkspace = true
+					break
+				}
+			}
+			if !isWorkspace {
+				continue
+			}
+			{
 				workspaceInfo := WorkspaceInfo{
 					Name: workspaceName,
 				}

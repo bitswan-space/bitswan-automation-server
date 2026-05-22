@@ -78,23 +78,10 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Chrome wrap on top-level navigations AFTER MFA passes. We can't
-	// wrap before — the MFA gate's redirects to /2fa-gate/admin/* need
-	// to happen at the top-level URL, not inside an iframe (the
-	// browser's current URL is what Keycloak post-login routes back
-	// to). Once the gate is satisfied, every subsequent page render
-	// gets wrapped so the "Protected by Bitswan Bailey" footer
-	// follows the user across the admin.
-	//
-	// Sign-out is excluded: it needs to redirect to Keycloak at the
-	// top level so the IdP session is actually terminated. Wrapping
-	// /signout would do the redirect inside an iframe and leave the
-	// user looking at a top-level URL of /bailey-admin/signout
-	// without ever reaching Keycloak.
-	if r.URL.Path != "/bailey-admin/signout" && shouldWrapWithChrome(r) {
-		serveBaileyChrome(w, r)
-		return
-	}
+	// Chrome wrap is now applied by chromeWrapMiddleware at server
+	// entry — every response from this handler flows back through
+	// the middleware, which handles wrap / marker-propagation /
+	// iframe-escape uniformly. No per-handler wrap call needed.
 
 	admin := isAdmin(r)
 

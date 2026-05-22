@@ -295,8 +295,14 @@ func (s *Server) Run() error {
 		}
 		s.handleDocs(w, r)
 	})
+	// Chrome wrap is applied as a single middleware here — every
+	// request to this server passes through it, so individual
+	// handlers don't need to know about the wrap. See
+	// mfa_chrome_middleware.go for the rules (top-level GET text/html
+	// gets wrapped; iframe-internal redirects propagate the marker;
+	// /oauth2/* and /signout escape the iframe via window.top).
 	s.docsServer = &http.Server{
-		Handler: docsMux,
+		Handler: chromeWrapMiddleware(docsMux),
 	}
 
 	// Start docs HTTP server on port 8080

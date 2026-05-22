@@ -52,9 +52,12 @@ func startMFAGate() error {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		mfaGateHandler(w, r, proxy)
 	})
+	// Chrome wrap is applied here as a single middleware so every
+	// request to the MFA gate inherits it. The handler itself no
+	// longer needs to call serveBaileyChrome.
 	srv := &http.Server{
 		Addr:              mfaGateListenAddr,
-		Handler:           mux,
+		Handler:           chromeWrapMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -74,10 +77,10 @@ func mfaGateHandler(w http.ResponseWriter, r *http.Request, proxy *httputil.Reve
 	if !enforceMFAGate(w, r) {
 		return
 	}
-	if shouldWrapWithChrome(r) {
-		serveBaileyChrome(w, r)
-		return
-	}
+	// Chrome wrap is now applied by chromeWrapMiddleware at server
+	// entry — every response from here flows back through that
+	// middleware, which decides whether to wrap, propagate the
+	// iframe marker, or escape the iframe.
 	proxy.ServeHTTP(w, r)
 }
 
