@@ -604,7 +604,7 @@ fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).
     let grantsHtml = '<span class="note">—</span>';
     if (e.grants && e.grants.length) {
       grantsHtml = e.grants.map(g =>
-        '<div style="font-size:13px;color:#3F3F46;"><code>' + g.PrincipalValue + '</code> <span class="note">(' + g.PrincipalType + ', ' + g.Role + ')</span></div>'
+        '<div style="font-size:13px;color:#3F3F46;"><code>' + g.principal_value + '</code> <span class="note">(' + g.principal_type + ', ' + g.role + ')</span></div>'
       ).join('');
     } else if (e.caller_role === 'access') {
       grantsHtml = '<span class="note">visible to owners only</span>';

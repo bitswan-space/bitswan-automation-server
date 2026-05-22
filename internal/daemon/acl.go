@@ -38,13 +38,15 @@ const (
 )
 
 // endpointGrant describes a single ACL row, used by the share UI.
+// JSON tags use snake_case because the share modal JS reads them
+// directly (g.principal_value, g.role, etc.).
 type endpointGrant struct {
-	Hostname       string
-	PrincipalType  string // "email" | "group"
-	PrincipalValue string
-	Role           endpointRole
-	GrantedAt      string
-	GrantedBy      string
+	Hostname       string       `json:"hostname"`
+	PrincipalType  string       `json:"principal_type"` // "email" | "group"
+	PrincipalValue string       `json:"principal_value"`
+	Role           endpointRole `json:"role"`
+	GrantedAt      string       `json:"granted_at"`
+	GrantedBy      string       `json:"granted_by"`
 }
 
 // getEndpoint returns the registered endpoint or nil if unknown.
