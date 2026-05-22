@@ -15,9 +15,11 @@ import (
 )
 
 // Pairing flow: new device shows a 6-digit code, trusted device or
-// admin approves it at /2fa-gate/approve, new device's poll mints the
-// device cookie. In-memory entries — pairing is a live human gesture
-// and shouldn't survive a daemon restart.
+// admin approves it at /2fa-gate/approve, new device's poll mints
+// the device cookie. State lives in SQLite (pending_pairs table) so
+// the proxy container can hold the live flow while the daemon
+// container's admin pages process approvals — both read+write the
+// same shared bailey.db file.
 
 type pairingEntry struct {
 	Email        string
@@ -28,45 +30,39 @@ type pairingEntry struct {
 	ApproverInfo string
 }
 
-var (
-	pairingMu      sync.Mutex
-	pairingByCode  = map[string]*pairingEntry{}
-	pairingByEmail = map[string]*pairingEntry{}
-	pairingTTL     = 5 * time.Minute
-)
+const pairingTTL = 5 * time.Minute
+
+// Keeps mfa_pair.go compileable without removing its sync import
+// (it's still used by other handlers in this file).
+var _ = sync.Mutex{}
 
 func generatePendingPair(email string) (*pairingEntry, error) {
-	pairingMu.Lock()
-	defer pairingMu.Unlock()
-	now := time.Now()
-	for code, e := range pairingByCode {
-		if now.After(e.ExpiresAt) {
-			delete(pairingByCode, code)
-		}
-	}
-	if old, ok := pairingByEmail[email]; ok {
-		delete(pairingByCode, old.Code)
+	if err := dbPurgeExpiredPendingPairs(); err != nil {
+		return nil, err
 	}
 	codeInt, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now()
 	e := &pairingEntry{
 		Email:     email,
 		Code:      fmt.Sprintf("%06d", codeInt.Int64()),
 		IssuedAt:  now,
 		ExpiresAt: now.Add(pairingTTL),
 	}
-	pairingByCode[e.Code] = e
-	pairingByEmail[email] = e
+	if err := dbUpsertPendingPair(e); err != nil {
+		return nil, err
+	}
 	return e, nil
 }
 
 func approvePendingPair(email, code, approverEmail string, approverIsAdmin bool) *pairingEntry {
-	pairingMu.Lock()
-	defer pairingMu.Unlock()
-	e, ok := pairingByCode[code]
-	if !ok || e.Email != email || time.Now().After(e.ExpiresAt) {
+	e, err := dbLoadPendingPairByCode(code)
+	if err != nil || e == nil {
+		return nil
+	}
+	if e.Email != email || time.Now().After(e.ExpiresAt) {
 		return nil
 	}
 	e.ApprovedBy = approverEmail
@@ -75,27 +71,32 @@ func approvePendingPair(email, code, approverEmail string, approverIsAdmin bool)
 	} else {
 		e.ApproverInfo = approverEmail
 	}
+	if err := dbUpsertPendingPair(e); err != nil {
+		return nil
+	}
 	return e
 }
 
 func claimPendingPair(email string) *pairingEntry {
-	pairingMu.Lock()
-	defer pairingMu.Unlock()
-	e, ok := pairingByEmail[email]
-	if !ok || e.ApprovedBy == "" || time.Now().After(e.ExpiresAt) {
+	e, err := dbLoadPendingPairByEmail(email)
+	if err != nil || e == nil {
 		return nil
 	}
-	delete(pairingByCode, e.Code)
-	delete(pairingByEmail, email)
+	if e.ApprovedBy == "" || time.Now().After(e.ExpiresAt) {
+		return nil
+	}
+	_ = dbDeletePendingPairByEmail(email)
 	return e
 }
 
 func visiblePendingRequests(approverEmail string, approverIsAdmin bool) []*pairingEntry {
-	pairingMu.Lock()
-	defer pairingMu.Unlock()
+	all, err := dbListPendingPairs()
+	if err != nil {
+		return nil
+	}
 	now := time.Now()
 	out := []*pairingEntry{}
-	for _, e := range pairingByEmail {
+	for _, e := range all {
 		if now.After(e.ExpiresAt) || e.ApprovedBy != "" {
 			continue
 		}

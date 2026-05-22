@@ -85,6 +85,21 @@ CREATE TABLE IF NOT EXISTS access_requests (
   PRIMARY KEY (endpoint_host, email),
   FOREIGN KEY (endpoint_host) REFERENCES endpoints(hostname) ON DELETE CASCADE
 );
+
+-- Pending device-pair codes. Used to be in-memory in the daemon, but
+-- the network-facing MFA gate now lives in a separate container
+-- (bailey-proxy) so the pending state must live where BOTH the proxy
+-- (creates + polls) and the daemon (approves via admin pages) can see
+-- it. One row per email — generating a new pair replaces the old one.
+CREATE TABLE IF NOT EXISTS pending_pairs (
+  email         TEXT PRIMARY KEY COLLATE NOCASE,
+  code          TEXT NOT NULL,
+  issued_at     TEXT NOT NULL,
+  expires_at    TEXT NOT NULL,
+  approved_by   TEXT,
+  approver_info TEXT
+);
+CREATE INDEX IF NOT EXISTS pending_pairs_code_idx ON pending_pairs(code);
 `
 
 // baileyDBPath returns the absolute on-disk location of the daemon's

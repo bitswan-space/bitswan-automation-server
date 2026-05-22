@@ -213,7 +213,30 @@ func formatDuration(d time.Duration) string {
 }
 
 // Run starts the HTTP server listening on the Unix socket
+// runMode reports whether this process is running as the privileged
+// orchestration daemon or as the lightweight network-facing proxy
+// (MFA gate + ACL + CSP injection). Same binary, different
+// responsibilities — the proxy container has no docker socket, no
+// Unix socket, and never touches workspace lifecycle.
+type runMode string
+
+const (
+	modeDaemon runMode = "daemon"
+	modeProxy  runMode = "proxy"
+)
+
+func currentRunMode() runMode {
+	if strings.EqualFold(os.Getenv("BAILEY_MODE"), string(modeProxy)) {
+		return modeProxy
+	}
+	return modeDaemon
+}
+
 func (s *Server) Run() error {
+	if currentRunMode() == modeProxy {
+		return s.runProxy()
+	}
+
 	// Load the authentication token
 	token, err := LoadToken()
 	if err != nil {
@@ -347,7 +370,16 @@ func (s *Server) Run() error {
 		setupProtectedRoutes(serverConfig.Domain, serverConfig.ProtectedHostnameDomain())
 		// One-shot migration: pre-split endpoints get their inner pair.
 		migrateInnerHostRoutes()
-		// MFA gate (TOTP + device cookie + chrome wrap).
+		// In the new topology the MFA gate lives in a dedicated
+		// bailey-proxy container — but we keep starting it in-process
+		// as a fallback so existing single-container deployments don't
+		// break the moment they pick up this binary. Once bailey-proxy
+		// is up, oauth2-proxy will be repointed at it and the in-process
+		// listener becomes idle (still listens on :9080 inside this
+		// container, just not reached from public traffic).
+		if err := reconcileBaileyProxy(); err != nil {
+			fmt.Printf("Warning: bailey-proxy reconcile failed: %v\n", err)
+		}
 		if err := startMFAGate(); err != nil {
 			fmt.Printf("Warning: MFA gate failed to start: %v\n", err)
 		}

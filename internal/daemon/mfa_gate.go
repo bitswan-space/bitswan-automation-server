@@ -43,7 +43,9 @@ func upstreamForHost(host string) *url.URL {
 	}
 	outer := toOuterHost(host)
 	if isBaileyHost(outer) {
-		u, _ := url.Parse("http://localhost:8080")
+		// In daemon mode this is in-process (localhost); in proxy
+		// mode it's the daemon container reached by name.
+		u, _ := url.Parse("http://" + upstreamDaemonHost() + ":8080")
 		return u
 	}
 	// Workspace hostname: <workspace>-<service>.<domain> (outer form).
