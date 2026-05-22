@@ -22,7 +22,7 @@ import './style.css';
 // -----------------------------------------------------------------------------
 
 const KIND_STYLE = {
-  endpoint:          { bg: '#EFF6FF', border: '#93C5FD', text: '#1E3A8A', icon: '🌐', label: 'Endpoint' },
+  endpoint:          { bg: '#EFF6FF', border: '#93C5FD', text: '#1E3A8A', icon: '🌐', label: 'App endpoint' },
   ingress:           { bg: '#FEF3C7', border: '#FCD34D', text: '#78350F', icon: '🛡', label: 'Ingress' },
   platform_traefik:  { bg: '#FFFBEB', border: '#FCD34D', text: '#78350F', icon: '🛡', label: 'Platform traefik' },
   workspace_traefik: { bg: '#ECFDF5', border: '#6EE7B7', text: '#065F46', icon: '🚦', label: 'Workspace traefik' },
@@ -292,25 +292,25 @@ function DetailPanel({ node }) {
           <Dt>Hostname</Dt>
           <Dd><code>{node.data.hostname}</code></Dd>
           {node.data.owner_email && (<><Dt>Owner</Dt><Dd><code>{node.data.owner_email}</code></Dd></>)}
-          <Dt>Sharing</Dt>
-          <Dd>
-            <a href={`/2fa-gate/share/${encodeURIComponent(node.data.hostname)}`} target="_top">Manage →</a>
-          </Dd>
           <Dt>Open</Dt>
           <Dd>
             <a href={`https://${node.data.hostname}/`} target="_top">Visit ↗</a>
           </Dd>
-          <Dt>ACL</Dt>
+          {/* Read-only share list. The sidebar is a topology overview —
+              admins can audit who has access but can't reconfigure it
+              from here. ACL changes happen only on the endpoint's own
+              share page, where ownership is required. */}
+          <Dt>Shared with</Dt>
           <Dd>
             {aclErr && <span style={{ color: '#A1A1AA' }}>{aclErr}</span>}
             {!aclErr && !acl && <span style={{ color: '#A1A1AA' }}>Loading…</span>}
             {acl && (
               <div>
-                <div><code>{acl.owner_email}</code> <span style={{ color: '#71717A' }}>(original owner)</span></div>
+                <div><code>{acl.owner_email}</code> <span style={{ color: '#71717A' }}>(owner)</span></div>
                 {(acl.grants || []).map((g, i) => (
                   <div key={i}>
                     <code>{g.principal_value}</code>{' '}
-                    <span style={{ color: '#71717A' }}>({g.principal_type}, {g.role})</span>
+                    <span style={{ color: '#71717A' }}>({g.principal_type === 'group' ? 'group' : 'user'}, {g.role})</span>
                   </div>
                 ))}
                 {(acl.grants || []).length === 0 && <span style={{ color: '#71717A' }}>No additional grants.</span>}
