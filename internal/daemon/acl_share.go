@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // jsonNewEncoder is a local alias so the helper at the bottom of the
@@ -302,126 +301,52 @@ func shareIndexHTML(email string, endpoints []endpointRecord) string {
 		bitswanFavicon, bitswanPageCSS, body)
 }
 
-func sharePageHTML(ep *endpointRecord, grants []endpointGrant, requests []struct {
+// sharePageHTML renders the standalone share page using the same
+// modal-card component that lives inside the chrome wrap. Same look,
+// same JS, same API — this page is just the modal pre-opened on a
+// dedicated URL (used from notifications, deep links, and the
+// fallback path for non-owners trying to share). The function still
+// takes grants/requests/groups for API compatibility but doesn't use
+// them: the JS fetches everything from /2fa-gate/api/share/<host>.
+func sharePageHTML(ep *endpointRecord, _ []endpointGrant, _ []struct {
 	Email       string
 	RequestedAt string
-}, callerEmail string, callerGroups []string) string {
-	// Grants table.
-	grantsRows := ""
-	{
-		var b strings.Builder
-		b.WriteString(`<table style="width:100%;border-collapse:collapse;margin:8px 0;">`)
-		b.WriteString(`<thead><tr style="text-align:left;border-bottom:1px solid #E4E4E7;"><th style="padding:8px 0;">Principal</th><th>Role</th><th>Granted</th><th></th></tr></thead><tbody>`)
-		// Owner row (the original owner is always implied — no revoke).
-		fmt.Fprintf(&b, `<tr style="border-bottom:1px solid #F4F4F5;background:#FAFAFA;">
-  <td style="padding:8px 4px;"><code>%s</code> <span class="note">(original owner)</span></td>
-  <td>owner</td>
-  <td class="note">%s</td>
-  <td></td>
-</tr>`, html.EscapeString(ep.OwnerEmail), html.EscapeString(ep.CreatedAt))
-		for _, g := range grants {
-			fmt.Fprintf(&b, `<tr style="border-bottom:1px solid #F4F4F5;">
-  <td style="padding:8px 4px;"><code>%s</code> <span class="note">(%s)</span></td>
-  <td>%s</td>
-  <td class="note">%s by %s</td>
-  <td style="text-align:right;">
-    <form method="POST" style="display:inline;" onsubmit="return confirm('Revoke this grant?');">
-      <input type="hidden" name="action" value="revoke">
-      <input type="hidden" name="principal_type" value="%s">
-      <input type="hidden" name="principal_value" value="%s">
-      <input type="hidden" name="role" value="%s">
-      <button type="submit" style="background:none;border:0;color:#b00020;cursor:pointer;font-size:13px;">Revoke</button>
-    </form>
-  </td>
-</tr>`,
-				html.EscapeString(g.PrincipalValue),
-				html.EscapeString(g.PrincipalType),
-				html.EscapeString(string(g.Role)),
-				html.EscapeString(g.GrantedAt),
-				html.EscapeString(g.GrantedBy),
-				html.EscapeString(g.PrincipalType),
-				html.EscapeString(g.PrincipalValue),
-				html.EscapeString(string(g.Role)))
-		}
-		b.WriteString(`</tbody></table>`)
-		grantsRows = b.String()
-	}
-
-	// Pending requests block.
-	requestsRows := ""
-	if len(requests) > 0 {
-		var b strings.Builder
-		b.WriteString(`<h2>Pending access requests</h2><table style="width:100%;border-collapse:collapse;margin:8px 0;">`)
-		b.WriteString(`<thead><tr style="text-align:left;border-bottom:1px solid #E4E4E7;"><th style="padding:8px 0;">User</th><th>Requested</th><th></th></tr></thead><tbody>`)
-		for _, req := range requests {
-			fmt.Fprintf(&b, `<tr style="border-bottom:1px solid #F4F4F5;">
-  <td style="padding:8px 4px;"><code>%s</code></td>
-  <td class="note">%s</td>
-  <td style="text-align:right;">
-    <form method="POST" style="display:inline;">
-      <input type="hidden" name="action" value="grant">
-      <input type="hidden" name="principal_type" value="email">
-      <input type="hidden" name="principal_value" value="%s">
-      <input type="hidden" name="role" value="access">
-      <button type="submit" style="background:#093DF5;color:white;border:0;padding:4px 10px;border-radius:3px;cursor:pointer;font-size:13px;">Grant access</button>
-    </form>
-    <form method="POST" style="display:inline;margin-left:6px;">
-      <input type="hidden" name="action" value="deny-request">
-      <input type="hidden" name="email" value="%s">
-      <button type="submit" style="background:none;border:0;color:#b00020;cursor:pointer;font-size:13px;">Deny</button>
-    </form>
-  </td>
-</tr>`,
-				html.EscapeString(req.Email), html.EscapeString(req.RequestedAt),
-				html.EscapeString(req.Email), html.EscapeString(req.Email))
-		}
-		b.WriteString(`</tbody></table>`)
-		requestsRows = b.String()
-	}
-
-	// Group dropdown — populated from caller's own Keycloak groups.
-	groupOptions := ""
-	for _, g := range callerGroups {
-		groupOptions += fmt.Sprintf(`<option value="%s">%s</option>`,
-			html.EscapeString(g), html.EscapeString(g))
-	}
-
-	// Caller's first-seen time as a heuristic for the form action.
-	_ = time.Now() // formatter no-op
-
-	body := fmt.Sprintf(`
-<div class="header">%s<h1>Sharing for %s</h1><a href="%s/share" class="sign-out">← All endpoints</a></div>
-<div class="card">
-  <p>Signed in as <code>%s</code> · original owner: <code>%s</code></p>
-  %s
-  %s
-
-  <h2>Add a grant</h2>
-  <form method="POST" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-    <input type="hidden" name="action" value="grant">
-    <select name="principal_type" id="ptype" onchange="document.getElementById('email-input').style.display=this.value==='email'?'inline-block':'none';document.getElementById('group-select').style.display=this.value==='group'?'inline-block':'none';">
-      <option value="email">Email</option>
-      <option value="group">Group</option>
-    </select>
-    <input id="email-input" type="email" name="principal_value" placeholder="user@example.com" style="padding:6px 8px;">
-    <select id="group-select" name="principal_value" style="display:none;padding:6px 8px;">%s</select>
-    <select name="role">
-      <option value="access">access</option>
-      <option value="owner">owner</option>
-    </select>
-    <button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px;">Grant</button>
-  </form>
-  <p class="note" style="margin-top:8px;">Owners can manage sharing rules and grant further access. Access is read-only over the endpoint.</p>
-</div>`,
-		bitswanLogoSVG,
+}, callerEmail string, _ []string) string {
+	apiURL := mfaGatePathPrefix + "/api/share/" + url.PathEscape(ep.Hostname)
+	pageCSS := `
+body { margin:0; background:#F4F4F5; min-height:100vh; font:14px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; color:#18181B; }
+.share-page-topbar { background:#fff; border-bottom:1px solid #E4E4E7; padding:14px 24px; display:flex; align-items:center; gap:16px; }
+.share-page-topbar a.back { color:#71717A; text-decoration:none; font-size:13px; }
+.share-page-topbar a.back:hover { color:#18181B; }
+.share-page-topbar h1 { margin:0; font-size:15px; font-weight:600; color:#18181B; }
+.share-page-topbar .sub { color:#71717A; font-size:13px; }
+.share-page-wrap { padding:48px 16px; display:flex; justify-content:center; }
+/* Reuse the modal card directly — drop the backdrop so it's just the card on the page. */
+.bailey-share-backdrop { position:static; background:none; display:flex !important; padding:0; }
+.bailey-share-card { box-shadow:0 4px 12px rgba(0,0,0,0.06); }
+`
+	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Share %s</title>%s
+<style>%s
+%s
+</style></head><body>
+<div class="share-page-topbar">
+  <a class="back" href="/bailey/notifications">← Back to bailey</a>
+  <div>
+    <h1>Sharing</h1>
+    <div class="sub"><code>%s</code></div>
+  </div>
+</div>
+<div class="share-page-wrap">%s</div>
+<script>%s
+// Auto-open: this page IS the modal, opened.
+document.addEventListener('DOMContentLoaded', function(){ window.__baileyShareOpen(); });
+</script>
+</body></html>`,
 		html.EscapeString(ep.Hostname),
-		html.EscapeString(mfaGatePathPrefix),
-		html.EscapeString(callerEmail),
-		html.EscapeString(ep.OwnerEmail),
-		requestsRows,
-		grantsRows,
-		groupOptions,
-	)
-	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Share %s</title>%s<style>%s</style></head><body>%s</body></html>`,
-		html.EscapeString(ep.Hostname), bitswanFavicon, bitswanPageCSS, body)
+		bitswanFavicon,
+		shareModalCSS, pageCSS,
+		html.EscapeString(ep.Hostname),
+		shareModalHTML(),
+		shareModalJS(ep.Hostname, callerEmail, apiURL))
 }
+
