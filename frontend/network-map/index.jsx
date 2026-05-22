@@ -22,10 +22,12 @@ import './style.css';
 const KIND_STYLE = {
   endpoint:          { bg: '#EFF6FF', border: '#93C5FD', text: '#1E3A8A', icon: '🌐', label: 'Endpoint' },
   ingress:           { bg: '#FEF3C7', border: '#FCD34D', text: '#78350F', icon: '🛡', label: 'Ingress' },
+  platform_traefik:  { bg: '#FFFBEB', border: '#FCD34D', text: '#78350F', icon: '🛡', label: 'Platform traefik' },
   workspace_traefik: { bg: '#ECFDF5', border: '#6EE7B7', text: '#065F46', icon: '🚦', label: 'Workspace traefik' },
   container:         { bg: '#EEF2FF', border: '#A5B4FC', text: '#3730A3', icon: '▣', label: 'Container' },
   network:           { bg: '#FAFAFA', border: '#E5E7EB', text: '#374151', icon: '⬚', label: 'Network' },
   workspace:         { bg: '#F8FAFC', border: '#CBD5E1', text: '#0F172A', icon: '📦', label: 'Workspace' },
+  cloud:             { bg: '#F0F9FF', border: '#7DD3FC', text: '#075985', icon: '☁', label: 'Public ingress' },
 };
 
 function BaseNode({ data, selected }) {
@@ -76,6 +78,7 @@ function GroupNode({ data }) {
         color: s.text,
       }}
     >
+      <Handle type="target" position={Position.Left} style={{ background: 'transparent', border: 0 }} />
       <div
         style={{
           position: 'absolute', top: 8, left: 14,
@@ -85,38 +88,71 @@ function GroupNode({ data }) {
       >
         {s.icon} {data.label}
       </div>
+      <Handle type="source" position={Position.Right} style={{ background: 'transparent', border: 0 }} />
     </div>
   );
 }
 
-const nodeTypes = { base: BaseNode, group: GroupNode };
+// Custom puffy-cloud node for the public-ingress entry point.
+function CloudNode({ data, selected }) {
+  const s = KIND_STYLE.cloud;
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: 'relative',
+        width: 200, height: 110,
+        cursor: 'pointer',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif',
+        color: s.text,
+      }}
+      title="Click for wildcard DNS + TLS cert setup instructions"
+    >
+      <svg width="200" height="110" viewBox="0 0 200 110" style={{ display: 'block' }}>
+        <path
+          d="M40,70 C20,70 20,45 40,45 C40,25 75,20 80,40 C90,25 120,28 122,45 C145,40 160,55 160,70 C175,72 175,90 160,90 L40,90 C25,90 25,70 40,70 Z"
+          fill={s.bg}
+          stroke={selected ? '#0284C7' : s.border}
+          strokeWidth={selected ? 2.5 : 1.5}
+        />
+      </svg>
+      <div style={{
+        position: 'absolute', inset: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexDirection: 'column', textAlign: 'center', padding: '0 16px',
+        pointerEvents: 'none',
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 600 }}>{data.label}</div>
+        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>click for setup ↗</div>
+      </div>
+      <Handle type="source" position={Position.Right} style={{ background: 'transparent', border: 0, right: 30 }} />
+    </div>
+  );
+}
+
+const nodeTypes = { base: BaseNode, group: GroupNode, cloud: CloudNode };
 
 // -----------------------------------------------------------------------------
-// Layout: explicit hierarchical LR. Hand-rolled rather than dagre because
-// dagre's flat layout doesn't respect parent grouping — children of different
-// workspaces ended up sharing the same dagre column, causing the workspace
-// bounding boxes to overlap unpredictably.
-//
-// Three nested layers:
-//   • Top-level chain (LR): endpoints → platform-traefik → bitswan-protected-
-//     proxy → daemon (MFA+ACL) → workspaces.
-//   • Inside each workspace: workspace_traefik on the left, networks stacked
-//     vertically on the right.
-//   • Inside each network: containers stacked vertically.
-//
-// All position math runs once on the data and is direction-agnostic past the
-// fact that we lay things out as columns + stacks.
+// Layout: explicit hierarchical LR. Five top-level columns LR:
+//   cloud → platform-traefik (compound, contains endpoint nodes)
+//         → bitswan-protected-proxy → daemon → workspaces (compound).
+// Inside each workspace: workspace_traefik on the left, networks stacked on
+// the right. Inside each network: containers stacked vertically. Hand-rolled
+// rather than dagre because dagre's flat layout doesn't respect parent
+// grouping.
 // -----------------------------------------------------------------------------
 const LEAF_W = 220;
 const LEAF_H = 64;
-const COL_GAP = 90;   // horizontal gap between top-level columns
+const CLOUD_W = 200, CLOUD_H = 110;
+const COL_GAP = 80;   // horizontal gap between top-level columns
 const ROW_GAP = 24;   // vertical gap between siblings stacking in a column
 const WS_INNER_X = 24, WS_INNER_TOP = 38, WS_INNER_BOTTOM = 18;
 const NET_INNER_X = 14, NET_INNER_TOP = 30, NET_INNER_BOTTOM = 12;
-const WS_INNER_GAP = 26; // gap between workspace_traefik column and network column inside a workspace
+const WS_INNER_GAP = 26;
+const PT_INNER_X = 18, PT_INNER_TOP = 32, PT_INNER_BOTTOM = 14;
 
 function layout(nodes /*, edges */) {
-  const groupKinds = new Set(['workspace', 'network']);
+  const groupKinds = new Set(['workspace', 'network', 'platform_traefik']);
   const childrenOf = (parentId) => nodes.filter((n) => n.parentNode === parentId);
   const positions = new Map();
   const sizes = new Map();
@@ -171,63 +207,72 @@ function layout(nodes /*, edges */) {
     });
   }
 
-  // -------- Pass 3: lay out the top-level LR chain. ---------------------------
-  // Columns: endpoints (col 0), platform-traefik, bitswan-protected-proxy,
-  // daemon (MFA+ACL), workspaces (each is its own row in this column).
-  const endpoints = nodes.filter((n) => n.data.kind === 'endpoint');
-  const ingressOrder = [
-    'ingress:platform-traefik',
-    'ingress:bitswan-protected-proxy',
-    'ingress:daemon',
-  ];
-
-  // Stack endpoints in column 0.
-  let epColW = LEAF_W, epColH = 0;
-  endpoints.forEach((e, i) => {
-    positions.set(e.id, { x: 0, y: i * (LEAF_H + ROW_GAP) });
-    sizes.set(e.id, { w: LEAF_W, h: LEAF_H });
-    epColH = (i + 1) * LEAF_H + i * ROW_GAP;
+  // -------- Pass 2b: lay out the platform-traefik compound box. ---------------
+  // Endpoints stack vertically inside; platform-traefik bbox wraps them.
+  const platformId = 'ingress:platform-traefik';
+  const platformEndpoints = nodes.filter(
+    (n) => n.data.kind === 'endpoint' && n.parentNode === platformId
+  );
+  let ptInnerY = PT_INNER_TOP;
+  for (const ep of platformEndpoints) {
+    positions.set(ep.id, { x: PT_INNER_X, y: ptInnerY });
+    sizes.set(ep.id, { w: LEAF_W, h: LEAF_H });
+    ptInnerY += LEAF_H + ROW_GAP;
+  }
+  const ptInnerBottom = ptInnerY - ROW_GAP;
+  sizes.set(platformId, {
+    w: LEAF_W + PT_INNER_X * 2,
+    h: Math.max(LEAF_H + PT_INNER_TOP + PT_INNER_BOTTOM, ptInnerBottom + PT_INNER_BOTTOM),
   });
+
+  // -------- Pass 3: lay out the top-level LR chain. ---------------------------
+  // Columns (LR): cloud · platform-traefik (compound) · bitswan-protected-proxy
+  //              · daemon · workspaces (each is its own row in this column).
+  const cloudNode = nodes.find((n) => n.data.kind === 'cloud');
+  const proxyId = 'ingress:bitswan-protected-proxy';
+  const daemonId = 'ingress:daemon';
 
   // Stack workspaces in their column.
   let wsColW = 0, wsColH = 0;
   workspaces.forEach((ws, i) => {
     const ss = sizes.get(ws.id);
     if (ss.w > wsColW) wsColW = ss.w;
-    // y is provisional; will be re-applied after we know its column x.
     positions.set(ws.id, { x: 0, y: wsColH });
     wsColH += ss.h + (i === workspaces.length - 1 ? 0 : ROW_GAP);
   });
 
-  // Tallest column drives the overall vertical centering.
-  const colHeights = [epColH, LEAF_H, LEAF_H, LEAF_H, wsColH];
+  // Column widths in LR order.
+  const ptSize = sizes.get(platformId);
+  const cloudW = CLOUD_W, cloudH = CLOUD_H;
+  const ptH = ptSize.h;
+  const colWidths = [cloudW, ptSize.w, LEAF_W, LEAF_W, wsColW];
+  const colHeights = [cloudH, ptH, LEAF_H, LEAF_H, wsColH];
   const maxColH = Math.max(...colHeights);
 
-  // Place columns left-to-right.
   const colXs = [];
   let cursor = 0;
   for (let i = 0; i < 5; i++) {
     colXs.push(cursor);
-    const colW = [epColW, LEAF_W, LEAF_W, LEAF_W, wsColW][i];
-    cursor += colW + COL_GAP;
+    cursor += colWidths[i] + COL_GAP;
   }
 
-  // Re-place endpoints with column x + vertical centering.
-  endpoints.forEach((e, i) => {
-    const cx = colXs[0];
-    const cy = (maxColH - epColH) / 2 + i * (LEAF_H + ROW_GAP);
-    positions.set(e.id, { x: cx, y: cy });
-  });
-  // Place ingresses, one per column.
-  ingressOrder.forEach((id, i) => {
+  // Cloud node (col 0).
+  if (cloudNode) {
+    positions.set(cloudNode.id, { x: colXs[0], y: (maxColH - cloudH) / 2 });
+    sizes.set(cloudNode.id, { w: cloudW, h: cloudH });
+  }
+  // platform-traefik compound (col 1).
+  positions.set(platformId, { x: colXs[1], y: (maxColH - ptH) / 2 });
+  // bitswan-protected-proxy (col 2), daemon (col 3).
+  [proxyId, daemonId].forEach((id, i) => {
     const n = nodes.find((x) => x.id === id);
     if (!n) return;
-    const cx = colXs[i + 1];
+    const cx = colXs[2 + i];
     const cy = (maxColH - LEAF_H) / 2;
-    positions.set(n.id, { x: cx, y: cy });
-    sizes.set(n.id, { w: LEAF_W, h: LEAF_H });
+    positions.set(id, { x: cx, y: cy });
+    sizes.set(id, { w: LEAF_W, h: LEAF_H });
   });
-  // Place workspaces, stacked.
+  // Workspaces (col 4), stacked.
   let wsY = (maxColH - wsColH) / 2;
   workspaces.forEach((ws) => {
     const ss = sizes.get(ws.id);
@@ -359,6 +404,7 @@ function NetworkMap() {
   const [raw, setRaw] = useState(null);
   const [err, setErr] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [cloudModal, setCloudModal] = useState(false);
 
   useEffect(() => {
     fetch('/bailey/api/admin/network-map', { credentials: 'same-origin' })
@@ -369,11 +415,16 @@ function NetworkMap() {
 
   const { nodes, edges } = useMemo(() => {
     if (!raw) return { nodes: [], edges: [] };
-    const groupKinds = new Set(['workspace', 'network']);
+    const groupKinds = new Set(['workspace', 'network', 'platform_traefik']);
+    const typeFor = (kind) => {
+      if (kind === 'cloud') return 'cloud';
+      if (groupKinds.has(kind)) return 'group';
+      return 'base';
+    };
     const initialNodes = raw.nodes.map((n) => ({
       id: n.id,
       data: n,
-      type: groupKinds.has(n.kind) ? 'group' : 'base',
+      type: typeFor(n.kind),
       parentNode: n.parent || undefined,
       extent: n.parent ? 'parent' : undefined,
       draggable: false,
@@ -402,7 +453,13 @@ function NetworkMap() {
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState([]);
   useEffect(() => { setRfNodes(nodes); setRfEdges(edges); }, [nodes, edges, setRfNodes, setRfEdges]);
 
-  const onNodeClick = useCallback((_, n) => setSelected(n), []);
+  const onNodeClick = useCallback((_, n) => {
+    if (n.data.kind === 'cloud') {
+      setCloudModal(true);
+      return;
+    }
+    setSelected(n);
+  }, []);
   const onPaneClick = useCallback(() => setSelected(null), []);
 
   if (err) {
@@ -437,6 +494,139 @@ function NetworkMap() {
       <aside style={{ background: '#fff', border: '1px solid #E4E4E7', borderRadius: 10, padding: 18, overflowY: 'auto', fontSize: 13, lineHeight: 1.5 }}>
         <DetailPanel node={selected} />
       </aside>
+      {cloudModal && <CloudSetupModal onClose={() => setCloudModal(false)} />}
+    </div>
+  );
+}
+
+function CloudSetupModal({ onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 2147483646, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 12, boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
+          width: 'min(680px, 92vw)', maxHeight: '88vh', overflowY: 'auto',
+        }}
+      >
+        <div style={{ padding: '18px 22px 14px', borderBottom: '1px solid #EFEFF1', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 22 }}>☁</div>
+          <div style={{ flex: 1 }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Public ingress setup</h2>
+            <p style={{ margin: '4px 0 0', color: '#71717A', fontSize: 13 }}>
+              How traffic gets from the open internet (or a private network) to your platform-traefik.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: 'none', border: 0, fontSize: 22, color: '#71717A', cursor: 'pointer', padding: 4 }}
+            aria-label="Close"
+          >×</button>
+        </div>
+
+        <div style={{ padding: '18px 22px 22px', fontSize: 14, lineHeight: 1.55, color: '#18181B' }}>
+          <p>
+            Bailey publishes every workspace endpoint at <code>&lt;name&gt;.&lt;domain&gt;</code> and its inner pair at
+            <code> &lt;name&gt;--inner.&lt;domain&gt;</code>. Whatever sits in front of bailey needs to deliver requests for both
+            patterns to <code>platform-traefik</code> on TCP/443, which means two things: a wildcard DNS record and a
+            wildcard TLS cert.
+          </p>
+
+          <h3 style={H3}>1. Wildcard DNS</h3>
+          <p>
+            Point <code>*.&lt;domain&gt;</code> at whatever is the public face of your server. Three common options:
+          </p>
+          <Choice
+            title="Open Internet"
+            body={
+              <>
+                Add an A or CNAME record for <code>*.&lt;domain&gt;</code> in your DNS provider pointing at the server's
+                public IPv4 (or CNAME to its hostname). Most providers also need a separate record for
+                <code> &lt;domain&gt;</code> itself if you ever want the apex to resolve.
+              </>
+            }
+          />
+          <Choice
+            title="ZTNA (Cloudflare Access / Tailscale / NetBird)"
+            body={
+              <>
+                Bind <code>*.&lt;domain&gt;</code> in the ZTNA control plane so that only members of your tunnel can
+                reach it. The mechanism varies — Cloudflare Tunnel uses a tunnel route, Tailscale uses MagicDNS
+                + Funnel, NetBird uses a network resource — but in all cases the DNS record is created in the ZTNA
+                provider, not in public DNS.
+              </>
+            }
+          />
+          <Choice
+            title="Plain VPN (WireGuard / OpenVPN)"
+            body={
+              <>
+                Push the wildcard into the VPN's internal DNS resolver (e.g. dnsmasq, CoreDNS) so connected peers
+                resolve <code>*.&lt;domain&gt;</code> to the bailey's VPN-side IP. The bailey itself doesn't need to
+                be reachable on the public internet at all.
+              </>
+            }
+          />
+
+          <h3 style={H3}>2. Wildcard TLS cert</h3>
+          <p>
+            <code>platform-traefik</code> terminates HTTPS, so it needs a cert that covers both
+            <code> &lt;domain&gt;</code> and <code>*.&lt;domain&gt;</code>. Two common options:
+          </p>
+          <Choice
+            title="Let's Encrypt via DNS-01 challenge"
+            body={
+              <>
+                platform-traefik is preconfigured with a <code>letsencrypt</code> cert resolver. Wildcard certs
+                require the DNS-01 challenge — Traefik talks to your DNS provider's API to plant a TXT record
+                and prove control. Set the provider in the traefik static config (Cloudflare, Route53, etc.) and
+                supply credentials via env vars. Traefik renews automatically every ~60 days.
+              </>
+            }
+          />
+          <Choice
+            title="Internal CA (private network only)"
+            body={
+              <>
+                If the bailey is only reachable over a VPN/ZTNA, you can skip ACME entirely: issue a wildcard cert
+                from a private CA you control and distribute the CA cert to your team's devices. The bailey ships
+                with a built-in CA helper (see <code>~/.config/bitswan/vpn/ca/</code>) usable for this.
+              </>
+            }
+          />
+
+          <h3 style={H3}>3. Verify</h3>
+          <p>
+            Once DNS and cert are in place, browsing to <code>https://bailey.&lt;domain&gt;</code> should land you on the
+            wrap login page. If you see an "ERR_CERT_AUTHORITY_INVALID", your cert isn't wildcard or its DNS
+            authority differs from the hostname; if you see "DNS_PROBE_FINISHED_NXDOMAIN", the wildcard record
+            didn't propagate (or the resolver in front of you doesn't see it).
+          </p>
+          <p style={{ color: '#71717A', fontSize: 13 }}>
+            This page is just a checklist — bailey doesn't manage DNS or the public-network layer. Each provider
+            has its own setup docs; what matters here is that <em>both</em> the wildcard DNS and the wildcard cert
+            are in place before any endpoint will resolve.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const H3 = { fontSize: 14, fontWeight: 600, color: '#18181B', margin: '20px 0 6px' };
+
+function Choice({ title, body }) {
+  return (
+    <div style={{ background: '#FAFAFA', border: '1px solid #E4E4E7', borderRadius: 8, padding: '10px 14px', margin: '8px 0' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, color: '#18181B' }}>{title}</div>
+      <div style={{ fontSize: 13, color: '#3F3F46' }}>{body}</div>
     </div>
   );
 }

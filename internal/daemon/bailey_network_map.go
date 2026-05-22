@@ -55,18 +55,24 @@ func buildNetworkMap() nmGraph {
 	var nodes []nmNode
 	var edges []nmEdge
 
-	// (1) Ingresses are well-known. Hardcoded; matches the actual
+	// (1) Cloud — abstract source-of-traffic node on the far left. Clickable;
+	// the frontend pops a modal with wildcard-DNS + wildcard-cert setup
+	// instructions. The label stays vague ("Internet / VPN / ZTNA") because
+	// any of those could be sitting in front of the bailey.
+	nodes = append(nodes, nmNode{ID: "cloud", Label: "Internet / VPN / ZTNA", Kind: "cloud"})
+
+	// (2) Ingresses are well-known. Hardcoded; matches the actual
 	// container set in the protected-ingress topology.
-	ingresses := []struct{ id, label string }{
-		{"ingress:platform-traefik", "platform-traefik"},
-		{"ingress:bitswan-protected-proxy", "bitswan-protected-proxy"},
-		{"ingress:daemon", "daemon (MFA + ACL)"},
-	}
-	for _, in := range ingresses {
-		nodes = append(nodes, nmNode{ID: in.id, Label: in.label, Kind: "ingress"})
-	}
+	// platform-traefik is a COMPOUND node — endpoints nest inside it because
+	// it owns the TLS routes for those hostnames.
+	nodes = append(nodes,
+		nmNode{ID: "ingress:platform-traefik", Label: "platform-traefik", Kind: "platform_traefik"},
+		nmNode{ID: "ingress:bitswan-protected-proxy", Label: "bitswan-protected-proxy", Kind: "ingress"},
+		nmNode{ID: "ingress:daemon", Label: "daemon (MFA + ACL)", Kind: "ingress"},
+	)
 	// Auth chain edges.
 	edges = append(edges,
+		nmEdge{Source: "cloud", Target: "ingress:platform-traefik", Kind: "chain", Label: "TLS :443"},
 		nmEdge{Source: "ingress:platform-traefik", Target: "ingress:bitswan-protected-proxy", Kind: "chain", Label: "oauth"},
 		nmEdge{Source: "ingress:bitswan-protected-proxy", Target: "ingress:daemon", Kind: "chain", Label: "MFA + ACL"},
 	)
@@ -138,11 +144,8 @@ func buildNetworkMap() nmGraph {
 		epID := "ep:" + ep.Hostname
 		nodes = append(nodes, nmNode{
 			ID: epID, Label: ep.Hostname, Kind: "endpoint",
+			Parent: "ingress:platform-traefik",
 			OwnerEmail: ep.OwnerEmail, Hostname: ep.Hostname,
-		})
-		// endpoint → platform traefik (always)
-		edges = append(edges, nmEdge{
-			Source: epID, Target: "ingress:platform-traefik", Kind: "route",
 		})
 		// If the endpoint belongs to a workspace, draw the route
 		// from workspace_traefik → service container.
@@ -169,10 +172,7 @@ func buildNetworkMap() nmGraph {
 			// management surface before it's been bootstrapped.
 			nodes = append(nodes, nmNode{
 				ID: "ep:" + baileyEP, Label: baileyEP, Kind: "endpoint",
-				Hostname: baileyEP,
-			})
-			edges = append(edges, nmEdge{
-				Source: "ep:" + baileyEP, Target: "ingress:platform-traefik", Kind: "route",
+				Parent: "ingress:platform-traefik", Hostname: baileyEP,
 			})
 		}
 	}
