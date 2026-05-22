@@ -1,0 +1,11 @@
+{
+  "name": "bailey-network-map",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "dagre": "^0.8.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "reactflow": "11.11.4"
+  }
+}

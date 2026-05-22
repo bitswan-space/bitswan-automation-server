@@ -12,3 +12,4 @@ completions/
 
 # for Intellij PyCharm IDE
 /.idea/
+frontend/*/node_modules/
