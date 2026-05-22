@@ -93,8 +93,12 @@ func serveBaileyChrome(w http.ResponseWriter, r *http.Request) {
 	// Without this an upstream app could (via JS) redirect the iframe
 	// to a third-party origin and the "Protected by Bailey" bar would
 	// hover over content the bailey has no authority over.
+	//
+	// 'unsafe-inline' on script-src is the small share-modal + nav-sync
+	// listener we ship inline. No external scripts allowed on this
+	// page — the iframe carries the actual app and has its own CSP.
 	csp := "frame-src https://" + innerHost + "; default-src 'none'; " +
-		"style-src 'unsafe-inline'; img-src 'self' data:; font-src data:"
+		"script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src data:"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
@@ -207,6 +211,23 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
 </footer>
 %[10]s
 <script>%[11]s</script>
+<script>
+(function(){
+  // The iframe content posts {type:'bailey-nav', path:'...'} whenever
+  // it navigates (see injectNavSync server-side). Mirror that path
+  // into the outer URL bar so reloads land on the same page.
+  // Filter messages to ones that look like a bailey nav payload to
+  // avoid acting on chatter from upstream apps' own postMessage use.
+  var lastPath = location.pathname + location.search + location.hash;
+  window.addEventListener('message', function(ev){
+    var d = ev && ev.data;
+    if (!d || d.type !== 'bailey-nav' || typeof d.path !== 'string') return;
+    if (d.path === lastPath) return;
+    lastPath = d.path;
+    try { history.replaceState(null, '', d.path); } catch (e) {}
+  });
+})();
+</script>
 </body></html>`,
 		chromeFooterBg, chromeFooterPx, chromeFooterFg,
 		html.EscapeString(iframeSrc),

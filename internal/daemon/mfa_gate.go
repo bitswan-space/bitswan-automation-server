@@ -57,6 +57,10 @@ func startMFAGate() error {
 		ct := resp.Header.Get("Content-Type")
 		if strings.HasPrefix(ct, "text/html") {
 			resp.Header.Set("Content-Security-Policy", strictInnerCSP(host))
+			// Inject the nav-sync script so the wrap's outer URL can
+			// follow whatever the iframe navigates to — making reloads
+			// resume on the same page instead of bouncing to "/".
+			injectNavSync(resp)
 		} else if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
 			// Non-HTML with its own CSP: at least drop frame-ancestors
 			// so the wrap stays able to embed (chrome ignores CSP on
@@ -75,7 +79,7 @@ func startMFAGate() error {
 	// longer needs to call serveBaileyChrome.
 	srv := &http.Server{
 		Addr:              mfaGateListenAddr,
-		Handler:           chromeWrapMiddleware(mux),
+		Handler:           chromeWrapMiddleware(injectNavSyncMiddleware(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
