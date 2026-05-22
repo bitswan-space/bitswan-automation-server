@@ -131,6 +131,16 @@ func pendingPairPollHandler(w http.ResponseWriter, r *http.Request, email string
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// If the poller is an admin, also set the TOTP session cookie.
+	// The pair approval came from a browser the same admin had
+	// already paired (and that previous pairing required TOTP), so
+	// the approver is effectively certifying both factors at once.
+	// Without this the new browser would land back at /admin/challenge
+	// immediately after redirecting, defeating the point of the
+	// "punch a code into a trusted browser" flow.
+	if _, groups := identityFromHeaders(r); isAdminGroups(groups) {
+		_ = setSessionCookie(w, r, email)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"approved":      true,
