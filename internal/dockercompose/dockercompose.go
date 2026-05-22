@@ -381,35 +381,30 @@ func CreateWorkspaceTraefikDockerComposeFile(workspaceName, traefikPath, domain 
 
 	containerName := fmt.Sprintf("%s__traefik", workspaceName)
 
-	// Build Docker labels so the global Traefik auto-discovers this sub-traefik
-	// and creates a HostRegexp routing rule for all {workspace}-*.{domain} hostnames.
+	// Workspace's own traefik. Deliberately NOT exposing any
+	// `traefik.enable=true` docker labels — those would auto-create
+	// routes on the platform traefik via the docker provider, which
+	// is exactly what we don't want: the workspace traefik should
+	// only be reachable through the protected-ingress chain
+	// (bitswan-protected-proxy → MFA gate → traefik-protected →
+	// <ws>__traefik:80 → workspace service). Platform-traefik routes
+	// for <ws>-editor.<domain> are pushed via REST to point at
+	// bitswan-protected-proxy. Keeping all routing inside the
+	// protected chain keeps every endpoint internal-by-default and
+	// preserves docker network isolation.
 	serviceMap := map[string]interface{}{
 		"image":          "traefik:v3.6",
 		"restart":        "always",
 		"container_name": containerName,
 		"networks":       traefikNetworks,
 		"volumes":        traefikVolumes,
+		// `traefik.enable=false` makes the intent explicit — even if
+		// the platform traefik's docker provider enumerates this
+		// container (which it does, since we share bitswan_network),
+		// it won't try to discover routes on it.
+		"labels": map[string]string{"traefik.enable": "false"},
 	}
-
-	if domain != "" {
-		routerName := fmt.Sprintf("%s-routing", workspaceName)
-		escapedDomain := strings.ReplaceAll(domain, ".", `\.`)
-		pattern1 := fmt.Sprintf(`%s-[^.]+\.%s`, workspaceName, escapedDomain)
-		pattern2 := fmt.Sprintf(`[^.]+\.%s-[^.]+\.%s`, workspaceName, escapedDomain)
-		rule := fmt.Sprintf("HostRegexp(`%s`) || HostRegexp(`%s`)", pattern1, pattern2)
-
-		labels := map[string]string{
-			"traefik.enable": "true",
-			fmt.Sprintf("traefik.http.routers.%s.rule", routerName):                      rule,
-			fmt.Sprintf("traefik.http.routers.%s.entrypoints", routerName):               "websecure",
-			fmt.Sprintf("traefik.http.routers.%s.tls", routerName):                       "true",
-			fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", routerName): "80",
-		}
-		if !strings.HasSuffix(domain, ".localhost") {
-			labels[fmt.Sprintf("traefik.http.routers.%s.tls.certresolver", routerName)] = "letsencrypt"
-		}
-		serviceMap["labels"] = labels
-	}
+	_ = domain // domain no longer used for labels (kept for compatibility)
 
 	dockerCompose := map[string]interface{}{
 		"version": "3.8",

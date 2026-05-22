@@ -83,6 +83,7 @@ type traefikRouter struct {
 	Rule        string            `json:"rule"`
 	Service     string            `json:"service"`
 	TLS         *traefikRouterTLS `json:"tls,omitempty"`
+	Priority    int               `json:"priority,omitempty"`
 }
 
 // traefikRouterTLS, when non-nil, enables TLS termination on a router.
@@ -415,12 +416,27 @@ func AddRoute(hostname, upstream string) error {
 	return AddRouteWithTraefik(hostname, upstream, "")
 }
 
+// AddRouteWithTraefikPriority is AddRouteWithTraefik plus an explicit
+// router priority. Used to override the docker-label HostRegexp
+// catch-all that workspace traefik containers used to ship with.
+func AddRouteWithTraefikPriority(hostname, upstream, traefikBaseURL, certResolver string, priority int) error {
+	return addRouteWithTraefikImpl(hostname, upstream, traefikBaseURL, certResolver, priority)
+}
+
 // AddRouteWithTraefik adds a route for hostname → upstream.
 // If traefikBaseURL is empty, uses the default from getTraefikBaseURL().
 // Routes targeting a workspace sub-traefik are HTTP-only (no TLS).
 // Routes targeting the global traefik include TLS and both entrypoints.
 // An optional certResolver string can be provided to use ACME (e.g. "letsencrypt").
 func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver ...string) error {
+	resolver := ""
+	if len(certResolver) > 0 {
+		resolver = certResolver[0]
+	}
+	return addRouteWithTraefikImpl(hostname, upstream, traefikBaseURL, resolver, 0)
+}
+
+func addRouteWithTraefikImpl(hostname, upstream, traefikBaseURL, certResolver string, priority int) error {
 	if traefikBaseURL == "" {
 		traefikBaseURL = getTraefikBaseURL()
 	}
@@ -432,10 +448,7 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver
 	workspaceTarget := isWorkspaceURL(traefikBaseURL)
 	vpnTarget := strings.Contains(traefikBaseURL, "traefik-protected")
 
-	resolver := ""
-	if len(certResolver) > 0 {
-		resolver = certResolver[0]
-	}
+	resolver := certResolver
 	// VPN Traefik uses file-based TLS certs, not ACME — never set a cert resolver
 	if vpnTarget {
 		resolver = ""
@@ -443,10 +456,13 @@ func AddRouteWithTraefik(hostname, upstream, traefikBaseURL string, certResolver
 
 	return modifyState(traefikBaseURL, func(state *traefikDynConfig) error {
 		router := &traefikRouter{
-			Rule:    fmt.Sprintf("Host(`%s`)", hostname),
-			Service: routeID,
+			Rule:     fmt.Sprintf("Host(`%s`)", hostname),
+			Service:  routeID,
+			Priority: priority,
 		}
 		if workspaceTarget {
+			router.EntryPoints = []string{"web"}
+		} else if vpnTarget {
 			router.EntryPoints = []string{"web"}
 		} else {
 			router.EntryPoints = []string{"web", "websecure"}

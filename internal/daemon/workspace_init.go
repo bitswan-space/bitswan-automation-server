@@ -642,11 +642,18 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 	// Register GitOps service route via the daemon's ingress abstraction.
 	// addRouteToIngress detects the ingress type and handles certs + routing.
-	// Register gitops route — internal only when VPN is enabled
+	// Register gitops route — internal only when VPN is enabled.
 	gitopsHostname := fmt.Sprintf("%s-gitops.%s", workspaceName, *domain)
 	if _, err := registerEndpoint(gitopsHostname, *ownerEmail,
 		fmt.Sprintf("GitOps (%s)", workspaceName)); err != nil {
 		fmt.Printf("Warning: failed to register endpoint ACL row for %s: %v\n", gitopsHostname, err)
+	}
+	// Tell AOC to add this hostname as a valid redirect URI on the
+	// shared bitswan-protected-client. Without this, Keycloak rejects
+	// the OAuth callback when a user navigates to this endpoint
+	// through bitswan-protected-proxy.
+	if err := registerProtectedRedirectURI(gitopsHostname); err != nil {
+		fmt.Printf("Warning: AOC didn't accept the protected-client redirect URI for %s: %v\n", gitopsHostname, err)
 	}
 	gitopsUpstream := fmt.Sprintf("%s-gitops:8079", workspaceName)
 	if err := addRouteToIngress(IngressAddRouteRequest{
@@ -655,7 +662,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		Mkcert:        *mkCerts,
 		CertsDir:      *certsDir,
 		WorkspaceName: workspaceName,
-		IngressTarget: "internal",
+		IngressTarget: "both",
 	}, ""); err != nil {
 		return fmt.Errorf("failed to register GitOps service: %w", err)
 	}
@@ -814,20 +821,28 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
 
-		// Register editor route — internal only when VPN is enabled
+		// Register editor route.
 		editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
 		if _, err := registerEndpoint(editorHostname, *ownerEmail,
 			fmt.Sprintf("Editor (%s)", workspaceName)); err != nil {
 			fmt.Printf("Warning: failed to register endpoint ACL row for %s: %v\n", editorHostname, err)
 		}
-		editorUpstream := fmt.Sprintf("%s-editor:9999", workspaceName)
+		// Add the hostname to the shared bitswan-protected-client's
+		// allowed redirect URIs so the Keycloak OAuth flow accepts it.
+		if err := registerProtectedRedirectURI(editorHostname); err != nil {
+			fmt.Printf("Warning: AOC didn't accept the protected-client redirect URI for %s: %v\n", editorHostname, err)
+		}
+		// Editor upstream is the editor container itself (port 8079).
+		// The editor's own oauth2-proxy is bypassed — authentication
+		// happens at bitswan-protected-proxy, not per-workspace.
+		editorUpstream := fmt.Sprintf("%s-editor:8079", workspaceName)
 		editorRoute := IngressAddRouteRequest{
 			Hostname:      editorHostname,
 			Upstream:      editorUpstream,
 			Mkcert:        *mkCerts,
 			CertsDir:      *certsDir,
 			WorkspaceName: workspaceName,
-			IngressTarget: "internal",
+			IngressTarget: "both",
 		}
 		if err := addRouteToIngress(editorRoute, ""); err != nil {
 			return fmt.Errorf("failed to register Editor service: %w", err)
