@@ -152,7 +152,7 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
 	courtyardBtn := ""
 	if cy := baileyCourtyardHost(); cy != "" && !strings.EqualFold(cy, host) {
 		courtyardBtn = fmt.Sprintf(
-			`<a class="btn courtyard" href="https://%[1]s/" target="_top" title="Back to the bailey">↩ %[1]s</a>`,
+			`<a class="courtyard-link" href="https://%[1]s/" target="_top" title="Back to the bailey">↩ Back to %[1]s</a><span class="sep">·</span>`,
 			html.EscapeString(cy))
 	}
 
@@ -176,7 +176,12 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
   footer.bailey-footer .fence   { flex: 1; opacity: 0.45; letter-spacing: 1px; overflow: hidden; }
   footer.bailey-footer a.btn    { padding: 0 12px; color: %[3]s; text-decoration: none; flex-shrink: 0; border-left: 1px solid rgba(255,255,255,0.18); cursor: pointer; }
   footer.bailey-footer a.btn:hover { background: rgba(255,255,255,0.06); }
-  footer.bailey-footer a.btn.courtyard { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; opacity: 0.9; }
+  footer.bailey-footer a.courtyard-link {
+    color: %[3]s; text-decoration: underline; text-decoration-color: rgba(255,255,255,0.45);
+    text-underline-offset: 2px; flex-shrink: 0; padding: 0 4px;
+    font-family: ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  footer.bailey-footer a.courtyard-link:hover { text-decoration-color: %[3]s; }
 %[9]s
 </style>
 </head><body>
@@ -184,9 +189,9 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
 <footer class="bailey-footer">
   <span class="label">🛡 Protected by Bitswan Bailey <b>%[5]s</b></span>
   <span class="sep">·</span>
+  %[12]s
   <span class="label">Logged in as <b>%[6]s</b></span>
   <span class="fence">%[7]s</span>
-  %[12]s
   %[8]s
   <a class="btn" href="/oauth2/sign_out" target="_top">Logout</a>
 </footer>

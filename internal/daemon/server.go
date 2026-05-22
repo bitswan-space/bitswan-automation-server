@@ -295,14 +295,13 @@ func (s *Server) Run() error {
 		}
 		s.handleDocs(w, r)
 	})
-	// Chrome wrap is applied as a single middleware here — every
-	// request to this server passes through it, so individual
-	// handlers don't need to know about the wrap. See
-	// mfa_chrome_middleware.go for the rules (top-level GET text/html
-	// gets wrapped; iframe-internal redirects propagate the marker;
-	// /oauth2/* and /signout escape the iframe via window.top).
+	// No chrome wrap here. The MFA gate at :9080 is the single
+	// bottleneck for all externally-reachable protected traffic
+	// (platform-traefik → oauth → :9080 → traefik-protected →
+	// :8080), so the wrap is applied exactly once there. The docs
+	// server only ever serves inner-iframe content.
 	s.docsServer = &http.Server{
-		Handler: chromeWrapMiddleware(docsMux),
+		Handler: docsMux,
 	}
 
 	// Start docs HTTP server on port 8080
