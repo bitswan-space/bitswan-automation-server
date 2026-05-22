@@ -880,29 +880,36 @@ fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).
 		pageTitle = "Network map"
 		pageContent = `
 <style>
-  .map-shell { display:grid; grid-template-columns: 1fr 320px; gap:16px; height: calc(100vh - 160px); min-height: 480px; }
-  #map-canvas { background:#FAFAFA; border:1px solid #E4E4E7; border-radius:10px; }
+  .map-shell { display:grid; grid-template-columns: 1fr 340px; gap:16px; height: calc(100vh - 140px); min-height: 520px; }
+  #map-canvas { background:#FFFFFF; border:1px solid #E4E4E7; border-radius:10px; }
   .map-side {
     background:#fff; border:1px solid #E4E4E7; border-radius:10px;
-    padding:16px; overflow-y:auto; font-size:13px;
+    padding:18px; overflow-y:auto; font-size:13px; line-height:1.5;
   }
-  .map-side h3 { margin:0 0 4px; font-size:14px; font-weight:600; color:#18181B; }
-  .map-side .kind { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#F4F4F5; color:#3F3F46; margin-bottom:8px; }
-  .map-side dl { margin:8px 0; }
-  .map-side dt { font-size:11px; color:#71717A; text-transform:uppercase; letter-spacing:0.4px; margin-top:10px; }
-  .map-side dd { margin:2px 0 0; font-size:13px; color:#18181B; word-break:break-all; }
-  .map-side code { background:#F5F5F6; padding:1px 4px; border-radius:3px; }
-  .map-empty { color:#A1A1AA; font-size:13px; text-align:center; padding:24px 12px; }
-  .map-legend { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#71717A; margin-bottom:10px; }
-  .map-legend span { display:inline-flex; align-items:center; gap:6px; }
-  .map-legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .map-side h3 { margin:0 0 4px; font-size:15px; font-weight:600; color:#18181B; word-break:break-all; }
+  .map-side .kind {
+    display:inline-block; font-size:10px; padding:2px 8px; border-radius:999px;
+    background:#F4F4F5; color:#52525B; margin-bottom:10px;
+    text-transform:uppercase; letter-spacing:0.5px; font-weight:600;
+  }
+  .map-side dl { margin:10px 0; }
+  .map-side dt { font-size:10px; color:#A1A1AA; text-transform:uppercase; letter-spacing:0.5px; margin-top:12px; font-weight:600; }
+  .map-side dd { margin:4px 0 0; font-size:13px; color:#18181B; word-break:break-all; }
+  .map-side code { background:#F5F5F6; padding:1px 5px; border-radius:3px; font-size:12px; }
+  .map-side a { color:#093DF5; text-decoration:none; }
+  .map-side a:hover { text-decoration:underline; }
+  .map-empty { color:#A1A1AA; font-size:13px; text-align:center; padding:40px 12px; }
+  .map-toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; font-size:12px; color:#71717A; }
+  .map-toolbar button {
+    background:#fff; border:1px solid #E4E4E7; border-radius:6px;
+    padding:5px 10px; font-size:12px; color:#3F3F46; cursor:pointer;
+  }
+  .map-toolbar button:hover { background:#FAFAFA; border-color:#D4D4D8; }
 </style>
-<div class="map-legend">
-  <span><span class="dot" style="background:#093DF5"></span> Endpoint</span>
-  <span><span class="dot" style="background:#F59E0B"></span> Ingress</span>
-  <span><span class="dot" style="background:#10B981"></span> Workspace traefik</span>
-  <span><span class="dot" style="background:#6366F1"></span> Container</span>
-  <span><span class="dot" style="background:#71717A;border-radius:3px"></span> Network</span>
+<div class="map-toolbar">
+  <button onclick="if(window.cy){window.cy.fit(null,40)}">Fit</button>
+  <button onclick="if(window.cy){window.cy.zoom(1); window.cy.center()}">Reset zoom</button>
+  <span style="margin-left:auto;">Scroll to zoom · drag empty space to pan · click a node for details</span>
 </div>
 <div class="map-shell">
   <div id="map-canvas"></div>
@@ -911,95 +918,151 @@ fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).
   </aside>
 </div>
 <script src="/bailey/static/cytoscape.min.js"></script>
-<script src="/bailey/static/layout-base.js"></script>
-<script src="/bailey/static/cose-base.js"></script>
-<script src="/bailey/static/cytoscape-fcose.js"></script>`
+<script src="/bailey/static/dagre.min.js"></script>
+<script src="/bailey/static/cytoscape-dagre.js"></script>`
 		pageScript = `
 function escapeHTML(s){ return String(s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
-function colorFor(kind){
-  return ({
-    ingress:'#F59E0B', endpoint:'#093DF5', workspace_traefik:'#10B981',
-    container:'#6366F1', network:'#71717A', workspace:'#E4E4E7'
-  })[kind] || '#A1A1AA';
+var cy;
+// Pretty label = small icon + main text. Cytoscape doesn't render
+// HTML in nodes — the icon character goes inline via Unicode and
+// styling controls the rest.
+var ICONS = {
+  endpoint:           '🌐',
+  ingress:            '🛡',
+  workspace_traefik:  '🚦',
+  container:          '▣',
+  network:            '⬚',
+  workspace:          ''
+};
+var KIND_STYLES = {
+  endpoint:          { bg:'#EFF6FF', border:'#93C5FD', text:'#1E3A8A' },
+  ingress:           { bg:'#FEF3C7', border:'#FCD34D', text:'#78350F' },
+  workspace_traefik: { bg:'#ECFDF5', border:'#6EE7B7', text:'#065F46' },
+  container:         { bg:'#EEF2FF', border:'#A5B4FC', text:'#3730A3' },
+  network:           { bg:'#FAFAFA', border:'#D4D4D8', text:'#3F3F46' },
+  workspace:         { bg:'#F8FAFC', border:'#CBD5E1', text:'#0F172A' }
+};
+function styleFor(ele, key){ return (KIND_STYLES[ele.data('kind')]||KIND_STYLES.container)[key]; }
+function decoratedLabel(ele){
+  var k = ele.data('kind');
+  var icon = ICONS[k] || '';
+  var lbl = ele.data('label') || '';
+  return icon ? (icon + '  ' + lbl) : lbl;
 }
-function shapeFor(kind){
-  return ({
-    ingress:'round-rectangle', endpoint:'ellipse', workspace_traefik:'round-rectangle',
-    container:'round-rectangle', network:'round-rectangle', workspace:'round-rectangle'
-  })[kind] || 'ellipse';
-}
+
 fetch('/bailey/api/admin/network-map', {credentials:'same-origin'}).then(function(r){
   if(!r.ok) throw new Error('HTTP '+r.status);
   return r.json();
 }).then(function(g){
-  cy = cytoscape({
+  cy = window.cy = cytoscape({
     container: document.getElementById('map-canvas'),
     elements: [].concat(
-      g.nodes.map(function(n){ return {data: n}; }),
+      g.nodes.map(function(n){ return {data: n, grabbable: false, locked: true}; }),
       g.edges.map(function(e){ return {data: e}; })
     ),
+    minZoom: 0.25, maxZoom: 2,
+    wheelSensitivity: 0.18,
     style: [
+      // Leaf nodes — pill-shaped, padded text, themed by kind.
       {selector: 'node', style: {
-        'background-color': function(ele){ return colorFor(ele.data('kind')); },
-        'label': 'data(label)',
-        'color': '#18181B',
-        'font-size': 11,
-        'text-valign': 'bottom',
-        'text-margin-y': 4,
-        'text-wrap': 'wrap',
-        'text-max-width': 140,
-        'shape': function(ele){ return shapeFor(ele.data('kind')); },
-        'border-width': 1,
-        'border-color': '#fff',
-        'width': function(ele){ return ele.data('kind') === 'endpoint' ? 18 : 22; },
-        'height': function(ele){ return ele.data('kind') === 'endpoint' ? 18 : 22; }
+        'label': decoratedLabel,
+        'text-valign': 'center', 'text-halign': 'center',
+        'text-wrap': 'wrap', 'text-max-width': 200,
+        'font-family': '-apple-system, BlinkMacSystemFont, Segoe UI, Inter, sans-serif',
+        'font-size': 12, 'font-weight': 500,
+        'color': function(e){ return styleFor(e,'text'); },
+        'background-color': function(e){ return styleFor(e,'bg'); },
+        'border-color': function(e){ return styleFor(e,'border'); },
+        'border-width': 1.5,
+        'shape': 'round-rectangle',
+        'padding': '8px',
+        'width': 'label', 'height': 'label'
       }},
+      // Compound (parent) nodes — workspace and network — visible cluster boxes.
       {selector: 'node[kind = "workspace"]', style: {
-        'background-color': '#F4F4F5', 'background-opacity': 0.6,
-        'border-color': '#D4D4D8', 'border-width': 1,
-        'shape': 'round-rectangle', 'padding': 12,
-        'text-valign': 'top', 'text-margin-y': -2,
-        'font-weight': 600, 'font-size': 12, 'color': '#52525B'
+        'background-color': '#F8FAFC',
+        'background-opacity': 1,
+        'border-color': '#CBD5E1', 'border-width': 1.5,
+        'shape': 'round-rectangle', 'padding': '24px',
+        'label': function(e){ return '📦  ' + (e.data('label')||''); },
+        'text-valign': 'top', 'text-halign': 'center', 'text-margin-y': -8,
+        'font-size': 13, 'font-weight': 600, 'color': '#0F172A',
+        'corner-radius': 12
       }},
       {selector: 'node[kind = "network"]', style: {
-        'background-color': '#FAFAFA', 'background-opacity': 0.9,
-        'border-color': '#E4E4E7', 'border-style': 'dashed',
-        'shape': 'round-rectangle', 'padding': 8,
-        'text-valign': 'top', 'text-margin-y': -2,
-        'font-size': 10, 'color': '#71717A'
+        'background-color': '#FAFAFA',
+        'background-opacity': 1,
+        'border-color': '#D4D4D8', 'border-width': 1, 'border-style': 'dashed',
+        'shape': 'round-rectangle', 'padding': '14px',
+        'label': function(e){ return e.data('stage') ? e.data('stage') + ' network' : (e.data('label')||''); },
+        'text-valign': 'top', 'text-halign': 'left', 'text-margin-y': -6, 'text-margin-x': 8,
+        'font-size': 10, 'font-weight': 600, 'color': '#71717A',
+        'text-transform': 'uppercase', 'letter-spacing': 0.5
       }},
+      // Edges — clean grey arrows; auth chain in amber, route in blue.
       {selector: 'edge', style: {
         'width': 1.5,
-        'line-color': '#D4D4D8',
-        'target-arrow-color': '#D4D4D8',
+        'line-color': '#CBD5E1',
+        'target-arrow-color': '#CBD5E1',
         'target-arrow-shape': 'triangle',
-        'curve-style': 'bezier',
-        'font-size': 9,
-        'color': '#71717A',
-        'label': 'data(label)',
-        'text-background-color': '#FAFAFA',
-        'text-background-opacity': 0.9,
-        'text-background-padding': 2
+        'arrow-scale': 0.9,
+        'curve-style': 'taxi',
+        'taxi-direction': 'vertical',
+        'taxi-turn': 24,
+        'taxi-turn-min-distance': 10
       }},
       {selector: 'edge[kind = "chain"]', style: {
-        'line-color': '#FBBF24', 'target-arrow-color': '#FBBF24', 'width': 2
+        'line-color': '#F59E0B', 'target-arrow-color': '#F59E0B', 'width': 2
       }},
       {selector: 'edge[kind = "route"]', style: {
-        'line-color': '#93C5FD', 'target-arrow-color': '#93C5FD'
+        'line-color': '#60A5FA', 'target-arrow-color': '#60A5FA'
       }},
       {selector: 'node:selected', style: {
         'border-color': '#093DF5', 'border-width': 3
-      }}
+      }},
+      {selector: 'node.dim', style: { 'opacity': 0.25 }},
+      {selector: 'edge.dim', style: { 'opacity': 0.15 }},
+      {selector: 'node.hl, edge.hl', style: { 'opacity': 1 }}
     ],
-    layout: { name: 'fcose', animate: false, padding: 24, nodeSeparation: 90, idealEdgeLength: 110 }
+    layout: {
+      name: 'dagre',
+      rankDir: 'TB',
+      nodeSep: 28,
+      rankSep: 60,
+      edgeSep: 14,
+      animate: false,
+      padding: 24
+    }
   });
-  cy.on('tap', 'node', function(ev){ showDetails(ev.target.data()); });
-  cy.on('tap', function(ev){ if (ev.target === cy) emptySide(); });
+  cy.on('tap', 'node', function(ev){
+    var node = ev.target;
+    showDetails(node.data());
+    highlightLineage(node);
+  });
+  cy.on('tap', function(ev){
+    if (ev.target === cy) { clearHighlight(); emptySide(); }
+  });
+  cy.fit(null, 30);
 }).catch(function(e){
   document.getElementById('map-canvas').innerHTML = '<p class="note" style="padding:20px;color:#b00020;">Couldn\'t load map: '+e+'</p>';
 });
 
-var cy;
+function highlightLineage(node){
+  if (!cy) return;
+  cy.elements().addClass('dim').removeClass('hl');
+  var ancestors = node.predecessors();
+  var descendants = node.successors();
+  node.removeClass('dim').addClass('hl');
+  ancestors.removeClass('dim').addClass('hl');
+  descendants.removeClass('dim').addClass('hl');
+}
+function clearHighlight(){
+  if (!cy) return;
+  cy.elements().removeClass('dim hl');
+}
+function emptySide(){
+  document.getElementById('map-side').innerHTML = '<div class="map-empty">Click any node for details.</div>';
+}
 function emptySide(){
   document.getElementById('map-side').innerHTML = '<div class="map-empty">Click any node for details.</div>';
 }
