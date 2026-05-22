@@ -878,10 +878,12 @@ fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).
 
 	case "map":
 		pageTitle = "Network map"
-		pageContent = `
-<link rel="stylesheet" href="/bailey/static/network-map.css">
+		pageContent = fmt.Sprintf(`
+<link rel="stylesheet" href="/bailey/static/network-map.css?v=%s">
 <div id="network-map-root" style="min-height:520px;"></div>
-<script src="/bailey/static/network-map.js" defer></script>`
+<script src="/bailey/static/network-map.js?v=%s" defer></script>`,
+			staticAssetVersion("network-map.css"),
+			staticAssetVersion("network-map.js"))
 	case "siem":
 		pageTitle = "SIEM Integration"
 		pageContent = `
