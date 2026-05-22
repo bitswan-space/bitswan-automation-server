@@ -46,14 +46,14 @@ function BaseNode({ data, selected }) {
         color: s.text,
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: 'transparent', border: 0 }} />
+      <Handle type="target" position={Position.Left} style={{ background: 'transparent', border: 0 }} />
       <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.75, marginBottom: 2 }}>
         <span style={{ marginRight: 6 }}>{s.icon}</span>{s.label}
       </div>
       <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3, wordBreak: 'break-all' }}>
         {data.label}
       </div>
-      <Handle type="source" position={Position.Bottom} style={{ background: 'transparent', border: 0 }} />
+      <Handle type="source" position={Position.Right} style={{ background: 'transparent', border: 0 }} />
     </div>
   );
 }
@@ -128,7 +128,7 @@ function layout(nodes, edges) {
   };
 
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 80, marginx: 24, marginy: 24 });
+  g.setGraph({ rankdir: 'LR', nodesep: 32, ranksep: 100, marginx: 24, marginy: 24 });
   g.setDefaultEdgeLabel(() => ({}));
   leaves.forEach((n) => g.setNode(n.id, { width: LEAF_W, height: LEAF_H }));
   edges.forEach((e) => {
