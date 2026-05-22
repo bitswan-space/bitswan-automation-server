@@ -6,3 +6,27 @@
 .react-flow__controls button:hover { background: #FAFAFA; }
 .react-flow__edge-path { stroke-linecap: round; }
 .react-flow__handle { width: 6px; height: 6px; }
+
+/* Strip React Flow's default node decoration where we draw our own.
+   The default .react-flow__node adds a background + border + padding +
+   box-shadow that would paint on top of (and visually duplicate) our
+   custom GroupNode / CloudNode markup. */
+.react-flow__node-group,
+.react-flow__node-cloud {
+  background: none;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+.react-flow__node-base {
+  background: none;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+}
+.react-flow__node-base.selected,
+.react-flow__node-group.selected,
+.react-flow__node-cloud.selected {
+  box-shadow: none;
+}

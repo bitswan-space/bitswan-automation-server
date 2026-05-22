@@ -9,7 +9,9 @@ import ReactFlow, {
   useNodesState,
   useEdgesState,
 } from 'reactflow';
-import dagre from 'dagre';
+import ELK from 'elkjs/lib/elk.bundled.js';
+
+const elk = new ELK();
 
 import 'reactflow/dist/style.css';
 import './style.css';
@@ -133,170 +135,96 @@ function CloudNode({ data, selected }) {
 const nodeTypes = { base: BaseNode, group: GroupNode, cloud: CloudNode };
 
 // -----------------------------------------------------------------------------
-// Layout: explicit hierarchical LR. Five top-level columns LR:
-//   cloud → platform-traefik (compound, contains endpoint nodes)
-//         → bitswan-protected-proxy → daemon → workspaces (compound).
-// Inside each workspace: workspace_traefik on the left, networks stacked on
-// the right. Inside each network: containers stacked vertically. Hand-rolled
-// rather than dagre because dagre's flat layout doesn't respect parent
-// grouping.
+// Layout: ELK (eclipse layout kernel) running the `layered` algorithm with LR
+// direction. ELK handles compound (parent-child) nodes natively — parents
+// auto-size from their children, so workspace/network/platform-traefik boxes
+// always wrap their contents exactly. We hand it the leaf dimensions, set the
+// hierarchy via children[], and let it return positions for every node.
 // -----------------------------------------------------------------------------
-const LEAF_W = 220;
-const LEAF_H = 64;
+const LEAF_W = 230;
+const LEAF_H = 76;
 const CLOUD_W = 200, CLOUD_H = 110;
-const COL_GAP = 80;   // horizontal gap between top-level columns
-const ROW_GAP = 24;   // vertical gap between siblings stacking in a column
-const WS_INNER_X = 24, WS_INNER_TOP = 38, WS_INNER_BOTTOM = 18;
-const NET_INNER_X = 14, NET_INNER_TOP = 30, NET_INNER_BOTTOM = 12;
-const WS_INNER_GAP = 26;
-const PT_INNER_X = 18, PT_INNER_TOP = 32, PT_INNER_BOTTOM = 14;
 
-function layout(nodes /*, edges */) {
+// Recursively build the ELK graph from React Flow nodes. ELK's `children`
+// scheme is the canonical compound-node representation; positions returned
+// are absolute to the parent.
+function buildElkTree(nodes, edges, parentId) {
   const groupKinds = new Set(['workspace', 'network', 'platform_traefik']);
-  const childrenOf = (parentId) => nodes.filter((n) => n.parentNode === parentId);
-  const positions = new Map();
-  const sizes = new Map();
-
-  // -------- Pass 1: lay out container leaves inside each network. -------------
-  const networks = nodes.filter((n) => n.data.kind === 'network');
-  for (const net of networks) {
-    const kids = childrenOf(net.id);
-    let y = NET_INNER_TOP;
-    for (const k of kids) {
-      positions.set(k.id, { x: NET_INNER_X, y });
-      sizes.set(k.id, { w: LEAF_W, h: LEAF_H });
-      y += LEAF_H + ROW_GAP;
-    }
-    const inner = y - ROW_GAP;
-    sizes.set(net.id, {
-      w: LEAF_W + NET_INNER_X * 2,
-      h: Math.max(LEAF_H + NET_INNER_TOP + NET_INNER_BOTTOM, inner + NET_INNER_BOTTOM),
-    });
-  }
-
-  // -------- Pass 2: lay out each workspace internally. ------------------------
-  // workspace_traefik on the left, networks stacked vertically to the right.
-  const workspaces = nodes.filter((n) => n.data.kind === 'workspace');
-  for (const ws of workspaces) {
-    const kids = childrenOf(ws.id);
-    const wstraefik = kids.find((k) => k.data.kind === 'workspace_traefik');
-    const wsNetworks = kids.filter((k) => k.data.kind === 'network');
-
-    let netColX = WS_INNER_X;
-    if (wstraefik) {
-      sizes.set(wstraefik.id, { w: LEAF_W, h: LEAF_H });
-      positions.set(wstraefik.id, { x: WS_INNER_X, y: WS_INNER_TOP });
-      netColX = WS_INNER_X + LEAF_W + WS_INNER_GAP;
-    }
-
-    let netY = WS_INNER_TOP;
-    let netColW = 0;
-    for (const net of wsNetworks) {
-      const ns = sizes.get(net.id);
-      positions.set(net.id, { x: netColX, y: netY });
-      netY += ns.h + ROW_GAP;
-      if (ns.w > netColW) netColW = ns.w;
-    }
-    const innerBottom = Math.max(
-      wstraefik ? (WS_INNER_TOP + LEAF_H) : 0,
-      netY - ROW_GAP
-    );
-    sizes.set(ws.id, {
-      w: netColX + netColW + WS_INNER_X,
-      h: innerBottom + WS_INNER_BOTTOM,
-    });
-  }
-
-  // -------- Pass 2b: lay out the platform-traefik compound box. ---------------
-  // Endpoints stack vertically inside; platform-traefik bbox wraps them.
-  const platformId = 'ingress:platform-traefik';
-  const platformEndpoints = nodes.filter(
-    (n) => n.data.kind === 'endpoint' && n.parentNode === platformId
-  );
-  let ptInnerY = PT_INNER_TOP;
-  for (const ep of platformEndpoints) {
-    positions.set(ep.id, { x: PT_INNER_X, y: ptInnerY });
-    sizes.set(ep.id, { w: LEAF_W, h: LEAF_H });
-    ptInnerY += LEAF_H + ROW_GAP;
-  }
-  const ptInnerBottom = ptInnerY - ROW_GAP;
-  sizes.set(platformId, {
-    w: LEAF_W + PT_INNER_X * 2,
-    h: Math.max(LEAF_H + PT_INNER_TOP + PT_INNER_BOTTOM, ptInnerBottom + PT_INNER_BOTTOM),
-  });
-
-  // -------- Pass 3: lay out the top-level LR chain. ---------------------------
-  // Columns (LR): cloud · platform-traefik (compound) · bitswan-protected-proxy
-  //              · daemon · workspaces (each is its own row in this column).
-  const cloudNode = nodes.find((n) => n.data.kind === 'cloud');
-  const proxyId = 'ingress:bitswan-protected-proxy';
-  const daemonId = 'ingress:daemon';
-
-  // Stack workspaces in their column.
-  let wsColW = 0, wsColH = 0;
-  workspaces.forEach((ws, i) => {
-    const ss = sizes.get(ws.id);
-    if (ss.w > wsColW) wsColW = ss.w;
-    positions.set(ws.id, { x: 0, y: wsColH });
-    wsColH += ss.h + (i === workspaces.length - 1 ? 0 : ROW_GAP);
-  });
-
-  // Column widths in LR order.
-  const ptSize = sizes.get(platformId);
-  const cloudW = CLOUD_W, cloudH = CLOUD_H;
-  const ptH = ptSize.h;
-  const colWidths = [cloudW, ptSize.w, LEAF_W, LEAF_W, wsColW];
-  const colHeights = [cloudH, ptH, LEAF_H, LEAF_H, wsColH];
-  const maxColH = Math.max(...colHeights);
-
-  const colXs = [];
-  let cursor = 0;
-  for (let i = 0; i < 5; i++) {
-    colXs.push(cursor);
-    cursor += colWidths[i] + COL_GAP;
-  }
-
-  // Cloud node (col 0).
-  if (cloudNode) {
-    positions.set(cloudNode.id, { x: colXs[0], y: (maxColH - cloudH) / 2 });
-    sizes.set(cloudNode.id, { w: cloudW, h: cloudH });
-  }
-  // platform-traefik compound (col 1).
-  positions.set(platformId, { x: colXs[1], y: (maxColH - ptH) / 2 });
-  // bitswan-protected-proxy (col 2), daemon (col 3).
-  [proxyId, daemonId].forEach((id, i) => {
-    const n = nodes.find((x) => x.id === id);
-    if (!n) return;
-    const cx = colXs[2 + i];
-    const cy = (maxColH - LEAF_H) / 2;
-    positions.set(id, { x: cx, y: cy });
-    sizes.set(id, { w: LEAF_W, h: LEAF_H });
-  });
-  // Workspaces (col 4), stacked.
-  let wsY = (maxColH - wsColH) / 2;
-  workspaces.forEach((ws) => {
-    const ss = sizes.get(ws.id);
-    positions.set(ws.id, { x: colXs[4], y: wsY });
-    wsY += ss.h + ROW_GAP;
-  });
-
-  // -------- Pass 4: convert to React Flow positions ---------------------------
-  // Children must be expressed relative to their parent.
-  return nodes.map((n) => {
+  const kids = nodes.filter((n) => (n.parentNode || null) === parentId);
+  return kids.map((n) => {
     const isGroup = groupKinds.has(n.data.kind);
-    let pos = positions.get(n.id) || { x: 0, y: 0 };
-    if (n.parentNode) {
-      // child positions are already PARENT-RELATIVE (set in passes 1 & 2),
-      // so no adjustment is needed here.
-    }
-    const out = { ...n, position: pos };
+    const node = { id: n.id };
     if (isGroup) {
-      const sz = sizes.get(n.id) || { w: 220, h: 100 };
-      out.style = { width: sz.w, height: sz.h };
+      node.layoutOptions = {
+        'elk.algorithm': 'layered',
+        'elk.direction': n.data.kind === 'network' ? 'DOWN' : 'RIGHT',
+        // Make ELK pack children tightly inside the parent rather than try to
+        // expand the parent to fill a column.
+        'elk.padding': n.data.kind === 'network'
+          ? '[top=28,left=14,bottom=14,right=14]'
+          : '[top=34,left=18,bottom=16,right=18]',
+        'elk.spacing.nodeNode': '18',
+      };
+      node.children = buildElkTree(nodes, edges, n.id);
+      // No fixed width/height — ELK derives them.
+    } else if (n.data.kind === 'cloud') {
+      node.width = CLOUD_W; node.height = CLOUD_H;
+    } else {
+      node.width = LEAF_W; node.height = LEAF_H;
+    }
+    return node;
+  });
+}
+
+async function elkLayout(nodes, edges) {
+  const graph = {
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '80',
+      'elk.spacing.nodeNode': '40',
+      'elk.spacing.edgeNode': '30',
+      'elk.spacing.componentComponent': '60',
+      'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+      'elk.padding': '[top=24,left=24,bottom=24,right=24]',
+      'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+    },
+    children: buildElkTree(nodes, edges, null),
+    edges: edges.map((e) => ({ id: e.id, sources: [e.source], targets: [e.target] })),
+  };
+  const out = await elk.layout(graph);
+
+  // Walk the result and flatten into { id → { x, y, w, h } } where positions
+  // are RELATIVE to the immediate parent (React Flow's convention for
+  // parentNode children).
+  const result = new Map();
+  const walk = (n, ax, ay) => {
+    if (n.id === 'root') {
+      (n.children || []).forEach((c) => walk(c, 0, 0));
+      return;
+    }
+    // ELK gives positions relative to the parent — perfect for React Flow.
+    result.set(n.id, { x: n.x || 0, y: n.y || 0, w: n.width, h: n.height });
+    (n.children || []).forEach((c) => walk(c, n.x || 0, n.y || 0));
+  };
+  walk(out, 0, 0);
+  return result;
+}
+
+function applyLayout(nodes, layoutMap) {
+  const groupKinds = new Set(['workspace', 'network', 'platform_traefik']);
+  return nodes.map((n) => {
+    const l = layoutMap.get(n.id);
+    if (!l) return { ...n, position: { x: 0, y: 0 } };
+    const out = { ...n, position: { x: l.x, y: l.y } };
+    if (groupKinds.has(n.data.kind)) {
+      out.style = { width: l.w, height: l.h };
     }
     return out;
   });
 }
+
 
 // -----------------------------------------------------------------------------
 // Detail panel
@@ -413,7 +341,9 @@ function NetworkMap() {
       .catch((e) => setErr(e.message));
   }, []);
 
-  const { nodes, edges } = useMemo(() => {
+  // Convert raw graph data into React Flow shapes. Positions are placeholder
+  // (0,0) here; the ELK pass below fills them in once.
+  const initial = useMemo(() => {
     if (!raw) return { nodes: [], edges: [] };
     const groupKinds = new Set(['workspace', 'network', 'platform_traefik']);
     const typeFor = (kind) => {
@@ -421,7 +351,7 @@ function NetworkMap() {
       if (groupKinds.has(kind)) return 'group';
       return 'base';
     };
-    const initialNodes = raw.nodes.map((n) => ({
+    const nodes = raw.nodes.map((n) => ({
       id: n.id,
       data: n,
       type: typeFor(n.kind),
@@ -431,7 +361,7 @@ function NetworkMap() {
       selectable: true,
       position: { x: 0, y: 0 },
     }));
-    const initialEdges = raw.edges.map((e, i) => ({
+    const edges = raw.edges.map((e, i) => ({
       id: `e${i}-${e.source}-${e.target}`,
       source: e.source,
       target: e.target,
@@ -446,12 +376,35 @@ function NetworkMap() {
       markerEnd: { type: MarkerType.ArrowClosed, color: e.kind === 'chain' ? '#F59E0B' : (e.kind === 'route' ? '#60A5FA' : '#CBD5E1') },
       type: 'smoothstep',
     }));
-    return { nodes: layout(initialNodes, initialEdges), edges: initialEdges };
+    return { nodes, edges };
   }, [raw]);
 
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState([]);
-  useEffect(() => { setRfNodes(nodes); setRfEdges(edges); }, [nodes, edges, setRfNodes, setRfEdges]);
+
+  // ELK lays the graph out asynchronously. Run it whenever the raw data
+  // changes; until it completes we render at placeholder positions (which
+  // React Flow happily shows as a stack at the origin — the fitView on
+  // mount only triggers after positions arrive).
+  useEffect(() => {
+    if (!initial.nodes.length) {
+      setRfNodes([]); setRfEdges([]); return;
+    }
+    let cancelled = false;
+    elkLayout(initial.nodes, initial.edges).then((map) => {
+      if (cancelled) return;
+      setRfNodes(applyLayout(initial.nodes, map));
+      setRfEdges(initial.edges);
+    }).catch((e) => {
+      if (cancelled) return;
+      // Layout failed — fall back to unpositioned so the user sees SOMETHING
+      // and we can debug from the console rather than silently blanking.
+      console.error('ELK layout failed:', e);
+      setRfNodes(initial.nodes);
+      setRfEdges(initial.edges);
+    });
+    return () => { cancelled = true; };
+  }, [initial, setRfNodes, setRfEdges]);
 
   const onNodeClick = useCallback((_, n) => {
     if (n.data.kind === 'cloud') {
