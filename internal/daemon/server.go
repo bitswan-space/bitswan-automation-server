@@ -345,6 +345,8 @@ func (s *Server) Run() error {
 		reconcileTraefikProtected()
 		// Admin oauth2-proxy in front of the daemon for bailey.
 		setupProtectedRoutes(serverConfig.Domain, serverConfig.ProtectedHostnameDomain())
+		// One-shot migration: pre-split endpoints get their inner pair.
+		migrateInnerHostRoutes()
 		// MFA gate (TOTP + device cookie + chrome wrap).
 		if err := startMFAGate(); err != nil {
 			fmt.Printf("Warning: MFA gate failed to start: %v\n", err)

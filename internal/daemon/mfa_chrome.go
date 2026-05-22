@@ -24,28 +24,26 @@ const (
 
 // shouldWrapWithChrome returns true for browser-style HTML fetches
 // that the chrome wrap should render. The wrap fires on top-level
-// navigations and is suppressed in two situations:
+// browser navigations only — anything loaded inside a frame (our
+// wrap iframe, an upstream app's internal iframe, an embedded
+// preview, etc.) passes straight through.
 //
-//  1. The URL carries the `_bailey_iframe=1` marker — we're inside
-//     the wrap's own iframe, the inner content is the upstream
-//     service and must not be wrapped again.
+// We must work for arbitrary upstream apps without rewriting their
+// links, so we can't rely on the URL carrying our `_bailey_iframe`
+// marker (it survives the very first hop into the wrap iframe but
+// any plain `<a href="/foo">` click inside the upstream app drops
+// it). The reliable signal is Sec-Fetch-Dest, set by the browser
+// per-request to describe the destination context:
 //
-//  2. The Referer carries that marker — the request originates from
-//     within the wrap iframe. This catches the upstream service's
-//     own internal iframes (e.g. code-server's webviews) which would
-//     otherwise come in with `Sec-Fetch-Dest: iframe` and no marker,
-//     visually indistinguishable from a fresh top-level navigation.
-//     If the request was provoked by a page we already wrapped, we
-//     don't wrap again.
+//   - "document" → top-level navigation tab; wrap it.
+//   - "iframe" / "frame" → loaded inside a frame; do NOT wrap, the
+//     wrap is already the parent frame (or it's an upstream app's
+//     own internal iframe, which we have no business decorating).
+//   - "" (header absent — very old browser, curl, etc.) → fall back
+//     to the URL marker: wrap unless `_bailey_iframe=1` is set.
 //
-// We deliberately do NOT use Sec-Fetch-Dest alone as a discriminator:
-// browsers send `iframe` even for the top-level URL when the user
-// navigated to it from a tab where that hostname was previously
-// embedded somewhere — which would otherwise leave the user staring
-// at the upstream service with no wrap.
-//
-// Non-HTML accept (CSS/JS/images) and non-GET requests are excluded
-// so subresources and form posts pass through.
+// Non-HTML accepts (CSS/JS/images) and non-GET requests are
+// excluded so subresources and form posts pass through unchanged.
 func shouldWrapWithChrome(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
@@ -53,42 +51,54 @@ func shouldWrapWithChrome(r *http.Request) bool {
 	if !strings.Contains(r.Header.Get("Accept"), "text/html") {
 		return false
 	}
-	if r.URL.Query().Get(iframeMarkerQueryKey) != "" {
+	switch r.Header.Get("Sec-Fetch-Dest") {
+	case "document":
+		return true
+	case "iframe", "frame", "embed", "object":
 		return false
 	}
-	if ref := r.Header.Get("Referer"); ref != "" && strings.Contains(ref, iframeMarkerQueryKey+"=1") {
-		return false
-	}
-	return true
+	// No Sec-Fetch-Dest (legacy browser / non-browser client).
+	// Fall back to the URL marker: wrap unless it's the iframe load.
+	return r.URL.Query().Get(iframeMarkerQueryKey) == ""
 }
 
 func serveBaileyChrome(w http.ResponseWriter, r *http.Request) {
 	email, groups := identityFromHeaders(r)
-	host := requestEndpointHost(r)
+	host := requestEndpointHost(r) // outer host
 
-	q := r.URL.Query()
-	q.Set(iframeMarkerQueryKey, "1")
-	iframePath := r.URL.Path
-	if rq := q.Encode(); rq != "" {
-		iframePath += "?" + rq
+	// The iframe always loads the paired inner-subdomain at the same
+	// path the user requested. We append the original path/query so
+	// deep links (e.g. /bailey/devices) land on the right page inside
+	// the iframe instead of the inner host's root.
+	innerHost := toInnerHost(host)
+	innerURL := "https://" + innerHost + r.URL.Path
+	if r.URL.RawQuery != "" {
+		innerURL += "?" + r.URL.RawQuery
 	}
 	if r.URL.Fragment != "" {
-		iframePath += "#" + r.URL.Fragment
+		innerURL += "#" + r.URL.Fragment
 	}
 
 	// The Share button is only shown to owners — non-owners have no
 	// authority to change sharing rules, so the button would be a
 	// dead end. roleFor returns "" if the endpoint isn't registered
-	// (which can happen for bailey-admin pre-bootstrap); treat that
-	// as "no Share button" to be safe.
+	// (which can happen for bailey pre-bootstrap); treat that as "no
+	// Share button" to be safe. ACL is keyed by the outer host.
 	isOwner := false
 	if role, _ := roleFor(host, email, groups); role == roleOwner {
 		isOwner = true
 	}
 
+	// CSP pins the iframe to exactly the paired inner subdomain.
+	// Without this an upstream app could (via JS) redirect the iframe
+	// to a third-party origin and the "Protected by Bailey" bar would
+	// hover over content the bailey has no authority over.
+	csp := "frame-src https://" + innerHost + "; default-src 'none'; " +
+		"style-src 'unsafe-inline'; img-src 'self' data:; font-src data:"
+	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
-	fmt.Fprint(w, baileyChromeHTML(email, host, iframePath, isOwner))
+	fmt.Fprint(w, baileyChromeHTML(email, host, innerURL, isOwner))
 }
 
 // serverDisplayName returns the friendly name of the bailey

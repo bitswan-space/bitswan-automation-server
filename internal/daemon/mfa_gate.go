@@ -38,11 +38,29 @@ func startMFAGate() error {
 			r.Host = h
 		}
 	}
-	// Strip iframe-blocking headers from upstream responses + drop CSP
-	// frame-ancestors so the chrome wrap can embed the content.
+	// Two responsibilities on the inner content:
+	//   1. Strip iframe-blocking headers so the wrap can embed it.
+	//   2. Inject a strict CSP that pins the inner content to the
+	//      bailey domain — the app inside the iframe cannot fetch
+	//      resources from arbitrary third-party origins, and cannot
+	//      be framed by anything except the paired outer wrap.
+	// The CSP applies only to HTML docs (it's a per-document policy);
+	// for JS/CSS/images we just strip frame headers and leave the
+	// payload alone.
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("X-Frame-Options")
-		if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
+		host := requestEndpointHost(resp.Request)
+		if !isInnerHost(host) {
+			// Not inner content — leave headers as the upstream sent.
+			return nil
+		}
+		ct := resp.Header.Get("Content-Type")
+		if strings.HasPrefix(ct, "text/html") {
+			resp.Header.Set("Content-Security-Policy", strictInnerCSP(host))
+		} else if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
+			// Non-HTML with its own CSP: at least drop frame-ancestors
+			// so the wrap stays able to embed (chrome ignores CSP on
+			// non-docs but Firefox/Safari are pickier).
 			resp.Header.Set("Content-Security-Policy", stripCSPFrameAncestors(csp))
 		}
 		return nil
@@ -159,6 +177,9 @@ func enforceEndpointACL(w http.ResponseWriter, r *http.Request, email string, gr
 	if host == "" {
 		return true
 	}
+	// ACL state is keyed by the OUTER hostname. Inner-subdomain
+	// requests look up against the same row.
+	host = toOuterHost(host)
 	if isBaileyHost(host) {
 		// Register endpoint row on first sign-in so audit / share
 		// pages have an owner to attribute to, but don't gate.
@@ -193,8 +214,11 @@ func enforceEndpointACL(w http.ResponseWriter, r *http.Request, email string, gr
 	return true
 }
 
+// isBaileyHost matches both the outer (bailey.<domain>) and inner
+// (bailey--inner.<domain>) subdomains of the bailey itself.
 func isBaileyHost(host string) bool {
-	return strings.HasPrefix(strings.ToLower(host), "bailey.")
+	h := strings.ToLower(host)
+	return strings.HasPrefix(h, "bailey.") || strings.HasPrefix(h, "bailey"+innerHostSuffix+".")
 }
 
 // requestEndpointHost returns the canonical hostname for ACL lookup.

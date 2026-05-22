@@ -338,30 +338,38 @@ func ensureOAuth2ProxyBinary() (string, error) {
 }
 
 // setupProtectedRoutes wires bailey.<domain> into the shared
-// protected-ingress chain. Same topology as any other workspace
-// endpoint: platform-traefik (priority 200) → bitswan-protected-proxy
-// → MFA gate + chrome wrap → traefik-protected → daemon docs server.
+// two-subdomain protected-ingress chain. The outer bailey hostname
+// gets the chrome wrap; the inner bailey--inner hostname routes
+// through to the daemon's docs server which renders the actual
+// bailey admin UI.
 //
 // One Keycloak client for everything (bitswan-protected-client); no
-// separate per-bailey oauth2-proxy. The redirect URI is registered
-// idempotently via AOC.
+// separate per-bailey oauth2-proxy. Both subdomains' callback URIs
+// are registered idempotently via AOC.
 func setupProtectedRoutes(domain, internalDomain string) {
-	hostname := "bailey." + domain
-	// (a) Make sure Keycloak accepts the callback URL.
-	if err := registerProtectedRedirectURI(hostname); err != nil {
-		fmt.Printf("Warning: AOC didn't accept the protected-client redirect URI for %s: %v\n", hostname, err)
+	outer := "bailey." + domain
+	inner := toInnerHost(outer)
+
+	if err := registerProtectedRedirectURI(outer); err != nil {
+		fmt.Printf("Warning: AOC didn't accept protected-client redirect URIs for %s/%s: %v\n", outer, inner, err)
 	}
-	// (b) Platform-traefik: bailey.<domain> → bitswan-protected-proxy
+	// OUTER → bitswan-protected-proxy (auth) → daemon (wrap HTML).
 	if err := traefikapi.AddRouteWithTraefikPriority(
-		hostname, "bitswan-protected-proxy:80", "", "letsencrypt", 200,
+		outer, "bitswan-protected-proxy:80", "", "letsencrypt", 200,
 	); err != nil {
-		fmt.Printf("Warning: register platform route for %s: %v\n", hostname, err)
+		fmt.Printf("Warning: register platform route for %s: %v\n", outer, err)
 	}
-	// (c) traefik-protected: bailey.<domain> → daemon docs server (8080)
+	// INNER → bitswan-protected-proxy (auth) → daemon (MFA gate + ACL)
+	//       → traefik-protected → daemon docs server (8080).
+	if err := traefikapi.AddRouteWithTraefikPriority(
+		inner, "bitswan-protected-proxy:80", "", "letsencrypt", 200,
+	); err != nil {
+		fmt.Printf("Warning: register platform route for %s: %v\n", inner, err)
+	}
 	if err := traefikapi.AddRouteWithTraefik(
-		hostname, "bitswan-automation-server-daemon:8080",
+		inner, "bitswan-automation-server-daemon:8080",
 		"http://traefik-protected:8080",
 	); err != nil {
-		fmt.Printf("Warning: register traefik-protected route for %s: %v\n", hostname, err)
+		fmt.Printf("Warning: register traefik-protected route for %s: %v\n", inner, err)
 	}
 }

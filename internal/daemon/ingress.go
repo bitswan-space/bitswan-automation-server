@@ -790,54 +790,75 @@ func isWorkspaceTraefikRunning(workspaceName string) bool {
 }
 
 // addRouteTraefik adds a route to Traefik.
-// If a workspace sub-traefik is running, uses two-tier routing (platform → sub-traefik → container).
-// Otherwise, adds the route directly to the platform traefik (single-tier).
+//
+// Two-subdomain protected-ingress topology — for hostname "foo.<domain>"
+// we register BOTH:
+//
+//   - foo.<domain>  (OUTER): platform-traefik → bitswan-protected-proxy
+//     → daemon (chrome-wrap HTML). No traefik-protected route. The
+//     daemon serves only the wrap on this hostname; no app content
+//     ever reaches it, so there's no way to get a "Protected by
+//     Bailey" bar over arbitrary cross-origin content.
+//
+//   - foo--inner.<domain>  (INNER): platform-traefik →
+//     bitswan-protected-proxy → daemon (MFA gate + ACL + CSP
+//     injection) → traefik-protected → workspace__traefik → service.
+//     The wrap iframe loads this URL. Direct visits work too; they
+//     just show the bare app behind the same oauth.
+//
+// req.Hostname must be the OUTER hostname. The inner pair is derived.
 func addRouteTraefik(req IngressAddRouteRequest, workspaceName string) error {
+	if isInnerHost(req.Hostname) {
+		return fmt.Errorf("addRouteTraefik: refusing to register inner hostname %q directly — pass the outer hostname; the inner pair is registered automatically", req.Hostname)
+	}
+	outer := req.Hostname
+	inner := toInnerHost(outer)
+
 	certResolver := ""
-	if !req.Mkcert && req.CertsDir == "" && !strings.HasSuffix(req.Hostname, ".localhost") {
+	if !req.Mkcert && req.CertsDir == "" && !strings.HasSuffix(outer, ".localhost") {
 		certResolver = "letsencrypt"
 	}
 
-	// Handle certificates
+	// TLS — both subdomains need a cert.
 	if req.Mkcert {
-		if err := traefikapi.InstallTLSCerts(req.Hostname, true, ""); err != nil {
-			return fmt.Errorf("failed to generate and install certificates: %w", err)
+		for _, h := range []string{outer, inner} {
+			if err := traefikapi.InstallTLSCerts(h, true, ""); err != nil {
+				return fmt.Errorf("failed to generate certs for %s: %w", h, err)
+			}
 		}
 	} else if req.CertsDir != "" {
-		if err := traefikapi.InstallTLSCerts(req.Hostname, false, req.CertsDir); err != nil {
-			return fmt.Errorf("failed to install certificates from directory: %w", err)
+		for _, h := range []string{outer, inner} {
+			if err := traefikapi.InstallTLSCerts(h, false, req.CertsDir); err != nil {
+				return fmt.Errorf("failed to install certs for %s: %w", h, err)
+			}
 		}
 	}
 
-	// Architecture: every internal endpoint is protected by default.
-	// Platform-traefik route → bitswan-protected-proxy (shared
-	// oauth2-proxy) → daemon's MFA gate (TOTP + device + chrome
-	// wrap) → traefik-protected → workspace's __traefik → service.
-	// The workspace's own traefik stays for docker-network
-	// isolation (it has the only routes onto the workspace's stage
-	// networks), but the public traefik never sees it directly.
 	if workspaceName != "" && isWorkspaceTraefikRunning(workspaceName) {
-		// (a) Route inside the workspace's own traefik: hostname → upstream container.
+		// INNER hostname carries the actual app content.
 		workspaceTraefikURL := traefikapi.GetWorkspaceTraefikBaseURL(workspaceName)
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, workspaceTraefikURL); err != nil {
-			return fmt.Errorf("failed to add route to workspace sub-traefik: %w", err)
+		if err := traefikapi.AddRouteWithTraefik(inner, req.Upstream, workspaceTraefikURL); err != nil {
+			return fmt.Errorf("failed to add inner route to workspace sub-traefik: %w", err)
 		}
-		// (b) Route inside traefik-protected: hostname → workspace__traefik:80.
 		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, workspaceTraefikUpstream, "http://traefik-protected:8080"); err != nil {
-			return fmt.Errorf("failed to add route to traefik-protected: %w", err)
+		if err := traefikapi.AddRouteWithTraefik(inner, workspaceTraefikUpstream, "http://traefik-protected:8080"); err != nil {
+			return fmt.Errorf("failed to add inner route to traefik-protected: %w", err)
 		}
-		// (c) Route inside platform-traefik: hostname → bitswan-protected-proxy.
-		//     Priority overrides the docker-label HostRegexp catch-all
-		//     that older workspace traefik containers ship with.
-		if err := traefikapi.AddRouteWithTraefikPriority(req.Hostname, "bitswan-protected-proxy:80", "", certResolver, 200); err != nil {
-			return fmt.Errorf("failed to add route to platform traefik: %w", err)
+		if err := traefikapi.AddRouteWithTraefikPriority(inner, "bitswan-protected-proxy:80", "", certResolver, 200); err != nil {
+			return fmt.Errorf("failed to add inner route to platform traefik: %w", err)
+		}
+		// OUTER hostname serves only the wrap (daemon, no traefik-protected hop).
+		if err := traefikapi.AddRouteWithTraefikPriority(outer, "bitswan-protected-proxy:80", "", certResolver, 200); err != nil {
+			return fmt.Errorf("failed to add outer route to platform traefik: %w", err)
 		}
 	} else {
-		// No workspace sub-traefik (e.g. bailey oauth2-proxy
-		// routes — direct daemon-side services). Route directly.
-		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, "", certResolver); err != nil {
-			return fmt.Errorf("failed to add route: %w", err)
+		// No workspace sub-traefik — single-tier route. Still split outer/inner
+		// so the two-subdomain wrap model holds for non-workspace endpoints.
+		if err := traefikapi.AddRouteWithTraefik(inner, req.Upstream, "", certResolver); err != nil {
+			return fmt.Errorf("failed to add inner route: %w", err)
+		}
+		if err := traefikapi.AddRouteWithTraefik(outer, "bitswan-protected-proxy:80", "", certResolver); err != nil {
+			return fmt.Errorf("failed to add outer route: %w", err)
 		}
 	}
 
