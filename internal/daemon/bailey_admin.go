@@ -1046,6 +1046,8 @@ function showDetails(n){
     side.innerHTML = html + '<p class="note">Infra node.</p>';
   }
 }`
+
+	case "siem":
 		pageTitle = "SIEM Integration"
 		pageContent = `
 <div class="card" style="margin-top:0;">
