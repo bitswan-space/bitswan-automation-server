@@ -19,24 +19,79 @@ import (
 // Everyone else without a device: pending-pair flow.
 
 const (
-	mfaGateListenAddr  = ":9080"
-	mfaGateUpstream    = "http://traefik-protected:80"
-	mfaGatePathPrefix  = "/2fa-gate"
-	gateOriginCookie   = "_bailey_origin"
+	mfaGateListenAddr = ":9080"
+	mfaGatePathPrefix = "/2fa-gate"
+	gateOriginCookie  = "_bailey_origin"
 )
 
-func startMFAGate() error {
-	upstream, err := url.Parse(mfaGateUpstream)
-	if err != nil {
-		return fmt.Errorf("parse upstream: %w", err)
+// upstreamForHost returns the URL the daemon should reverse-proxy this
+// inner-host request to. The MFA gate used to forward everything to a
+// dedicated traefik-protected container, but that was a pure hostname-
+// lookup hop the daemon could do itself. Now:
+//
+//   bailey--inner.<domain>       → http://localhost:8080  (daemon docs server)
+//   <workspace>--inner.<domain>  → http://<workspace>__traefik:80
+//
+// Returns nil for hostnames that aren't recognised — the proxy will
+// 502 in that case, which is the right behaviour: a request for an
+// unknown protected hostname should fail loudly, not silently route
+// somewhere wrong.
+func upstreamForHost(host string) *url.URL {
+	host = strings.ToLower(host)
+	if !isInnerHost(host) {
+		return nil
 	}
-	proxy := httputil.NewSingleHostReverseProxy(upstream)
-	orig := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		orig(r)
-		if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-			r.Host = h
+	outer := toOuterHost(host)
+	if isBaileyHost(outer) {
+		u, _ := url.Parse("http://localhost:8080")
+		return u
+	}
+	// Workspace hostname: <workspace>-<service>.<domain> (outer form).
+	// Drop the .<domain> tail to get the label, then trim back to a known workspace.
+	label, _, _ := strings.Cut(outer, ".")
+	ws := workspaceFromLabel(label)
+	if ws == "" {
+		return nil
+	}
+	u, _ := url.Parse("http://" + ws + "__traefik:80")
+	return u
+}
+
+// workspaceFromLabel resolves a hostname label like "bailey-e2e-editor"
+// to its workspace name ("bailey-e2e") by stripping the longest
+// service-name suffix.
+func workspaceFromLabel(label string) string {
+	parts := strings.Split(label, "-")
+	for i := len(parts) - 1; i > 0; i-- {
+		candidate := strings.Join(parts[:i], "-")
+		if isWorkspaceTraefikRunning(candidate) {
+			return candidate
 		}
+	}
+	return ""
+}
+
+func startMFAGate() error {
+	// Per-request Director — picks the upstream by hostname instead of
+	// pointing at a single fixed traefik-protected container.
+	proxy := &httputil.ReverseProxy{
+		Director: func(r *http.Request) {
+			host := requestEndpointHost(r)
+			up := upstreamForHost(host)
+			if up == nil {
+				// Force a 502 by pointing the request at an unreachable
+				// sentinel — the easiest way to surface "no upstream
+				// matches" without a separate code path.
+				r.URL.Scheme = "http"
+				r.URL.Host = "no-upstream.invalid"
+				return
+			}
+			r.URL.Scheme = up.Scheme
+			r.URL.Host = up.Host
+			if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+				r.Host = h
+			}
+		},
 	}
 	// Two responsibilities on the inner content:
 	//   1. Strip iframe-blocking headers so the wrap can embed it.
@@ -87,7 +142,7 @@ func startMFAGate() error {
 			fmt.Printf("MFA gate listener error: %v\n", err)
 		}
 	}()
-	fmt.Printf("MFA gate listening on %s, proxying %s\n", mfaGateListenAddr, mfaGateUpstream)
+	fmt.Printf("MFA gate listening on %s; upstreams resolved per-request by hostname\n", mfaGateListenAddr)
 	return nil
 }
 

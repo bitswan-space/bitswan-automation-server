@@ -360,16 +360,12 @@ func setupProtectedRoutes(domain, internalDomain string) {
 		fmt.Printf("Warning: register platform route for %s: %v\n", outer, err)
 	}
 	// INNER → bitswan-protected-proxy (auth) → daemon (MFA gate + ACL)
-	//       → traefik-protected → daemon docs server (8080).
+	//       → daemon docs server (8080, in-process). The daemon's MFA
+	// gate resolves the upstream by hostname now; no traefik-protected
+	// hop needed.
 	if err := traefikapi.AddRouteWithTraefikPriority(
 		inner, "bitswan-protected-proxy:80", "", "letsencrypt", 200,
 	); err != nil {
 		fmt.Printf("Warning: register platform route for %s: %v\n", inner, err)
-	}
-	if err := traefikapi.AddRouteWithTraefik(
-		inner, "bitswan-automation-server-daemon:8080",
-		"http://traefik-protected:8080",
-	); err != nil {
-		fmt.Printf("Warning: register traefik-protected route for %s: %v\n", inner, err)
 	}
 }

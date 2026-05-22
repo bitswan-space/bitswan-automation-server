@@ -99,7 +99,7 @@ const nodeTypes = { base: BaseNode, group: GroupNode };
 //
 // Three nested layers:
 //   • Top-level chain (LR): endpoints → platform-traefik → bitswan-protected-
-//     proxy → traefik-protected → workspaces.
+//     proxy → daemon (MFA+ACL) → workspaces.
 //   • Inside each workspace: workspace_traefik on the left, networks stacked
 //     vertically on the right.
 //   • Inside each network: containers stacked vertically.
@@ -173,12 +173,12 @@ function layout(nodes /*, edges */) {
 
   // -------- Pass 3: lay out the top-level LR chain. ---------------------------
   // Columns: endpoints (col 0), platform-traefik, bitswan-protected-proxy,
-  // traefik-protected, workspaces (each is its own row in this column).
+  // daemon (MFA+ACL), workspaces (each is its own row in this column).
   const endpoints = nodes.filter((n) => n.data.kind === 'endpoint');
   const ingressOrder = [
     'ingress:platform-traefik',
     'ingress:bitswan-protected-proxy',
-    'ingress:traefik-protected',
+    'ingress:daemon',
   ];
 
   // Stack endpoints in column 0.

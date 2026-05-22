@@ -835,14 +835,14 @@ func addRouteTraefik(req IngressAddRouteRequest, workspaceName string) error {
 	}
 
 	if workspaceName != "" && isWorkspaceTraefikRunning(workspaceName) {
-		// INNER hostname carries the actual app content.
+		// INNER hostname carries the actual app content. Route lives only
+		// in the workspace's own traefik now (and in platform-traefik for
+		// public ingress) — the daemon's MFA gate forwards directly to
+		// <workspace>__traefik:80 based on hostname, so the intermediate
+		// traefik-protected hop is gone.
 		workspaceTraefikURL := traefikapi.GetWorkspaceTraefikBaseURL(workspaceName)
 		if err := traefikapi.AddRouteWithTraefik(inner, req.Upstream, workspaceTraefikURL); err != nil {
 			return fmt.Errorf("failed to add inner route to workspace sub-traefik: %w", err)
-		}
-		workspaceTraefikUpstream := fmt.Sprintf("%s__traefik:80", workspaceName)
-		if err := traefikapi.AddRouteWithTraefik(inner, workspaceTraefikUpstream, "http://traefik-protected:8080"); err != nil {
-			return fmt.Errorf("failed to add inner route to traefik-protected: %w", err)
 		}
 		if err := traefikapi.AddRouteWithTraefikPriority(inner, "bitswan-protected-proxy:80", "", certResolver, 200); err != nil {
 			return fmt.Errorf("failed to add inner route to platform traefik: %w", err)

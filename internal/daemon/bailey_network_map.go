@@ -11,22 +11,15 @@ import (
 )
 
 // Bailey / Network map — server-wide graph of docker networks,
-// ingresses, endpoints, and containers. Rendered client-side with
-// Cytoscape.js; the daemon just publishes the graph data here.
+// ingresses, endpoints, and containers.
 //
 // Node kinds:
-//   ingress   — platform-traefik / bitswan-protected-proxy / traefik-protected
+//   ingress   — platform-traefik / bitswan-protected-proxy / daemon
 //   endpoint  — outer hostnames registered in the endpoints table
 //   workspace_traefik — per-workspace __traefik
 //   container — gitops/editor/dashboard/automation containers
 //   network   — docker bridge networks (bitswan_network, bitswan_protected_network,
 //               <workspace>-dev, <workspace>-staging, <workspace>-production)
-//
-// Edges:
-//   endpoint → ingress             (host routed by platform traefik)
-//   ingress  → workspace_traefik   (auth chain delivers traffic to workspace traefik)
-//   workspace_traefik → container  (workspace traefik routes to container)
-//   container ∈ network            (container attached to network — undirected, shown via the network's parent-of relation)
 
 type nmNode struct {
 	ID     string `json:"id"`
@@ -67,7 +60,7 @@ func buildNetworkMap() nmGraph {
 	ingresses := []struct{ id, label string }{
 		{"ingress:platform-traefik", "platform-traefik"},
 		{"ingress:bitswan-protected-proxy", "bitswan-protected-proxy"},
-		{"ingress:traefik-protected", "traefik-protected"},
+		{"ingress:daemon", "daemon (MFA + ACL)"},
 	}
 	for _, in := range ingresses {
 		nodes = append(nodes, nmNode{ID: in.id, Label: in.label, Kind: "ingress"})
@@ -75,7 +68,7 @@ func buildNetworkMap() nmGraph {
 	// Auth chain edges.
 	edges = append(edges,
 		nmEdge{Source: "ingress:platform-traefik", Target: "ingress:bitswan-protected-proxy", Kind: "chain", Label: "oauth"},
-		nmEdge{Source: "ingress:bitswan-protected-proxy", Target: "ingress:traefik-protected", Kind: "chain", Label: "MFA + ACL"},
+		nmEdge{Source: "ingress:bitswan-protected-proxy", Target: "ingress:daemon", Kind: "chain", Label: "MFA + ACL"},
 	)
 
 	// (2) Docker networks.
@@ -97,10 +90,10 @@ func buildNetworkMap() nmGraph {
 			ID: wsTraefikID, Label: ws + "__traefik",
 			Kind: "workspace_traefik", Parent: wsID, Workspace: ws,
 		})
-		// traefik-protected → workspace_traefik (the route that gets
-		// hit after the MFA gate hands off).
+		// daemon (MFA gate) → workspace_traefik. The gate's reverse
+		// proxy resolves the upstream from the request hostname.
 		edges = append(edges, nmEdge{
-			Source: "ingress:traefik-protected", Target: wsTraefikID,
+			Source: "ingress:daemon", Target: wsTraefikID,
 			Kind: "chain",
 		})
 
@@ -232,7 +225,7 @@ func isWorkspaceStageNet(n string) bool {
 
 func isInfraContainer(name string) bool {
 	switch name {
-	case "traefik", "bitswan-protected-proxy", "traefik-protected", "bitswan-automation-server-daemon":
+	case "traefik", "bitswan-protected-proxy", "bitswan-automation-server-daemon":
 		return true
 	}
 	return false

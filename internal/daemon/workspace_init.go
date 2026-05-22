@@ -1125,21 +1125,21 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 
 	homeDir := os.Getenv("HOME")
 	vpnPath := filepath.Join(homeDir, ".config", "bitswan", "vpn")
-	vpnTraefikPath := filepath.Join(homeDir, ".config", "bitswan", "traefik-protected")
 	hostHome := os.Getenv("HOST_HOME")
 	hostVpnPath := vpnPath
-	hostVpnTraefikPath := vpnTraefikPath
 	if hostHome != "" {
 		hostVpnPath = filepath.Join(hostHome, ".config", "bitswan", "vpn")
-		hostVpnTraefikPath = filepath.Join(hostHome, ".config", "bitswan", "traefik-protected")
 	}
+	_ = hostVpnPath
 	if err := os.MkdirAll(vpnPath, 0700); err != nil {
 		fmt.Fprintf(writer, "Warning: create %s: %v\n", vpnPath, err)
 		return
 	}
 
-	// Per-server CA + wildcard cert for *.bswn.internal traffic that the
-	// ZTNA tunnel routes to traefik-protected.
+	// Per-server CA + wildcard cert for *.bswn.internal traffic. Kept
+	// for historical compatibility with workspace traefiks that consume
+	// the cert from the CA; the daemon itself no longer reverse-proxies
+	// to a TLS-terminating internal traefik.
 	caMgr := vpn.NewCAManager(vpnPath)
 	wsServerName := "BitSwan"
 	if serverConfig != nil && serverConfig.Name != "" {
@@ -1171,37 +1171,10 @@ func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 
 	docker.EnsureDockerIPv6Network("bitswan_protected_network", vpn.ServiceSubnet, verbose)
 
-	os.MkdirAll(vpnTraefikPath, 0755)
-	// Traefik v3 ignores tls.* in the static config — the defaultCertificate
-	// must live in a dynamic config loaded by the file provider.
-	traefikYml := `entryPoints:
-  web:
-    address: ":80"
-  websecure:
-    address: ":443"
-api:
-  insecure: true
-providers:
-  rest:
-    insecure: true
-  file:
-    filename: /etc/traefik/tls-config.yml
-    watch: true
-`
-	tlsConfigYml := `tls:
-  stores:
-    default:
-      defaultCertificate:
-        certFile: /certs/tls.crt
-        keyFile: /certs/tls.key
-`
-	os.WriteFile(filepath.Join(vpnTraefikPath, "traefik.yml"), []byte(traefikYml), 0644)
-	os.WriteFile(filepath.Join(vpnTraefikPath, "tls-config.yml"), []byte(tlsConfigYml), 0644)
-	hostCaDir := filepath.Join(hostVpnPath, "ca")
-	vpnTraefikCompose, _ := dockercompose.CreateVPNTraefikDockerComposeFile(hostVpnTraefikPath, hostCaDir)
-	if vpnTraefikCompose != "" {
-		dockerComposeUpQuiet("traefik-protected", vpnTraefikCompose, vpnTraefikPath)
-	}
+	// traefik-protected used to live here. The daemon's MFA gate now
+	// resolves upstream hostnames itself, so the second internal traefik
+	// is no longer needed; migrateInnerHostRoutes removes any leftover
+	// container at boot.
 
 	serverConfig, _ = cfg.LoadConfig()
 	if serverConfig != nil {
