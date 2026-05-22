@@ -121,10 +121,18 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 func updateServices(workspaceName, editorImage, dashboardImage, kafkaImage, zookeeperImage, couchdbImage string, staging, trustCA bool) error {
 	// Always try to update editor service if enabled
 	fmt.Println("Checking editor service...")
-	if err := updateEditorService(workspaceName, editorImage, dashboardImage, staging, trustCA); err != nil {
+	if err := updateEditorService(workspaceName, editorImage, staging, trustCA); err != nil {
 		fmt.Printf("Warning: failed to update editor service: %v\n", err)
 	} else {
 		fmt.Println("Editor service updated successfully!")
+	}
+
+	// Always try to update dashboard service if enabled
+	fmt.Println("Checking dashboard service...")
+	if err := updateDashboardService(workspaceName, dashboardImage, staging, trustCA); err != nil {
+		fmt.Printf("Warning: failed to update dashboard service: %v\n", err)
+	} else {
+		fmt.Println("Dashboard service updated successfully!")
 	}
 
 	// Always try to update Kafka service if enabled
@@ -147,7 +155,7 @@ func updateServices(workspaceName, editorImage, dashboardImage, kafkaImage, zook
 }
 
 // updateEditorService updates the editor service for a specific workspace
-func updateEditorService(workspaceName, editorImage, dashboardImage string, staging bool, trustCA bool) error {
+func updateEditorService(workspaceName, editorImage string, staging bool, trustCA bool) error {
 	editorService, err := services.NewEditorService(workspaceName)
 	if err != nil {
 		return fmt.Errorf("failed to create Editor service: %w", err)
@@ -163,17 +171,13 @@ func updateEditorService(workspaceName, editorImage, dashboardImage string, stag
 		return fmt.Errorf("failed to stop current editor container: %w", err)
 	}
 
-	// Fix permissions before updating (daemon runs as root, so volumes may be root-owned)
 	fmt.Println("Fixing volume permissions...")
 	if err := fixEditorPermissions(workspaceName); err != nil {
-		// Don't continue if permissions fix fails - this will cause container startup issues
 		return fmt.Errorf("failed to fix permissions: %w", err)
 	}
 
-	// Regenerate the entire docker-compose file to ensure all config changes are applied
-	// This handles image updates, dev mode settings, certificates, etc.
 	fmt.Println("Regenerating editor docker-compose configuration...")
-	if err := editorService.RegenerateDockerCompose(editorImage, dashboardImage, staging, trustCA); err != nil {
+	if err := editorService.RegenerateDockerCompose(editorImage, staging, trustCA); err != nil {
 		return fmt.Errorf("failed to regenerate docker-compose file: %w", err)
 	}
 
@@ -185,6 +189,37 @@ func updateEditorService(workspaceName, editorImage, dashboardImage string, stag
 	fmt.Println("Waiting for editor to be ready...")
 	if err := editorService.WaitForEditorReady(); err != nil {
 		return fmt.Errorf("editor failed to start properly: %w", err)
+	}
+
+	return nil
+}
+
+// updateDashboardService updates the workspace-dashboard service for a specific workspace.
+// Mirrors updateEditorService: stop, fix permissions, regenerate compose, start.
+func updateDashboardService(workspaceName, dashboardImage string, staging bool, trustCA bool) error {
+	dashboardService, err := services.NewDashboardService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+
+	if !dashboardService.IsEnabled() {
+		fmt.Printf("Dashboard service is not enabled for workspace '%s', skipping update\n", workspaceName)
+		return nil
+	}
+
+	fmt.Println("Stopping current dashboard container...")
+	if err := dashboardService.StopContainer(); err != nil {
+		return fmt.Errorf("failed to stop current dashboard container: %w", err)
+	}
+
+	fmt.Println("Regenerating dashboard docker-compose configuration...")
+	if err := dashboardService.RegenerateDockerCompose(dashboardImage, staging, trustCA); err != nil {
+		return fmt.Errorf("failed to regenerate dashboard docker-compose file: %w", err)
+	}
+
+	fmt.Println("Starting dashboard container...")
+	if err := dashboardService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start dashboard container: %w", err)
 	}
 
 	return nil

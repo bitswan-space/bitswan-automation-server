@@ -11,6 +11,7 @@ import (
 type WorkspaceMetadata struct {
 	Domain             string  `yaml:"domain"`
 	EditorURL          *string `yaml:"editor-url,omitempty"`
+	DashboardURL       *string `yaml:"dashboard-url,omitempty"`
 	GitopsURL          string  `yaml:"gitops-url"`
 	GitopsSecret       string  `yaml:"gitops-secret"`
 	WorkspaceId        *string `yaml:"workspace_id,omitempty"`

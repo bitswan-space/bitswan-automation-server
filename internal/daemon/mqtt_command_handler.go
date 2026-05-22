@@ -25,6 +25,7 @@ type WorkspaceCreateRequest struct {
 	Verbose                bool   `json:"verbose,omitempty"`
 	MkCerts                bool   `json:"mkcerts,omitempty"`
 	NoIde                  bool   `json:"no-ide,omitempty"`
+	NoDashboard            bool   `json:"no-dashboard,omitempty"`
 	SetHosts               bool   `json:"set-hosts,omitempty"`
 	Local                  bool   `json:"local,omitempty"`
 	GitopsImage            string `json:"gitops-image,omitempty"`
@@ -102,6 +103,9 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	}
 	if req.NoIde {
 		args = append(args, "--no-ide")
+	}
+	if req.NoDashboard {
+		args = append(args, "--no-dashboard")
 	}
 	if req.SetHosts {
 		args = append(args, "--set-hosts")

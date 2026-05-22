@@ -3,6 +3,7 @@ package dockerhub
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -24,15 +25,33 @@ func GetLatestDockerHubVersion(url string) (string, error) {
 	if err != nil {
 		return "latest", err
 	}
-	results := data["results"].([]interface{})
+	// Docker Hub returns `{"results": [...]}` on success, but a missing or
+	// renamed repository can return `{}` / an error envelope / a non-200
+	// body. Tolerate that instead of panicking on the type assertion —
+	// callers expect an error, not a goroutine crash.
+	rawResults, ok := data["results"]
+	if !ok {
+		return "latest", fmt.Errorf("docker hub response missing 'results' field (status %d, url %s)", resp.StatusCode, url)
+	}
+	results, ok := rawResults.([]interface{})
+	if !ok {
+		return "latest", fmt.Errorf("docker hub 'results' is not an array (url %s)", url)
+	}
+
 	pattern := `^\d{4}-\d+-git-[a-fA-F0-9]+$`
-	// Compile the regex pattern once, before the loop
 	re := regexp.MustCompile(pattern)
 
 	for _, result := range results {
-		tag := result.(map[string]interface{})["name"].(string)
-		if re.MatchString(tag) {
-			return tag, nil
+		entry, ok := result.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, ok := entry["name"].(string)
+		if !ok {
+			continue
+		}
+		if re.MatchString(name) {
+			return name, nil
 		}
 	}
 	return "latest", errors.New("No valid version found")
