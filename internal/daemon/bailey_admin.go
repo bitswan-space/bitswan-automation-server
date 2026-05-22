@@ -207,6 +207,16 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
+	case r.URL.Path == "/bailey/api/admin/devices":
+		if r.Method == http.MethodGet {
+			handleAdminDevicesAPI(w, r)
+			return
+		}
+	case r.URL.Path == "/bailey/api/admin/devices/remove":
+		if r.Method == http.MethodPost {
+			handleAdminDeviceRemoveAPI(w, r)
+			return
+		}
 	case r.URL.Path == "/bailey/siem" || r.URL.Path == "/bailey/siem/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
@@ -658,57 +668,133 @@ document.getElementById('self-approve-form').addEventListener('submit', function
 });`
 
 	case "approvals":
-		pageTitle = "Device approvals"
+		pageTitle = "Users & devices"
 		pageContent = `
 <div class="card" style="margin-top:0;">
-  <h2>Pending device approvals</h2>
-  <p class="note">Someone signing in from a new browser sees a 6-digit code. Ask them to read it to you, type it below, and approve.</p>
-  <div id="approvals-list"><p class="note">Loading…</p></div>
-</div>`
+  <p class="note">Every user that's ever paired a browser with this server. Expand a user to see their devices and last-active times. Pending pair requests show up inline next to their owner; revoking a device immediately invalidates its session.</p>
+  <div id="ud-tree"><p class="note">Loading…</p></div>
+</div>
+<style>
+  .ud-user { border:1px solid #E4E4E7; border-radius:10px; margin:14px 0; background:#fff; overflow:hidden; }
+  .ud-user-head { display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer; user-select:none; }
+  .ud-user-head:hover { background:#FAFAFA; }
+  .ud-caret { color:#71717A; font-size:12px; width:14px; flex-shrink:0; transition:transform 0.12s; }
+  .ud-user.open .ud-caret { transform: rotate(90deg); }
+  .ud-avatar { width:32px; height:32px; border-radius:50%; background:#093DF5; color:#fff; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:600; flex-shrink:0; }
+  .ud-meta { flex:1; min-width:0; }
+  .ud-meta .email { font-size:14px; font-weight:500; color:#18181B; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ud-meta .sub { font-size:12px; color:#71717A; margin-top:2px; }
+  .ud-chip { font-size:11px; padding:2px 8px; border-radius:999px; background:#F4F4F5; color:#3F3F46; flex-shrink:0; }
+  .ud-chip.alert { background:#FEE2E2; color:#991B1B; }
+  .ud-chip.totp  { background:#DBEAFE; color:#1E40AF; }
+  .ud-body { border-top:1px solid #F4F4F5; padding:8px 16px 14px; display:none; }
+  .ud-user.open .ud-body { display:block; }
+  .ud-dev { display:flex; align-items:center; gap:12px; padding:8px 4px; border-bottom:1px solid #F4F4F5; }
+  .ud-dev:last-child { border-bottom:none; }
+  .ud-dev-name { flex:1; min-width:0; font-size:13px; color:#18181B; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ud-dev-name .cur { color:#093DF5; font-weight:600; margin-left:6px; }
+  .ud-dev-when { font-size:12px; color:#71717A; flex-shrink:0; min-width:160px; text-align:right; }
+  .ud-rm-btn { color:#b00020; background:none; border:1px solid transparent; padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+  .ud-rm-btn:hover { background:#FEE2E2; border-color:#FECACA; }
+  .ud-pp-row { background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:10px 12px; margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .ud-pp-code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:18px; letter-spacing:3px; background:#fff; padding:4px 10px; border-radius:6px; border:1px solid #FDE68A; }
+  .ud-pp-form { display:flex; gap:6px; align-items:center; flex:1; min-width:240px; }
+  .ud-pp-form input { font-size:16px; letter-spacing:3px; padding:6px 8px; width:110px; font-family:ui-monospace,monospace; }
+  .ud-pp-form button { background:#093DF5; color:#fff; border:0; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:13px; }
+  .ud-pp-status { font-size:12px; color:#71717A; }
+</style>`
 		pageScript = `
-function loadApprovals() {
-  fetch('/bailey/api/approvals', {credentials:'same-origin'}).then(r => r.json()).then(d => {
-    var box = document.getElementById('approvals-list');
-    if (!d.pending || !d.pending.length) {
-      box.innerHTML = '<p class="note">No pending requests. This page auto-refreshes when one arrives.</p>'; return;
-    }
-    box.innerHTML = d.pending.map(function(p){
-      var age = p.age_seconds; var ageStr = age < 60 ? (age+'s ago') : (Math.floor(age/60)+'m '+(age%60)+'s ago');
-      return '<div style="border:1px solid #E4E4E7;border-radius:8px;padding:16px;margin:12px 0;background:#fff;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:baseline;">' +
-          '<div><b>' + escapeHTML(p.email) + '</b></div>' +
-          '<div class="note">requested ' + ageStr + '</div>' +
-        '</div>' +
-        '<form class="approve-form" data-email="' + escapeHTML(p.email) + '" style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
-          '<label style="font-size:13px;color:#3F3F46;">Code shown on their device:</label>' +
-          '<input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required style="font-size:18px;letter-spacing:4px;padding:6px 8px;width:120px;">' +
-          '<button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;border-radius:4px;font-size:14px;cursor:pointer;">Approve</button>' +
-          '<span class="approve-status note" style="margin-left:6px;"></span>' +
-        '</form></div>';
-    }).join('');
-    box.querySelectorAll('.approve-form').forEach(function(f){
-      f.addEventListener('submit', function(e){
-        e.preventDefault();
-        var email = f.getAttribute('data-email');
-        var code = f.querySelector('input[name=code]').value.trim();
-        var status = f.querySelector('.approve-status');
-        status.textContent = 'Approving…'; status.style.color = '#71717A';
-        var body = new URLSearchParams(); body.append('email', email); body.append('code', code);
-        fetch('/2fa-gate/api/approve', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
-          .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
-          .then(function(res){
-            if (res.ok) { status.textContent = 'Approved.'; status.style.color = '#0a7d24'; setTimeout(loadApprovals, 600); }
-            else { status.textContent = (res.d && res.d.error) || 'Failed.'; status.style.color = '#b00020'; }
-          }).catch(function(e){ status.textContent = 'Network error: '+e; status.style.color='#b00020'; });
-      });
+function escapeHTML(s){ return String(s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+function initials(s){ s=String(s||'').replace(/[^a-zA-Z0-9]/g,' ').trim(); if(!s) return '?'; var p=s.split(/\s+/); return (p.length===1 ? p[0].slice(0,2) : p[0][0]+p[1][0]).toUpperCase(); }
+function ago(sec){ if(sec<60) return sec+'s ago'; if(sec<3600) return Math.floor(sec/60)+'m ago'; if(sec<86400) return Math.floor(sec/3600)+'h ago'; return Math.floor(sec/86400)+'d ago'; }
+function fmtTs(ts){
+  if(!ts) return '—';
+  var d = new Date(ts);
+  if(isNaN(d)) return ts;
+  var diff = Math.floor((Date.now()-d.getTime())/1000);
+  if(diff>=0 && diff<86400*30) return ago(diff);
+  return d.toISOString().slice(0,16).replace('T',' ');
+}
+function renderTree(){
+  fetch('/bailey/api/admin/devices', {credentials:'same-origin'})
+    .then(function(r){ return r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)); })
+    .then(function(d){
+      var box = document.getElementById('ud-tree');
+      var users = (d.users||[]).concat(d.pending_pairs_orphan||[]);
+      if (!users.length) { box.innerHTML = '<p class="note">No users have paired a browser with this server yet.</p>'; return; }
+      box.innerHTML = users.map(function(u){
+        var pp = u.pending_pair;
+        var chips = '';
+        if (pp) chips += '<span class="ud-chip alert">Pending pair</span>';
+        if (u.totp_enrolled) chips += '<span class="ud-chip totp">TOTP</span>';
+        chips += '<span class="ud-chip">'+(u.devices ? u.devices.length : 0)+' device'+((u.devices||[]).length===1?'':'s')+'</span>';
+        var devices = (u.devices||[]).map(function(dv){
+          var cur = dv.is_current ? '<span class="cur">(this browser)</span>' : '';
+          return '<div class="ud-dev">' +
+            '<div class="ud-dev-name">'+escapeHTML(dv.name)+cur+'</div>' +
+            '<div class="ud-dev-when">paired '+fmtTs(dv.paired_at)+' · seen '+fmtTs(dv.last_seen)+'</div>' +
+            '<button class="ud-rm-btn" data-email="'+escapeHTML(u.email)+'" data-id="'+escapeHTML(dv.id)+'">Revoke</button>' +
+          '</div>';
+        }).join('') || '<p class="note" style="margin:8px 4px;">No paired devices.</p>';
+        var ppHtml = '';
+        if (pp) {
+          ppHtml = '<div class="ud-pp-row">' +
+            '<div>Expected code: <span class="ud-pp-code">'+escapeHTML(pp.code)+'</span></div>' +
+            '<form class="ud-pp-form" data-email="'+escapeHTML(u.email)+'">' +
+              '<input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required placeholder="000000">' +
+              '<button type="submit">Approve</button>' +
+              '<span class="ud-pp-status"></span>' +
+            '</form></div>';
+        }
+        return '<div class="ud-user'+(pp?' open':'')+'">' +
+          '<div class="ud-user-head" onclick="this.parentNode.classList.toggle(\'open\')">' +
+            '<span class="ud-caret">▸</span>' +
+            '<span class="ud-avatar">'+initials(u.email)+'</span>' +
+            '<div class="ud-meta"><div class="email">'+escapeHTML(u.email)+'</div></div>' +
+            chips +
+          '</div>' +
+          '<div class="ud-body">'+devices+ppHtml+'</div>' +
+        '</div>';
+      }).join('');
+      bindRowActions();
+    })
+    .catch(function(e){
+      document.getElementById('ud-tree').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load: '+e+'</p>';
     });
-  }).catch(function(e){
-    document.getElementById('approvals-list').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load: '+e+'</p>';
+}
+function bindRowActions(){
+  document.querySelectorAll('.ud-rm-btn').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      if (!confirm('Revoke '+btn.getAttribute('data-email')+'\'s device? This invalidates its session immediately.')) return;
+      var body = new URLSearchParams();
+      body.append('email', btn.getAttribute('data-email'));
+      body.append('id', btn.getAttribute('data-id'));
+      fetch('/bailey/api/admin/devices/remove', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
+        .then(function(r){ if(!r.ok) return r.json().then(function(d){throw new Error(d.error||'HTTP '+r.status);}); renderTree(); })
+        .catch(function(e){ alert('Failed: '+e); });
+    });
+  });
+  document.querySelectorAll('.ud-pp-form').forEach(function(f){
+    f.addEventListener('click', function(e){ e.stopPropagation(); });
+    f.addEventListener('submit', function(e){
+      e.preventDefault();
+      var email = f.getAttribute('data-email');
+      var code = f.querySelector('input[name=code]').value.trim();
+      var status = f.querySelector('.ud-pp-status');
+      status.textContent = 'Approving…'; status.style.color = '#71717A';
+      var body = new URLSearchParams(); body.append('email', email); body.append('code', code);
+      fetch('/2fa-gate/api/approve', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
+        .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+        .then(function(res){
+          if (res.ok) { status.textContent = 'Approved.'; status.style.color = '#0a7d24'; setTimeout(renderTree, 600); }
+          else { status.textContent = (res.d && res.d.error) || 'Failed.'; status.style.color='#b00020'; }
+        }).catch(function(e){ status.textContent = 'Network error: '+e; status.style.color='#b00020'; });
+    });
   });
 }
-function escapeHTML(s){ return String(s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
-loadApprovals();
-setInterval(loadApprovals, 5000);`
+renderTree();
+setInterval(renderTree, 8000);`
 
 	case "notifications":
 		pageTitle = "Notifications"
@@ -892,7 +978,7 @@ function showTab(groupId, tabId) {
     <a href="/bailey/devices" class="%s">Devices</a>
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
     <div class="sidebar-section">Admin</div>
-    <a href="/bailey/approvals" class="%s">Approvals</a>
+    <a href="/bailey/approvals" class="%s">Users &amp; devices</a>
     <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/siem" class="%s">SIEM</a>
   </nav>

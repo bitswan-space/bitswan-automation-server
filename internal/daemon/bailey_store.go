@@ -160,6 +160,53 @@ func dbDeleteTOTP(email string) error {
 
 // --- Device ops ---
 
+// dbListTOTPEnrolledEmails returns the set of emails with TOTP set up.
+func dbListTOTPEnrolledEmails() (map[string]bool, error) {
+	db, err := openBaileyDB()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(`SELECT email FROM totp_records`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		out[strings.ToLower(e)] = true
+	}
+	return out, rows.Err()
+}
+
+// dbListAllDevices returns every paired device on the server,
+// ordered first by email and then by paired_at. Used by the admin
+// Devices page to render the per-user device tree.
+func dbListAllDevices() ([]deviceRecord, error) {
+	db, err := openBaileyDB()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(
+		`SELECT email, id, name, paired_at, COALESCE(last_seen, '') FROM devices ORDER BY email COLLATE NOCASE, paired_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []deviceRecord
+	for rows.Next() {
+		var d deviceRecord
+		if err := rows.Scan(&d.Email, &d.ID, &d.Name, &d.PairedAt, &d.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func dbListDevices(email string) ([]deviceRecord, error) {
 	db, err := openBaileyDB()
 	if err != nil {

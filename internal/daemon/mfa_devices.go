@@ -29,6 +29,7 @@ const (
 )
 
 type deviceRecord struct {
+	Email    string `json:"email,omitempty"`
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	PairedAt string `json:"paired_at"`
@@ -38,6 +39,7 @@ type deviceRecord struct {
 // Thin wrappers that route through the SQLite store. Kept as
 // separate functions so callers don't have to know about the store.
 func anyDevicesExist() bool                                { return dbAnyDevicesExist() }
+func listAllDevices() ([]deviceRecord, error)              { return dbListAllDevices() }
 func loadDevices(email string) ([]deviceRecord, error)     { return dbListDevices(email) }
 func addDevice(email, name string) (*deviceRecord, error)  { return dbAddDevice(email, name) }
 func removeDevice(email, id string) error                  { return dbRemoveDevice(email, id) }
