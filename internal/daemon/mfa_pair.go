@@ -178,6 +178,42 @@ func approveHandler(w http.ResponseWriter, r *http.Request, approverEmail string
 	}
 }
 
+// handleApprovePairJSON is the JSON variant of approveHandler. Used by
+// the inline "Pair a new browser" form on /bailey/devices so the user
+// stays on the page after approving — POSTing to the HTML handler would
+// navigate to the full approvals page. Same rules: a non-admin can
+// only approve their own pending pair; admins can approve anyone's.
+func handleApprovePairJSON(w http.ResponseWriter, r *http.Request, approverEmail string) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		fmt.Fprint(w, `{"error":"POST required"}`)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	approverIsAdmin := isAdmin(r)
+	targetEmail := strings.TrimSpace(r.FormValue("email"))
+	code := strings.TrimSpace(r.FormValue("code"))
+	if targetEmail == "" || code == "" {
+		writeJSONError(w, "email and code required", http.StatusBadRequest)
+		return
+	}
+	if !strings.EqualFold(targetEmail, approverEmail) && !approverIsAdmin {
+		writeJSONError(w, "only admins can approve a different user", http.StatusForbidden)
+		return
+	}
+	e := approvePendingPair(targetEmail, code, approverEmail, approverIsAdmin)
+	if e == nil {
+		writeJSONError(w, "code didn't match", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"approved":%q}`, e.Email)
+}
+
 func completeNewDevicePairFor(w http.ResponseWriter, r *http.Request, email, approverInfo string) (*deviceRecord, error) {
 	name := deviceNameFromRequest(r)
 	if approverInfo != "" {

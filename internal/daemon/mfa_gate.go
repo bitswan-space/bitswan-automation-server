@@ -301,6 +301,8 @@ func handleGatePath(w http.ResponseWriter, r *http.Request) {
 		handlePendingPairPoll(w, r, email)
 	case r.URL.Path == mfaGatePathPrefix+"/approve":
 		handleApprovePair(w, r, email)
+	case r.URL.Path == mfaGatePathPrefix+"/api/approve":
+		handleApprovePairJSON(w, r, email)
 	case r.URL.Path == mfaGatePathPrefix+"/approve/pending-count":
 		pending := visiblePendingRequests(email, admin)
 		w.Header().Set("Content-Type", "application/json")

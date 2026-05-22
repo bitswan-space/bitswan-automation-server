@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -143,6 +144,22 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case "/bailey/api/notifications-count":
 		if r.Method == http.MethodGet {
 			handleNotificationsCount(w, r)
+			return
+		}
+	case "/bailey/api/devices":
+		if r.Method == http.MethodGet {
+			handleBaileyDevicesAPI(w, r, email)
+			return
+		}
+	case "/bailey/api/devices/remove":
+		if r.Method == http.MethodPost {
+			handleBaileyDevicesRemoveAPI(w, r, email)
+			return
+		}
+	case "/bailey/api/approvals":
+		if r.Method == http.MethodGet {
+			_, groups := identityFromHeaders(r)
+			handleBaileyApprovalsAPI(w, r, email, isAdminGroups(groups))
 			return
 		}
 	case "/bailey/api/endpoints":
@@ -560,21 +577,138 @@ loadList();`
 
 	case "devices":
 		pageTitle = "Devices"
-		pageContent = `
+		pageContent = fmt.Sprintf(`
 <div class="card" style="margin-top:0;">
+  <h2>Pair a new browser</h2>
+  <p class="note">Opened bailey on another browser and saw a 6-digit code? Enter it here to approve that device for <code>%s</code>.</p>
+  <form id="self-approve-form" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+    <input type="text" id="self-approve-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required placeholder="000000" style="font-size:20px;letter-spacing:6px;padding:8px 10px;width:140px;font-family:ui-monospace,monospace;">
+    <button type="submit" style="background:#093DF5;color:white;border:0;padding:10px 18px;border-radius:6px;cursor:pointer;font-size:14px;">Approve</button>
+    <span id="self-approve-status" class="note" style="margin-left:8px;"></span>
+  </form>
+</div>
+
+<div class="card">
   <h2>Paired devices</h2>
   <p class="note">Browsers you've trusted to access this server. Removing a device immediately invalidates its session.</p>
-  <iframe src="/2fa-gate/account/devices" style="width:100%;min-height:480px;border:0;"></iframe>
-</div>`
+  <div id="device-list"><p class="note">Loading…</p></div>
+</div>`, html.EscapeString(email))
+		pageScript = `
+function loadDevices() {
+  fetch('/bailey/api/devices', {credentials:'same-origin'}).then(r => r.json()).then(d => {
+    var box = document.getElementById('device-list');
+    if (!d.devices || !d.devices.length) {
+      box.innerHTML = '<p class="note">No devices paired yet.</p>'; return;
+    }
+    var rows = d.devices.map(function(dv){
+      var label = dv.name + (dv.is_current ? ' <span style="color:#093DF5;font-weight:600;">(this device)</span>' : '');
+      return '<tr style="border-bottom:1px solid #F4F4F5;">' +
+        '<td style="padding:8px 4px;">' + label + '</td>' +
+        '<td style="color:#71717A;">' + (dv.paired_at||'') + '</td>' +
+        '<td style="color:#71717A;">' + (dv.last_seen||'') + '</td>' +
+        '<td style="text-align:right;"><button class="rm-btn" data-id="' + dv.id + '" style="color:#b00020;background:none;border:0;cursor:pointer;font-size:13px;">Remove</button></td></tr>';
+    }).join('');
+    box.innerHTML =
+      '<table style="width:100%;border-collapse:collapse;margin:8px 0;">' +
+      '<thead><tr style="text-align:left;border-bottom:1px solid #E4E4E7;"><th style="padding:8px 0;">Device</th><th>Paired</th><th>Last seen</th><th></th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+    box.querySelectorAll('.rm-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        if (!confirm('Remove this device?')) return;
+        var id = btn.getAttribute('data-id');
+        var body = new URLSearchParams(); body.append('id', id);
+        fetch('/bailey/api/devices/remove', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
+          .then(function(r){ if (!r.ok) throw new Error('HTTP '+r.status); loadDevices(); })
+          .catch(function(e){ alert('Failed to remove: '+e); });
+      });
+    });
+  }).catch(function(e){
+    document.getElementById('device-list').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load: '+e+'</p>';
+  });
+}
+loadDevices();
+document.getElementById('self-approve-form').addEventListener('submit', function(e){
+  e.preventDefault();
+  var codeEl = document.getElementById('self-approve-code');
+  var status = document.getElementById('self-approve-status');
+  var code = codeEl.value.trim();
+  if (!/^[0-9]{6}$/.test(code)) {
+    status.textContent = 'Code must be 6 digits.'; status.style.color = '#b00020'; return;
+  }
+  status.textContent = 'Approving…'; status.style.color = '#71717A';
+  var body = new URLSearchParams();
+  body.append('email', ` + fmt.Sprintf("%q", email) + `);
+  body.append('code', code);
+  fetch('/2fa-gate/api/approve', {
+    method: 'POST', credentials: 'same-origin',
+    headers: {'Content-Type':'application/x-www-form-urlencoded'},
+    body: body.toString()
+  }).then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .then(function(res){
+      if (res.ok) {
+        status.textContent = 'Approved. The new browser will redirect on its own.';
+        status.style.color = '#0a7d24';
+        codeEl.value = '';
+        loadDevices();
+      } else {
+        status.textContent = (res.d && res.d.error) || 'Approval failed.';
+        status.style.color = '#b00020';
+      }
+    }).catch(function(e){ status.textContent = 'Network error: '+e; status.style.color='#b00020'; });
+});`
 
 	case "approvals":
 		pageTitle = "Device approvals"
 		pageContent = `
 <div class="card" style="margin-top:0;">
   <h2>Pending device approvals</h2>
-  <p class="note">Someone signing in from a new browser sees a 6-digit code. Ask them to read it to you, type it here, and approve.</p>
-  <iframe id="approvals-iframe" src="/2fa-gate/approve" style="width:100%;min-height:600px;border:0;"></iframe>
+  <p class="note">Someone signing in from a new browser sees a 6-digit code. Ask them to read it to you, type it below, and approve.</p>
+  <div id="approvals-list"><p class="note">Loading…</p></div>
 </div>`
+		pageScript = `
+function loadApprovals() {
+  fetch('/bailey/api/approvals', {credentials:'same-origin'}).then(r => r.json()).then(d => {
+    var box = document.getElementById('approvals-list');
+    if (!d.pending || !d.pending.length) {
+      box.innerHTML = '<p class="note">No pending requests. This page auto-refreshes when one arrives.</p>'; return;
+    }
+    box.innerHTML = d.pending.map(function(p){
+      var age = p.age_seconds; var ageStr = age < 60 ? (age+'s ago') : (Math.floor(age/60)+'m '+(age%60)+'s ago');
+      return '<div style="border:1px solid #E4E4E7;border-radius:8px;padding:16px;margin:12px 0;background:#fff;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;">' +
+          '<div><b>' + escapeHTML(p.email) + '</b></div>' +
+          '<div class="note">requested ' + ageStr + '</div>' +
+        '</div>' +
+        '<form class="approve-form" data-email="' + escapeHTML(p.email) + '" style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
+          '<label style="font-size:13px;color:#3F3F46;">Code shown on their device:</label>' +
+          '<input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required style="font-size:18px;letter-spacing:4px;padding:6px 8px;width:120px;">' +
+          '<button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;border-radius:4px;font-size:14px;cursor:pointer;">Approve</button>' +
+          '<span class="approve-status note" style="margin-left:6px;"></span>' +
+        '</form></div>';
+    }).join('');
+    box.querySelectorAll('.approve-form').forEach(function(f){
+      f.addEventListener('submit', function(e){
+        e.preventDefault();
+        var email = f.getAttribute('data-email');
+        var code = f.querySelector('input[name=code]').value.trim();
+        var status = f.querySelector('.approve-status');
+        status.textContent = 'Approving…'; status.style.color = '#71717A';
+        var body = new URLSearchParams(); body.append('email', email); body.append('code', code);
+        fetch('/2fa-gate/api/approve', {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
+          .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+          .then(function(res){
+            if (res.ok) { status.textContent = 'Approved.'; status.style.color = '#0a7d24'; setTimeout(loadApprovals, 600); }
+            else { status.textContent = (res.d && res.d.error) || 'Failed.'; status.style.color = '#b00020'; }
+          }).catch(function(e){ status.textContent = 'Network error: '+e; status.style.color='#b00020'; });
+      });
+    });
+  }).catch(function(e){
+    document.getElementById('approvals-list').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load: '+e+'</p>';
+  });
+}
+function escapeHTML(s){ return String(s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+loadApprovals();
+setInterval(loadApprovals, 5000);`
 
 	case "notifications":
 		pageTitle = "Notifications"
