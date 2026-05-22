@@ -43,18 +43,33 @@ function BaseNode({ data, selected }) {
         borderStyle: 'solid',
         borderRadius: 10,
         padding: '8px 14px',
-        minWidth: 160,
-        maxWidth: 280,
+        // FIXED dimensions matching the values handed to ELK. Without this
+        // the actual DOM grows past what ELK sized the parent for, and the
+        // endpoint cards overflow their compound box.
+        width: LEAF_W, height: LEAF_H,
+        boxSizing: 'border-box',
+        overflow: 'hidden',
         boxShadow: selected ? '0 0 0 3px rgba(9,61,245,0.18)' : '0 1px 2px rgba(15,23,42,0.04)',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif',
         color: s.text,
+        display: 'flex', flexDirection: 'column', justifyContent: 'center',
       }}
     >
       <Handle type="target" position={Position.Left} style={{ background: 'transparent', border: 0 }} />
-      <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.75, marginBottom: 2 }}>
+      <div style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.75, marginBottom: 3, whiteSpace: 'nowrap' }}>
         <span style={{ marginRight: 6 }}>{s.icon}</span>{s.label}
       </div>
-      <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3, wordBreak: 'break-all' }}>
+      <div
+        style={{
+          fontSize: 13, fontWeight: 600, lineHeight: 1.25,
+          // Hard limit: two lines max, then ellipsis. Long hostnames stay
+          // inside the LEAF_H envelope ELK was given.
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          overflow: 'hidden', textOverflow: 'ellipsis',
+          wordBreak: 'break-all',
+        }}
+        title={data.label}
+      >
         {data.label}
       </div>
       <Handle type="source" position={Position.Right} style={{ background: 'transparent', border: 0 }} />
@@ -100,7 +115,6 @@ function CloudNode({ data, selected }) {
   const s = KIND_STYLE.cloud;
   return (
     <div
-      onClick={(e) => e.stopPropagation()}
       style={{
         position: 'relative',
         width: 200, height: 110,
@@ -110,9 +124,10 @@ function CloudNode({ data, selected }) {
       }}
       title="Click for wildcard DNS + TLS cert setup instructions"
     >
-      <svg width="200" height="110" viewBox="0 0 200 110" style={{ display: 'block' }}>
+      <svg width="200" height="110" viewBox="0 0 200 110" style={{ display: 'block', position: 'absolute', inset: 0 }}>
+        {/* Five-bump cloud shape that fills the full 200×110 bounding box. */}
         <path
-          d="M40,70 C20,70 20,45 40,45 C40,25 75,20 80,40 C90,25 120,28 122,45 C145,40 160,55 160,70 C175,72 175,90 160,90 L40,90 C25,90 25,70 40,70 Z"
+          d="M 18 78 C 4 78, 4 56, 18 54 C 18 32, 50 26, 56 44 C 64 24, 100 22, 108 44 C 118 28, 152 30, 158 50 C 184 48, 196 70, 182 80 C 188 96, 168 102, 158 94 L 42 94 C 28 102, 8 96, 18 78 Z"
           fill={s.bg}
           stroke={selected ? '#0284C7' : s.border}
           strokeWidth={selected ? 2.5 : 1.5}
@@ -121,11 +136,11 @@ function CloudNode({ data, selected }) {
       <div style={{
         position: 'absolute', inset: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        flexDirection: 'column', textAlign: 'center', padding: '0 16px',
+        flexDirection: 'column', textAlign: 'center', padding: '0 28px',
         pointerEvents: 'none',
       }}>
-        <div style={{ fontSize: 12, fontWeight: 600 }}>{data.label}</div>
-        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>click for setup ↗</div>
+        <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2 }}>{data.label}</div>
+        <div style={{ fontSize: 10, opacity: 0.7, marginTop: 3 }}>click for setup ↗</div>
       </div>
       <Handle type="source" position={Position.Right} style={{ background: 'transparent', border: 0, right: 30 }} />
     </div>
@@ -155,15 +170,20 @@ function buildElkTree(nodes, edges, parentId) {
     const isGroup = groupKinds.has(n.data.kind);
     const node = { id: n.id };
     if (isGroup) {
+      // All compound parents flow RIGHT internally. The "no edges between
+      // siblings → same rank" rule means children without inter-sibling
+      // edges (endpoints inside platform-traefik, containers inside a
+      // network) stack vertically within the leftmost rank. Workspaces
+      // get a proper LR sub-flow because workspace_traefik is upstream of
+      // its networks' containers.
       node.layoutOptions = {
         'elk.algorithm': 'layered',
-        'elk.direction': n.data.kind === 'network' ? 'DOWN' : 'RIGHT',
-        // Make ELK pack children tightly inside the parent rather than try to
-        // expand the parent to fill a column.
+        'elk.direction': 'RIGHT',
         'elk.padding': n.data.kind === 'network'
           ? '[top=28,left=14,bottom=14,right=14]'
           : '[top=34,left=18,bottom=16,right=18]',
         'elk.spacing.nodeNode': '18',
+        'elk.layered.spacing.nodeNodeBetweenLayers': '40',
       };
       node.children = buildElkTree(nodes, edges, n.id);
       // No fixed width/height — ELK derives them.
