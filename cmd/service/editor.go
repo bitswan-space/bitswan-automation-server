@@ -35,7 +35,6 @@ func NewEditorCmd() *cobra.Command {
 
 func newEditorEnableCmd() *cobra.Command {
 	var editorImage string
-	var dashboardImage string
 	var oauthConfigFile string
 	var trustCA bool
 	var workspace string
@@ -65,9 +64,6 @@ func newEditorEnableCmd() *cobra.Command {
 			options := make(map[string]interface{})
 			if editorImage != "" {
 				options["editor_image"] = editorImage
-			}
-			if dashboardImage != "" {
-				options["dashboard_image"] = dashboardImage
 			}
 			if trustCA {
 				options["trust_ca"] = true
@@ -101,7 +97,6 @@ func newEditorEnableCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&editorImage, "editor-image", "", "Custom image for the editor")
-	cmd.Flags().StringVar(&dashboardImage, "dashboard-image", "", "Custom image for the workspace-dashboard")
 	cmd.Flags().StringVar(&oauthConfigFile, "oauth-config", "", "OAuth config file")
 	cmd.Flags().BoolVar(&trustCA, "trust-ca", false, "Install custom certificates from the default CA certificates directory.")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
