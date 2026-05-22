@@ -20,7 +20,7 @@ import (
 
 // DashboardService manages the workspace-dashboard sidecar deployment for a workspace.
 // It owns its own docker-compose-dashboard.yml file and lifecycle, fully independent
-// from EditorService.
+// from EditorService
 type DashboardService struct {
 	WorkspaceName string
 	WorkspacePath string
