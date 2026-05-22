@@ -68,13 +68,19 @@ func buildNetworkMap() nmGraph {
 	nodes = append(nodes,
 		nmNode{ID: "ingress:platform-traefik", Label: "platform-traefik", Kind: "platform_traefik"},
 		nmNode{ID: "ingress:bitswan-protected-proxy", Label: "bitswan-protected-proxy", Kind: "ingress"},
-		nmNode{ID: "ingress:daemon", Label: "daemon (MFA + ACL)", Kind: "ingress"},
+		nmNode{ID: "ingress:bailey-proxy", Label: "bailey-proxy (MFA + ACL)", Kind: "ingress"},
+		// Privileged orchestration daemon. Serves bailey admin pages
+		// on :8080 internally; never directly internet-facing in the
+		// target topology. Drawn as a separate "daemon" kind so it
+		// reads visually as a destination, not as part of the auth chain.
+		nmNode{ID: "daemon:automation-server", Label: "automation-server-daemon", Kind: "daemon"},
 	)
-	// Auth chain edges.
+	// Auth chain edges + the bailey-admin route from the proxy to the daemon.
 	edges = append(edges,
 		nmEdge{Source: "cloud", Target: "ingress:platform-traefik", Kind: "chain", Label: "TLS :443"},
 		nmEdge{Source: "ingress:platform-traefik", Target: "ingress:bitswan-protected-proxy", Kind: "chain", Label: "oauth"},
-		nmEdge{Source: "ingress:bitswan-protected-proxy", Target: "ingress:daemon", Kind: "chain", Label: "MFA + ACL"},
+		nmEdge{Source: "ingress:bitswan-protected-proxy", Target: "ingress:bailey-proxy", Kind: "chain", Label: "MFA + ACL"},
+		nmEdge{Source: "ingress:bailey-proxy", Target: "daemon:automation-server", Kind: "route", Label: "bailey admin"},
 	)
 
 	// (2) Docker networks.
@@ -96,10 +102,11 @@ func buildNetworkMap() nmGraph {
 			ID: wsTraefikID, Label: ws + "__traefik",
 			Kind: "workspace_traefik", Parent: wsID, Workspace: ws,
 		})
-		// daemon (MFA gate) → workspace_traefik. The gate's reverse
-		// proxy resolves the upstream from the request hostname.
+		// bailey-proxy (MFA gate) → workspace_traefik. The gate's
+		// reverse proxy resolves the upstream from the request
+		// hostname.
 		edges = append(edges, nmEdge{
-			Source: "ingress:daemon", Target: wsTraefikID,
+			Source: "ingress:bailey-proxy", Target: wsTraefikID,
 			Kind: "chain",
 		})
 

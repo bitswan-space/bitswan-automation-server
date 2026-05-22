@@ -30,6 +30,10 @@ const KIND_STYLE = {
   network:           { bg: '#FAFAFA', border: '#E5E7EB', text: '#374151', icon: '⬚', label: 'Network' },
   workspace:         { bg: '#F8FAFC', border: '#CBD5E1', text: '#0F172A', icon: '📦', label: 'Workspace' },
   cloud:             { bg: '#F0F9FF', border: '#7DD3FC', text: '#075985', icon: '☁', label: 'Public ingress' },
+  // Privileged orchestration daemon. Distinct red palette so it visually
+  // stands apart from the ingress chain — it's the "warning, this one
+  // has docker.sock" node.
+  daemon:            { bg: '#FEF2F2', border: '#FCA5A5', text: '#7F1D1D', icon: '⚙', label: 'Daemon' },
 };
 
 function BaseNode({ data, selected }) {
