@@ -14,7 +14,7 @@ import (
 )
 
 
-// handleBaileyAdmin serves the internal Bailey admin (behind the VPN/ZTNA
+// handleBailey serves the internal Bailey (behind the VPN/ZTNA
 // tunnel). Used by admins to configure NetBird, the SIEM forwarder, and
 // trust-store certificates. Device-level access lives in the ZTNA
 // provider's own dashboard, not here.
@@ -25,8 +25,8 @@ import (
 //   - /ca.crt: any authenticated user can pull the CA cert so they can
 //     trust internal HTTPS — useful as a fallback to the public admin's
 //     download (which is the primary path for the un-tunnelled).
-func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/bailey-admin/favicon.svg" {
+func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/bailey/favicon.svg" {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		fmt.Fprint(w, bitswanFaviconSVG)
@@ -36,7 +36,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 	email := r.Header.Get("X-Forwarded-Email")
 
 	// CA cert is the only data path callable by non-admins.
-	if r.URL.Path == "/bailey-admin/ca.crt" {
+	if r.URL.Path == "/bailey/ca.crt" {
 		homeDir, _ := os.UserHomeDir()
 		caMgr := vpn.NewCAManager(filepath.Join(homeDir, ".config", "bitswan", "vpn"))
 		caCert, err := caMgr.CACertPEM()
@@ -58,7 +58,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 
 	// Whoami stays available to any authenticated user as a diagnostic so
 	// they can confirm their identity headers without admin privileges.
-	if r.URL.Path == "/bailey-admin/api/whoami" {
+	if r.URL.Path == "/bailey/api/whoami" {
 		handleWhoami(w, r)
 		return
 	}
@@ -67,13 +67,13 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 	// otherwise the admin landing would be reachable with just the OIDC
 	// session. Two bypasses:
 	//
-	//   /bailey-admin/api/* — JSON callers; a 303 from the gate is
+	//   /bailey/api/* — JSON callers; a 303 from the gate is
 	//     useless to a fetch(). Admin-status is still enforced below.
-	//   /bailey-admin/signout — sign-out must always work even if the
+	//   /bailey/signout — sign-out must always work even if the
 	//     user's TOTP or device cookie is missing. Refusing to log them
 	//     out because they failed the gate would be backwards.
-	if !strings.HasPrefix(r.URL.Path, "/bailey-admin/api/") &&
-		r.URL.Path != "/bailey-admin/signout" &&
+	if !strings.HasPrefix(r.URL.Path, "/bailey/api/") &&
+		r.URL.Path != "/bailey/signout" &&
 		!enforceMFAGate(w, r) {
 		return
 	}
@@ -85,13 +85,13 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 
 	admin := isAdmin(r)
 
-	// /bailey-admin/ landing:
+	// /bailey/ landing:
 	//   - admin → 303 redirect to /workspaces (keeps URL stable)
 	//   - non-admin → 200 render of their devices page directly
 	// Either way the user is past the MFA gate before landing here.
-	if r.URL.Path == "/bailey-admin" || r.URL.Path == "/bailey-admin/" {
+	if r.URL.Path == "/bailey" || r.URL.Path == "/bailey/" {
 		if admin {
-			http.Redirect(w, r, "/bailey-admin/workspaces", http.StatusSeeOther)
+			http.Redirect(w, r, "/bailey/workspaces", http.StatusSeeOther)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
@@ -101,7 +101,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 
 	// Sign-out works for any authenticated identity. Done up here so we
 	// don't gate the user out of their own log-out path.
-	if r.URL.Path == "/bailey-admin/signout" {
+	if r.URL.Path == "/bailey/signout" {
 		signoutRedirect(w, r, "/")
 		return
 	}
@@ -110,25 +110,25 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 	// Non-admins can see them; the underlying /2fa-gate/account/* pages
 	// only ever read/write the caller's own records.
 	switch r.URL.Path {
-	case "/bailey-admin/devices", "/bailey-admin/devices/":
+	case "/bailey/devices", "/bailey/devices/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "devices", admin))
 			return
 		}
-	case "/bailey-admin/recovery", "/bailey-admin/recovery/":
+	case "/bailey/recovery", "/bailey/recovery/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "recovery", admin))
 			return
 		}
-	case "/bailey-admin/endpoints", "/bailey-admin/endpoints/":
+	case "/bailey/endpoints", "/bailey/endpoints/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "endpoints", admin))
 			return
 		}
-	case "/bailey-admin/api/endpoints":
+	case "/bailey/api/endpoints":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -147,13 +147,13 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 	// workspaces. Listing is filtered per caller (only workspaces
 	// the caller has any ACL grant on). POST creates a new workspace
 	// with the caller as owner of its editor + gitops endpoints.
-	case "/bailey-admin/workspaces", "/bailey-admin/workspaces/":
+	case "/bailey/workspaces", "/bailey/workspaces/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "workspaces", admin))
 			return
 		}
-	case "/bailey-admin/api/workspaces":
+	case "/bailey/api/workspaces":
 		switch r.Method {
 		case http.MethodGet:
 			handleListAccessibleWorkspaces(w, r, email)
@@ -173,38 +173,38 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case r.URL.Path == "/bailey-admin/network" || r.URL.Path == "/bailey-admin/network/":
+	case r.URL.Path == "/bailey/network" || r.URL.Path == "/bailey/network/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "network", true))
 			return
 		}
 
-	case r.URL.Path == "/bailey-admin/siem" || r.URL.Path == "/bailey-admin/siem/":
+	case r.URL.Path == "/bailey/siem" || r.URL.Path == "/bailey/siem/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "siem", true))
 			return
 		}
 
-	case r.URL.Path == "/bailey-admin/certs" || r.URL.Path == "/bailey-admin/certs/":
+	case r.URL.Path == "/bailey/certs" || r.URL.Path == "/bailey/certs/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, "certs", true))
 			return
 		}
 
-	case r.URL.Path == "/bailey-admin/signout":
-		// See the external /bailey-admin/signout case — we use "/" because
+	case r.URL.Path == "/bailey/signout":
+		// See the external /bailey/signout case — we use "/" because
 		// that's what AOC registers as the post-logout URI on the
 		// Keycloak client. The docs catch-all redirects from "/" to
-		// /bailey-admin/ when the request is on the internal host.
+		// /bailey/ when the request is on the internal host.
 		signoutRedirect(w, r, "/")
 		return
 
 		// (api/workspaces handler is above — open to any signed-in user.)
 
-	case r.URL.Path == "/bailey-admin/api/siem-config":
+	case r.URL.Path == "/bailey/api/siem-config":
 		if !requireAdmin(w, r) {
 			return
 		}
@@ -252,7 +252,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-	case r.URL.Path == "/bailey-admin/api/siem-test":
+	case r.URL.Path == "/bailey/api/siem-test":
 		if !requireAdmin(w, r) {
 			return
 		}
@@ -265,7 +265,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
 		return
 
-	case r.URL.Path == "/bailey-admin/api/cert-authorities":
+	case r.URL.Path == "/bailey/api/cert-authorities":
 		if !requireAdmin(w, r) {
 			return
 		}
@@ -297,7 +297,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-	case strings.HasPrefix(r.URL.Path, "/bailey-admin/api/cert-authorities/"):
+	case strings.HasPrefix(r.URL.Path, "/bailey/api/cert-authorities/"):
 		if !requireAdmin(w, r) {
 			return
 		}
@@ -305,7 +305,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		name := strings.TrimPrefix(r.URL.Path, "/bailey-admin/api/cert-authorities/")
+		name := strings.TrimPrefix(r.URL.Path, "/bailey/api/cert-authorities/")
 		if err := removeCertAuthorityFile(name); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
 			return
@@ -314,7 +314,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
 		return
 
-	case r.URL.Path == "/bailey-admin/api/hostname-certs":
+	case r.URL.Path == "/bailey/api/hostname-certs":
 		if !requireAdmin(w, r) {
 			return
 		}
@@ -347,7 +347,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-	case strings.HasPrefix(r.URL.Path, "/bailey-admin/api/hostname-certs/"):
+	case strings.HasPrefix(r.URL.Path, "/bailey/api/hostname-certs/"):
 		if !requireAdmin(w, r) {
 			return
 		}
@@ -355,7 +355,7 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		host := strings.TrimPrefix(r.URL.Path, "/bailey-admin/api/hostname-certs/")
+		host := strings.TrimPrefix(r.URL.Path, "/bailey/api/hostname-certs/")
 		if err := removeHostnameCert(host); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
 			return
@@ -374,13 +374,13 @@ func (s *Server) handleBaileyAdmin(w http.ResponseWriter, r *http.Request) {
 const bitswanLogoSVG = `<svg width="140" height="33" viewBox="0 0 663.4 154.8" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M612.6,77.7c5.8-5.8,12.4-8.7,19.8-8.7c6.1,0,10.8,1,14,3s4.3,3.7,4.3,7.3v38h12.6V78.6c0-5.6-1.8-9.8-5.4-12.9c-5.6-4.7-13.2-7.1-22.7-7.1c-8.6,0-16.2,3.3-22.7,9.9v-8.6H600v57.5h12.6V77.7z M583.2,117.3V59.8h-12.6V68c-7-6-15.8-9.4-25-9.5c-9,0-16.7,2.6-23,7.9c-3.5,3.1-5.4,7.3-5.4,12.9v18.5c0,5.6,1.8,9.8,5.4,12.9c6.1,5.2,13.8,7.8,23,7.8c9.2,0.2,18.2-3.2,25-9.4v8.1L583.2,117.3z M570.6,98.4c-2.7,3.2-6.2,5.6-10.1,7c-3.8,1.8-8,2.8-12.2,2.9c-4.8,0-9.6-1.3-13.8-3.7c-3.5-2-4.7-3.8-4.7-7.4V80.1c0-3.8,1.1-5.5,4.7-7.4c4.2-2.4,8.9-3.6,13.8-3.6c4.2,0.1,8.4,1,12.2,2.7c4.5,1.8,7.8,4.1,10.1,7V98.4z M491.7,117.3l18.1-57.5h-13.1l-14.2,47.3h-3l-15-47.3h-13.4l-16.3,47.3H432l-13.9-47.3h-13.6l18.2,57.5H443l14.5-42.9l14,42.9H491.7z M360.5,118.4c12.2,0,21.1-1.2,26.5-3.6c6.4-3,9.6-7.6,9.6-13.6v-6.1c0.2-3.8-1.4-7.5-4.2-10c-2.6-2.4-7.2-4.6-14-6.3l-20.1-5.4c-5.6-1.4-9.2-2.8-10.6-4s-2.4-3.3-2.4-6c0-2.9,1-4.9,3-6.2c2.6-1.7,8.4-2.6,17.1-2.6c9.1-0.1,18.1,0.8,27,2.7V46.8c-8.5-1.6-17-2.4-25.6-2.3c-12.7,0-21.8,1.7-27.1,5.3c-4.7,3.1-7,7.1-7,12v5.3c-0.1,3.6,1.3,7,3.9,9.5c3.1,2.9,8.4,5.4,16,7.3l19.2,5.2c9.3,2.3,12.1,4.5,12.1,9.5c0,3.6-1.1,6-3.3,7.2c-3.3,1.7-9.8,2.6-19.4,2.6c-9.5,0.1-18.9-0.9-28.2-2.7v10.7C341.9,117.8,351.1,118.5,360.5,118.4 M323.3,106.7c-4.6,1.3-9.3,1.9-14.1,1.8c-4.7,0-8.4-0.9-11-2.9c-2.4-1.8-3.1-4-3.1-8.6V69.6h28.2v-9.9h-28.1V45.1h-12.6v52.8c0,7.8,1.4,12,5.8,15.7c4.2,3.3,10.6,4.9,19.4,4.9c6.8,0,11.9-0.7,15.6-2.2L323.3,106.7z M266,59.7h-12.6v57.5H266V59.7z M266,36.5h-12.6v13.1H266V36.5z M213,117.3c11.8,0,18-1.3,22.7-5.3c4.5-3.8,6.1-6.5,6.1-12.4v-5c0-6-2.9-10.3-8.7-12.9c-0.9-0.5-1.6-0.8-1.9-0.9l0.4-0.2c5.4-2.2,8-6.3,8-12.4V63c0-5.5-1.4-8.5-5.1-11.8c-4.4-3.7-11.8-5.5-22.4-5.5h-36.3v71.6H213z M215.2,85.9c5,0,8.6,0.8,10.8,2.5s3.3,4.5,3.3,8.4s-1.3,6.5-3.7,8.2c-2.2,1.6-6.3,2.4-12.3,2.4h-25.1V85.9H215.2z M211.2,55.7c6.8,0,11.1,0.9,13.3,2.9c1.7,1.7,2.6,4.2,2.6,7.7c0,3.7-0.9,6.2-2.8,7.7c-2.1,1.5-5,2.3-8.9,2.3h-27.2V55.7H211.2z" fill="#0D1326"/><path d="M0,104.5V5l59.9,50L10.3,92.8C6,96,2.5,100,0,104.5z M90.7,80.6l-21.3,18c-7.1,6.2-10.9,14.5-10.9,24c0,8.6,3.4,16.7,9.4,22.8c6.1,6.1,14.2,9.5,22.8,9.5s16.7-3.4,22.8-9.5c6.1-6.1,9.4-14.2,9.4-22.8s-3.3-16.7-9.4-22.7L90.7,80.6z M118.5,15.8l-25,19.5l0,0L13.1,96.6C4.9,102.6,0,112.3,0,122.5c0,8.6,3.4,16.7,9.4,22.8c6.1,6.1,14.2,9.5,22.8,9.5h40.4c-2.9-1.6-5.6-3.7-8.1-6.1c-7-7-10.8-16.3-10.8-26.1c0-10.7,4.4-20.5,12.5-27.6l46-38.7c6.8-5.8,10.8-14.9,10.8-24C123,26.4,121.5,20.8,118.5,15.8z M57.5,0l36.1,29.3L115.7,12c-0.5-0.6-1.3-1.5-2.3-2.7C107,1.6,97.5,0,90.8,0H57.5z" fill="#0D1326"/></svg>`
 
 // bitswanFavicon is an SVG data URI of the BitSwan logo mark used as favicon on all pages.
-// bitswanFavicon links to /bailey-admin/favicon.svg served by the handler.
-const bitswanFavicon = `<link rel="icon" type="image/svg+xml" href="/bailey-admin/favicon.svg">`
+// bitswanFavicon links to /bailey/favicon.svg served by the handler.
+const bitswanFavicon = `<link rel="icon" type="image/svg+xml" href="/bailey/favicon.svg">`
 
 // bitswanFaviconSVG is the raw SVG content for the favicon.
 const bitswanFaviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 124 155"><path d="M0,104.5V5l59.9,50L10.3,92.8C6,96,2.5,100,0,104.5z M90.7,80.6l-21.3,18c-7.1,6.2-10.9,14.5-10.9,24c0,8.6,3.4,16.7,9.4,22.8c6.1,6.1,14.2,9.5,22.8,9.5s16.7-3.4,22.8-9.5c6.1-6.1,9.4-14.2,9.4-22.8s-3.3-16.7-9.4-22.7L90.7,80.6z M118.5,15.8l-25,19.5l0,0L13.1,96.6C4.9,102.6,0,112.3,0,122.5c0,8.6,3.4,16.7,9.4,22.8c6.1,6.1,14.2,9.5,22.8,9.5h40.4c-2.9-1.6-5.6-3.7-8.1-6.1c-7-7-10.8-16.3-10.8-26.1c0-10.7,4.4-20.5,12.5-27.6l46-38.7c6.8-5.8,10.8-14.9,10.8-24C123,26.4,121.5,20.8,118.5,15.8z M57.5,0l36.1,29.3L115.7,12c-0.5-0.6-1.3-1.5-2.3-2.7C107,1.6,97.5,0,90.8,0H57.5z" fill="#0D1326"/></svg>`
 
-// bitswanPageCSS returns the shared CSS for all Bailey admin pages, matching the AOC theme.
+// bitswanPageCSS returns the shared CSS for all Bailey pages, matching the AOC theme.
 const bitswanPageCSS = `
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 700px; margin: 0 auto; padding: 40px 20px; color: #18181B; background: #FAFAFA; }
 .header { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; padding-bottom: 20px; border-bottom: 1px solid #E4E4E7; }
@@ -495,7 +495,7 @@ func vpnInternalPage(email, page string, admin bool) string {
 </div>`
 		pageScript = `
 function loadList() {
-  fetch('/bailey-admin/api/workspaces', {credentials:'same-origin'}).then(r => r.ok ? r.json() : {workspaces:[]}).then(d => {
+  fetch('/bailey/api/workspaces', {credentials:'same-origin'}).then(r => r.ok ? r.json() : {workspaces:[]}).then(d => {
     const box = document.getElementById('workspaces-list');
     if (!d.workspaces || !d.workspaces.length) {
       box.innerHTML = '<p class="note">You don\'t have access to any workspaces yet. Create one below, or wait for someone to share one with you.</p>';
@@ -524,7 +524,7 @@ function createWorkspace(e) {
   const statusEl = document.getElementById('create-status');
   statusEl.textContent = 'Creating ' + name + '… (this can take 30-60s while the editor + gitops images come up)';
   statusEl.style.color = '#71717A';
-  fetch('/bailey-admin/api/workspaces', {
+  fetch('/bailey/api/workspaces', {
     method: 'POST',
     credentials: 'same-origin',
     headers: {'Content-Type': 'application/json'},
@@ -565,7 +565,7 @@ loadList();`
   <div id="ep-list"><p class="note">Loading…</p></div>
 </div>`
 		pageScript = `
-fetch('/bailey-admin/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).then(d => {
+fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).then(d => {
   const box = document.getElementById('ep-list');
   if (d.is_server_owner) {
     box.insertAdjacentHTML('beforebegin', '<p class="note"><b>Server-owner audit view</b> — you see every endpoint registered on this server, read-only.</p>');
@@ -642,7 +642,7 @@ fetch('/bailey-admin/api/endpoints', {credentials:'same-origin'}).then(r => r.js
 </div>`
 		pageScript = `
 function loadConfig() {
-  fetch('/bailey-admin/api/siem-config').then(r=>r.json()).then(d => {
+  fetch('/bailey/api/siem-config').then(r=>r.json()).then(d => {
     document.getElementById('siem-url').value = d.config.url || '';
     document.getElementById('siem-auth').value = d.config.auth_header || '';
     document.getElementById('siem-enabled').checked = !!d.config.enabled;
@@ -669,7 +669,7 @@ function saveConfig(e) {
     auth_header: document.getElementById('siem-auth').value,
     enabled: document.getElementById('siem-enabled').checked
   };
-  fetch('/bailey-admin/api/siem-config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+  fetch('/bailey/api/siem-config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
     .then(r => r.json())
     .then(d => {
       document.getElementById('save-result').textContent = d.status === 'saved' ? 'Saved.' : (d.error || 'Error');
@@ -677,13 +677,13 @@ function saveConfig(e) {
     });
 }
 function sendTest() {
-  fetch('/bailey-admin/api/siem-test', {method:'POST'}).then(() => {
+  fetch('/bailey/api/siem-test', {method:'POST'}).then(() => {
     document.getElementById('save-result').textContent = 'Test event queued. Watch stats.';
     setTimeout(loadConfig, 1500);
   });
 }
 loadConfig();
-setInterval(() => fetch('/bailey-admin/api/siem-config').then(r=>r.json()).then(d => renderStats(d.stats)), 5000);`
+setInterval(() => fetch('/bailey/api/siem-config').then(r=>r.json()).then(d => renderStats(d.stats)), 5000);`
 
 	case "certs":
 		pageTitle = "Certificates"
@@ -704,7 +704,7 @@ setInterval(() => fetch('/bailey-admin/api/siem-config').then(r=>r.json()).then(
 const caFilename = '%s';
 function downloadCA() {
   const a = document.createElement('a');
-  a.href = '/bailey-admin/ca.crt';
+  a.href = '/bailey/ca.crt';
   a.download = caFilename;
   a.click();
 }
@@ -733,17 +733,17 @@ function showTab(groupId, tabId) {
 <div class="sidebar">
   <div class="sidebar-logo">`+bitswanLogoSVG+`</div>
   <nav class="sidebar-nav">
-    <a href="/bailey-admin/workspaces" class="%s">Workspaces</a>
-    <a href="/bailey-admin/endpoints" class="%s">Endpoints</a>
-    <a href="/bailey-admin/network" class="%s">Network Access</a>
-    <a href="/bailey-admin/siem" class="%s">SIEM</a>
-    <a href="/bailey-admin/certs" class="%s">Certificates</a>
-    <a href="/bailey-admin/devices" class="%s">Devices</a>
-    <a href="/bailey-admin/recovery" class="%s">Recovery (TOTP)</a>
+    <a href="/bailey/workspaces" class="%s">Workspaces</a>
+    <a href="/bailey/endpoints" class="%s">Endpoints</a>
+    <a href="/bailey/network" class="%s">Network Access</a>
+    <a href="/bailey/siem" class="%s">SIEM</a>
+    <a href="/bailey/certs" class="%s">Certificates</a>
+    <a href="/bailey/devices" class="%s">Devices</a>
+    <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
   </nav>
   <div class="sidebar-footer">
     <div style="margin-bottom:4px;">%s</div>
-    <a href="/bailey-admin/signout">Sign out</a>
+    <a href="/bailey/signout">Sign out</a>
   </div>
 </div>
 <div class="main">

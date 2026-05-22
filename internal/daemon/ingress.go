@@ -834,7 +834,7 @@ func addRouteTraefik(req IngressAddRouteRequest, workspaceName string) error {
 			return fmt.Errorf("failed to add route to platform traefik: %w", err)
 		}
 	} else {
-		// No workspace sub-traefik (e.g. bailey-admin oauth2-proxy
+		// No workspace sub-traefik (e.g. bailey oauth2-proxy
 		// routes — direct daemon-side services). Route directly.
 		if err := traefikapi.AddRouteWithTraefik(req.Hostname, req.Upstream, "", certResolver); err != nil {
 			return fmt.Errorf("failed to add route: %w", err)

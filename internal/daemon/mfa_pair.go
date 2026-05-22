@@ -323,7 +323,7 @@ func approveListHTML(approverEmail string, approverIsAdmin bool, errorForEmail, 
 		scope = "any user's"
 	}
 	body := fmt.Sprintf(`
-<div class="header">%s<h1>Pending device approvals</h1><a href="/bailey-admin/" class="sign-out">← Bailey</a></div>
+<div class="header">%s<h1>Pending device approvals</h1><a href="/bailey/" class="sign-out">← Bailey</a></div>
 <div class="card">
   <p>Signed in as <code>%s</code>%s. You can approve %s pending device requests.</p>
   <p class="note">Ask the user to read the 6-digit code shown on their screen, type it below, and click Approve.</p>

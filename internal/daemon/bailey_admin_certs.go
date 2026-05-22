@@ -2,7 +2,7 @@ package daemon
 
 import "fmt"
 
-// certTrustInstructionsHTML reproduces the external Bailey admin page's
+// certTrustInstructionsHTML reproduces the external Bailey page's
 // Certificate Trust Setup card, minus the H2 header (we let the caller set
 // the section heading). The four %s placeholders are all the CA filename for
 // display in the copy/paste commands and iOS/Android download hints.
@@ -132,7 +132,7 @@ func certsAdminScript(admin bool) string {
 	return fmt.Sprintf(`
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
 function loadCAs() {
-  fetch('/bailey-admin-internal/api/cert-authorities').then(r=>r.json()).then(list => {
+  fetch('/bailey-internal/api/cert-authorities').then(r=>r.json()).then(list => {
     if (!Array.isArray(list) || list.length === 0) {
       document.getElementById('ca-list').innerHTML = '<p class="note">No extra CAs installed.</p>';
       return;
@@ -152,7 +152,7 @@ function uploadCA() {
   const name = document.getElementById('ca-name').value.trim();
   const pem = document.getElementById('ca-pem').value;
   if (!name || !pem) { document.getElementById('ca-msg').textContent = 'Name and PEM are required.'; return; }
-  fetch('/bailey-admin-internal/api/cert-authorities', {
+  fetch('/bailey-internal/api/cert-authorities', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({name, pem})
   }).then(r => r.json()).then(d => {
@@ -166,11 +166,11 @@ function uploadCA() {
 }
 function removeCA(name) {
   if (!confirm('Remove CA ' + name + '?')) return;
-  fetch('/bailey-admin-internal/api/cert-authorities/' + encodeURIComponent(name), {method:'DELETE'})
+  fetch('/bailey-internal/api/cert-authorities/' + encodeURIComponent(name), {method:'DELETE'})
     .then(r => r.json()).then(() => loadCAs());
 }
 function loadHostCerts() {
-  fetch('/bailey-admin-internal/api/hostname-certs').then(r=>r.json()).then(list => {
+  fetch('/bailey-internal/api/hostname-certs').then(r=>r.json()).then(list => {
     if (!Array.isArray(list) || list.length === 0) {
       document.getElementById('host-list').innerHTML = '<p class="note">No custom hostname certs installed.</p>';
       return;
@@ -194,7 +194,7 @@ function uploadHostCert() {
     document.getElementById('host-msg').textContent = 'Hostname, cert and key are required.';
     return;
   }
-  fetch('/bailey-admin-internal/api/hostname-certs', {
+  fetch('/bailey-internal/api/hostname-certs', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({hostname, cert_pem, key_pem})
   }).then(r => r.json()).then(d => {
@@ -209,7 +209,7 @@ function uploadHostCert() {
 }
 function removeHostCert(host) {
   if (!confirm('Remove cert for ' + host + '?')) return;
-  fetch('/bailey-admin-internal/api/hostname-certs/' + encodeURIComponent(host), {method:'DELETE'})
+  fetch('/bailey-internal/api/hostname-certs/' + encodeURIComponent(host), {method:'DELETE'})
     .then(r => r.json()).then(() => loadHostCerts());
 }
 loadCAs();

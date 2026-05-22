@@ -647,7 +647,7 @@ type OAuthClientResponse struct {
 }
 
 // GetOrCreateOAuthClient provisions a Keycloak OIDC client for a named admin
-// service (e.g., "bailey-admin") scoped to this automation server.
+// service (e.g., "bailey") scoped to this automation server.
 // The client_id is deterministic: automation-server-{server_id}-{service_name}-client.
 // If the client already exists, the redirect_uri is added and existing credentials returned.
 func (c *AOCClient) GetOrCreateOAuthClient(serviceName, redirectURI string) (*OAuthClientResponse, error) {

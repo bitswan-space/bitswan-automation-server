@@ -26,7 +26,7 @@ import (
 //     which the middleware would re-wrap — nesting wraps and
 //     eventually escaping the user's tab.
 //
-// Exempt paths (escape-the-iframe): /oauth2/* and /bailey-admin/signout
+// Exempt paths (escape-the-iframe): /oauth2/* and /bailey/signout
 // must redirect to external IdP URLs (Keycloak end_session, etc.).
 // Those targets reject iframe embedding via X-Frame-Options or CSP,
 // so the wrap would leave the user looking at a blank iframe. We
@@ -79,7 +79,7 @@ func chromeWrapMiddleware(inner http.Handler) http.Handler {
 // uses window.top.location to perform the redirect at top level.
 func isIframeEscapePath(path string) bool {
 	return strings.HasPrefix(path, "/oauth2/") ||
-		path == "/bailey-admin/signout"
+		path == "/bailey/signout"
 }
 
 // chromeFlowWriter intercepts the response from a handler running

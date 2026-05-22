@@ -293,7 +293,7 @@ func shareIndexHTML(email string, endpoints []endpointRecord) string {
 		rows = b.String()
 	}
 	body := fmt.Sprintf(`
-<div class="header">%s<h1>Endpoints you can share</h1><a href="/bailey-admin/" class="sign-out">← Bailey</a></div>
+<div class="header">%s<h1>Endpoints you can share</h1><a href="/bailey/" class="sign-out">← Bailey</a></div>
 <div class="card">
   <p>Signed in as <code>%s</code>. These are the endpoints where you're an owner — you can grant access, view who has it, and approve pending requests.</p>
   %s

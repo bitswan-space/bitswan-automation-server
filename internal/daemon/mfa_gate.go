@@ -100,7 +100,7 @@ func mfaGateHandler(w http.ResponseWriter, r *http.Request, proxy *httputil.Reve
 //   - The hostname isn't yet registered (treat as "bootstrap window"
 //     — the next eligible user effectively becomes its owner via the
 //     normal init path)
-//   - The Host is bailey-admin.<domain> AND no endpoint exists yet
+//   - The Host is bailey.<domain> AND no endpoint exists yet
 //     (bootstrap: first user to sign in claims server ownership)
 func enforceMFAGate(w http.ResponseWriter, r *http.Request) bool {
 	if os.Getenv("BAILEY_MFA_GATE_DISABLE") == "1" {
@@ -148,7 +148,7 @@ func enforceMFAGate(w http.ResponseWriter, r *http.Request) bool {
 // the request should be served; false if it was handled (denied page
 // rendered, request-access form, or auto-claimed bootstrap).
 //
-// bailey-admin.<domain> gets a free pass — it's the management
+// bailey.<domain> gets a free pass — it's the management
 // surface where per-page logic applies. The bailey-admin handler
 // runs its own per-page authorization (devices/recovery for any
 // signed-in user, server-admin pages for the server owner). We
@@ -159,11 +159,11 @@ func enforceEndpointACL(w http.ResponseWriter, r *http.Request, email string, gr
 	if host == "" {
 		return true
 	}
-	if isBaileyAdminHost(host) {
+	if isBaileyHost(host) {
 		// Register endpoint row on first sign-in so audit / share
 		// pages have an owner to attribute to, but don't gate.
 		if ep, _ := getEndpoint(host); ep == nil {
-			_, _ = registerEndpoint(host, email, "Bailey admin ("+host+")")
+			_, _ = registerEndpoint(host, email, "Bailey ("+host+")")
 		}
 		return true
 	}
@@ -193,8 +193,8 @@ func enforceEndpointACL(w http.ResponseWriter, r *http.Request, email string, gr
 	return true
 }
 
-func isBaileyAdminHost(host string) bool {
-	return strings.HasPrefix(strings.ToLower(host), "bailey-admin.")
+func isBaileyHost(host string) bool {
+	return strings.HasPrefix(strings.ToLower(host), "bailey.")
 }
 
 // requestEndpointHost returns the canonical hostname for ACL lookup.

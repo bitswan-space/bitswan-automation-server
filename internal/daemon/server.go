@@ -181,10 +181,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Docs endpoint (unauthenticated - public access)
 	mux.HandleFunc("/api-docs", s.handleDocs)
 
-	// Bailey admin — single unified handler at /bailey-admin/*.
+	// Bailey — single unified handler at /bailey/*.
 	// MFA gate enforcement happens inside the handler itself.
-	mux.HandleFunc("/bailey-admin", s.handleBaileyAdmin)
-	mux.HandleFunc("/bailey-admin/", s.handleBaileyAdmin)
+	mux.HandleFunc("/bailey", s.handleBailey)
+	mux.HandleFunc("/bailey/", s.handleBailey)
 	// MFA gate routes (enrol/challenge/account/devices/pair/approve)
 	// served on the same mux so redirects from bailey-admin can hit
 	// them on the same host.
@@ -273,12 +273,12 @@ func (s *Server) Run() error {
 		Handler: s.setupRoutes(),
 	}
 
-	// Create HTTP server for docs + Bailey admin (listens on TCP port 8080).
-	// Traefik routes bailey-admin.{domain} here, so Bailey admin must be registered
+	// Create HTTP server for docs + Bailey (listens on TCP port 8080).
+	// Traefik routes bailey.{domain} here, so Bailey must be registered
 	// on this mux — not just the Unix socket mux.
 	docsMux := http.NewServeMux()
-	docsMux.HandleFunc("/bailey-admin", s.handleBaileyAdmin)
-	docsMux.HandleFunc("/bailey-admin/", s.handleBaileyAdmin)
+	docsMux.HandleFunc("/bailey", s.handleBailey)
+	docsMux.HandleFunc("/bailey/", s.handleBailey)
 	docsMux.HandleFunc("/2fa-gate/", handleGatePathRoot)
 	
 	docsMux.HandleFunc("/api-docs", s.handleDocs)
@@ -287,10 +287,10 @@ func (s *Server) Run() error {
 		// only URI Keycloak will accept after RP-initiated logout, since
 		// AOC registers it with a trailing slash and Keycloak does exact
 		// matching). Send the user to the appropriate admin homepage —
-		// internal hosts under .bswn.internal go to /bailey-admin-internal/,
-		// everything else to the public /bailey-admin/.
-		if strings.HasPrefix(r.Host, "bailey-admin") {
-			http.Redirect(w, r, "/bailey-admin/", http.StatusFound)
+		// internal hosts under .bswn.internal go to /bailey-internal/,
+		// everything else to the public /bailey/.
+		if strings.HasPrefix(r.Host, "bailey") {
+			http.Redirect(w, r, "/bailey/", http.StatusFound)
 			return
 		}
 		s.handleDocs(w, r)
@@ -328,7 +328,7 @@ func (s *Server) Run() error {
 		}
 	}()
 
-	// Bailey admin pages live behind oauth2-proxy on this server. Children
+	// Bailey pages live behind oauth2-proxy on this server. Children
 	// die with the previous daemon container, so always restart them on
 	// boot and re-register the ingress routes with the right upstream
 	// ports. ZTNA tunnel + routing-peer container are owned by the ZTNA
@@ -344,8 +344,8 @@ func (s *Server) Run() error {
 		// Bring traefik-protected + bitswan-protected-proxy up
 		// (provisioning the OAuth client + env file along the way).
 		reconcileTraefikProtected()
-		// Admin oauth2-proxy in front of the daemon for bailey-admin.
-		setupProtectedAdminRoutes(serverConfig.Domain, serverConfig.ProtectedHostnameDomain())
+		// Admin oauth2-proxy in front of the daemon for bailey.
+		setupProtectedRoutes(serverConfig.Domain, serverConfig.ProtectedHostnameDomain())
 		// MFA gate (TOTP + device cookie + chrome wrap).
 		if err := startMFAGate(); err != nil {
 			fmt.Printf("Warning: MFA gate failed to start: %v\n", err)

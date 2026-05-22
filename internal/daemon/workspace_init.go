@@ -1144,7 +1144,7 @@ providers:
 
 	serverConfig, _ = cfg.LoadConfig()
 	if serverConfig != nil {
-		setupProtectedAdminRoutes(domain, serverConfig.ProtectedHostnameDomain())
+		setupProtectedRoutes(domain, serverConfig.ProtectedHostnameDomain())
 	}
 
 	// Mark VPN-side infra as initialized so other code (ingress routing

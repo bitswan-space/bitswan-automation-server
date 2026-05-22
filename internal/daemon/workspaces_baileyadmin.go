@@ -10,7 +10,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 )
 
-// /bailey-admin/api/workspaces — open to any authenticated user.
+// /bailey/api/workspaces — open to any authenticated user.
 // GET returns workspaces the caller has any ACL relationship with
 // (owner, grantee, or in a granted group). POST creates a new
 // workspace with the caller as the owner of its editor + gitops

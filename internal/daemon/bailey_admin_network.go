@@ -11,7 +11,7 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 )
 
-// Bailey admin / Network Access page. After the NetBird-specific UI
+// Bailey / Network Access page. After the NetBird-specific UI
 // was ripped out, this page describes the protected-ingress flow
 // agnostically: the operator can expose the gateway via any external
 // tunnel (NetBird, Cloudflare Tunnel, Tailscale, ssh tunnel, …) and
@@ -23,14 +23,14 @@ const networkAccessHTML = `
 `
 
 const networkAccessScript = `
-fetch('/bailey-admin/api/protected-ingress').then(r => r.json()).then(d => {
+fetch('/bailey/api/protected-ingress').then(r => r.json()).then(d => {
   document.getElementById('protected-ingress-box').innerHTML = d.html || '';
 });
 `
 
 // handleProtectedIngressInfo serves a JSON envelope holding a chunk of
 // pre-rendered HTML the page polls in. Server-built so the link/style
-// stays consistent with the rest of bailey-admin.
+// stays consistent with the rest of bailey.
 func handleProtectedIngressInfo(w http.ResponseWriter, r *http.Request) {
 	sc, _ := config.NewAutomationServerConfig().LoadConfig()
 	if sc == nil {
@@ -56,7 +56,7 @@ func handleProtectedIngressInfo(w http.ResponseWriter, r *http.Request) {
 // also gone (otherwise hitting any protected page would silently
 // re-issue a code from the lingering IdP session).
 func signoutRedirect(w http.ResponseWriter, r *http.Request, postLogoutPath string) {
-	cfg, _ := oauth.GetOauthConfig(baileyAdminConfigName)
+	cfg, _ := oauth.GetOauthConfig(baileyConfigName)
 	if cfg == nil || cfg.IssuerUrl == "" {
 		http.Redirect(w, r, "/oauth2/sign_out", http.StatusFound)
 		return

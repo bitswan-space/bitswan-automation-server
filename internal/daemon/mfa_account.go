@@ -18,7 +18,7 @@ import (
 // /2fa-gate/account/* — self-service pages where a signed-in user can
 // see their paired devices and (admin only) enrol in TOTP. We keep the
 // pages minimal and stitched into the same chrome-and-CSS that the
-// bailey admin uses so they feel like one site.
+// bailey uses so they feel like one site.
 
 func accountDevicesHandler(w http.ResponseWriter, r *http.Request, email string) {
 	switch r.Method {
@@ -196,7 +196,7 @@ func accountDevicesHTML(email string, devs []deviceRecord, current *deviceRecord
 		rows = b.String()
 	}
 	body := fmt.Sprintf(`
-<div class="header">%s<h1>Paired devices</h1><a href="/bailey-admin/" class="sign-out">← Bailey</a></div>
+<div class="header">%s<h1>Paired devices</h1><a href="/bailey/" class="sign-out">← Bailey</a></div>
 <div class="card">
   <p>Signed in as <code>%s</code>.</p>
   %s
@@ -218,7 +218,7 @@ func accountTOTPStatusHTML(email string, admin bool, rec *totpRecord) string {
 	}
 	_ = rec
 	body := fmt.Sprintf(`
-<div class="header">%s<h1>Two-factor authentication</h1><a href="/bailey-admin/" class="sign-out">← Bailey</a></div>
+<div class="header">%s<h1>Two-factor authentication</h1><a href="/bailey/" class="sign-out">← Bailey</a></div>
 <div class="card">
   <p>Signed in as <code>%s</code>.</p>
   %s
@@ -249,7 +249,7 @@ func accountTOTPEnrollHTML(email, secret, errMsg string) string {
 		}
 	}
 	body := fmt.Sprintf(`
-<div class="header">%s<h1>Enrol TOTP recovery</h1><a href="/bailey-admin/" class="sign-out">← Bailey</a></div>
+<div class="header">%s<h1>Enrol TOTP recovery</h1><a href="/bailey/" class="sign-out">← Bailey</a></div>
 <div class="card">
   <p>Signed in as <code>%s</code>. Scan with an authenticator app and enter the 6-digit code:</p>
   <div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;">

@@ -110,7 +110,7 @@ func serverDisplayName() string {
 
 // baileyCourtyardHost returns the bailey-admin hostname (the
 // "courtyard" — the central page from which the user manages all
-// their endpoints). Currently bailey-admin.<protected-domain>.
+// their endpoints). Currently bailey.<protected-domain>.
 //
 // Returns empty if no domain is configured (e.g. during init).
 func baileyCourtyardHost() string {
@@ -122,7 +122,7 @@ func baileyCourtyardHost() string {
 	if d == "" {
 		return ""
 	}
-	return "bailey-admin." + d
+	return "bailey." + d
 }
 
 func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {

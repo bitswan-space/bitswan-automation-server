@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/aoc"
+	"github.com/bitswan-space/bitswan-workspaces/internal/traefikapi"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 )
 
@@ -66,14 +67,14 @@ func containerIPv6(container, network string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// baileyAdminConfigName is the workspace identity bitswan registers with AOC for
-// the OIDC client that protects the Bailey admin pages.
-const baileyAdminConfigName = "bailey-admin"
+// baileyConfigName is the workspace identity bitswan registers with AOC for
+// the OIDC client that protects the Bailey pages.
+const baileyConfigName = "bailey"
 
-// getBaileyAdminOAuthConfig fetches a cached OAuth config for the Bailey admin
+// getBaileyOAuthConfig fetches a cached OAuth config for the Bailey
 // pages, or provisions one via AOC on first call.
-func getBaileyAdminOAuthConfig(domain string) (*oauth.Config, error) {
-	if cfg, err := oauth.GetOauthConfig(baileyAdminConfigName); err == nil {
+func getBaileyOAuthConfig(domain string) (*oauth.Config, error) {
+	if cfg, err := oauth.GetOauthConfig(baileyConfigName); err == nil {
 		return cfg, nil
 	}
 
@@ -81,8 +82,8 @@ func getBaileyAdminOAuthConfig(domain string) (*oauth.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("AOC not configured: %w", err)
 	}
-	redirectURI := fmt.Sprintf("https://bailey-admin.%s/oauth2/callback", domain)
-	resp, err := aocClient.GetOrCreateOAuthClient("bailey-admin", redirectURI)
+	redirectURI := fmt.Sprintf("https://bailey.%s/oauth2/callback", domain)
+	resp, err := aocClient.GetOrCreateOAuthClient("bailey", redirectURI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get/create OAuth client from AOC: %w", err)
 	}
@@ -96,8 +97,8 @@ func getBaileyAdminOAuthConfig(domain string) (*oauth.Config, error) {
 	}
 
 	homeDir := os.Getenv("HOME")
-	os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", baileyAdminConfigName), 0755)
-	oauth.SaveOauthConfig(baileyAdminConfigName, cfg)
+	os.MkdirAll(filepath.Join(homeDir, ".config", "bitswan", "workspaces", baileyConfigName), 0755)
+	oauth.SaveOauthConfig(baileyConfigName, cfg)
 	return cfg, nil
 }
 
@@ -108,7 +109,7 @@ func getBaileyAdminOAuthConfig(domain string) (*oauth.Config, error) {
 // only the redirect URL (different hostname pattern) and HTTP address
 // (different per-instance port).
 func startOAuth2Proxy(domain, hostname string, port int) error {
-	oauthCfg, err := getBaileyAdminOAuthConfig(domain)
+	oauthCfg, err := getBaileyOAuthConfig(domain)
 	if err != nil {
 		return err
 	}
@@ -116,7 +117,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 	// Idempotently register this hostname's callback with Keycloak.
 	redirectURL := fmt.Sprintf("https://%s/oauth2/callback", hostname)
 	if aocClient, err := aoc.NewAOCClient(); err == nil {
-		aocClient.GetOrCreateOAuthClient("bailey-admin", redirectURL)
+		aocClient.GetOrCreateOAuthClient("bailey", redirectURL)
 	}
 
 	// Lean on CreateOAuthEnvVars for the canonical bitswan oauth2-proxy
@@ -125,7 +126,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 	// from the workspace/service convention used by the editor and
 	// gitops; we replace those two with our values below since the VPN
 	// admin doesn't follow the {workspace}-{service} hostname pattern.
-	envVars := oauth.CreateOAuthEnvVars(oauthCfg, "bailey-admin", "", domain)
+	envVars := oauth.CreateOAuthEnvVars(oauthCfg, "bailey", "", domain)
 	envVars = setEnvVar(envVars, "OAUTH2_PROXY_REDIRECT_URL", redirectURL)
 	envVars = setEnvVar(envVars, "OAUTH2_PROXY_HTTP_ADDRESS", fmt.Sprintf("0.0.0.0:%d", port))
 
@@ -133,7 +134,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 	envVars = append(envVars,
 		"OAUTH2_PROXY_UPSTREAMS=http://127.0.0.1:8080",
 		"OAUTH2_PROXY_COOKIE_NAME="+cookieName,
-		// Forward identity to our backend so /bailey-admin-internal handlers
+		// Forward identity to our backend so /bailey-internal handlers
 		// can read X-Forwarded-Email / Groups for the admin check.
 		"OAUTH2_PROXY_PASS_USER_HEADERS=true",
 		"OAUTH2_PROXY_SET_XAUTHREQUEST=true",
@@ -164,7 +165,7 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 <div class="card">
 <h2>Common causes</h2>
 <div class="step"><span class="step-num">1</span><div class="step-text"><b>Email not verified</b> — please verify your email on your identity provider, then try again.</div></div>
-<div class="step"><span class="step-num">2</span><div class="step-text"><b>Session expired</b> — try signing in again by visiting the <a href="/bailey-admin/" style="color:#093DF5">Bailey admin page</a>.</div></div>
+<div class="step"><span class="step-num">2</span><div class="step-text"><b>Session expired</b> — try signing in again by visiting the <a href="/bailey/" style="color:#093DF5">Bailey page</a>.</div></div>
 <div class="step"><span class="step-num">3</span><div class="step-text"><b>Not authorized</b> — you may not be a member of the <b>` + html.EscapeString(orgName) + `</b> organisation.</div></div>
 </div></body></html>`
 	os.WriteFile(filepath.Join(templateDir, "error.html"), []byte(errorTemplate), 0644)
@@ -336,39 +337,31 @@ func ensureOAuth2ProxyBinary() (string, error) {
 	return "", fmt.Errorf("oauth2-proxy binary not in tarball")
 }
 
-// setupProtectedAdminRoutes starts oauth2-proxy in front of the daemon for both
-// the external and internal Bailey admin hostnames and registers matching
-// ingress routes. Falls back to the daemon's plain HTTP port if oauth2-proxy
-// fails to start, so the pages remain reachable (unauthenticated) for
-// debugging instead of returning 502.
-func setupProtectedAdminRoutes(domain, internalDomain string) {
-	externalHostname := "bailey-admin." + domain
-	externalUpstream := "bitswan-automation-server-daemon:8080"
-	if err := startOAuth2Proxy(domain, externalHostname, 9999); err != nil {
-		fmt.Printf("Warning: external Bailey admin OAuth failed: %v (falling back to unauthenticated)\n", err)
-	} else {
-		externalUpstream = "bitswan-automation-server-daemon:9999"
+// setupProtectedRoutes wires bailey.<domain> into the shared
+// protected-ingress chain. Same topology as any other workspace
+// endpoint: platform-traefik (priority 200) → bitswan-protected-proxy
+// → MFA gate + chrome wrap → traefik-protected → daemon docs server.
+//
+// One Keycloak client for everything (bitswan-protected-client); no
+// separate per-bailey oauth2-proxy. The redirect URI is registered
+// idempotently via AOC.
+func setupProtectedRoutes(domain, internalDomain string) {
+	hostname := "bailey." + domain
+	// (a) Make sure Keycloak accepts the callback URL.
+	if err := registerProtectedRedirectURI(hostname); err != nil {
+		fmt.Printf("Warning: AOC didn't accept the protected-client redirect URI for %s: %v\n", hostname, err)
 	}
-	if err := addRouteToIngress(IngressAddRouteRequest{
-		Hostname:      externalHostname,
-		Upstream:      externalUpstream,
-		IngressTarget: "external",
-	}, ""); err != nil {
-		fmt.Printf("Warning: register external Bailey admin route: %v\n", err)
+	// (b) Platform-traefik: bailey.<domain> → bitswan-protected-proxy
+	if err := traefikapi.AddRouteWithTraefikPriority(
+		hostname, "bitswan-protected-proxy:80", "", "letsencrypt", 200,
+	); err != nil {
+		fmt.Printf("Warning: register platform route for %s: %v\n", hostname, err)
 	}
-
-	internalHostname := "bailey-admin." + internalDomain
-	internalUpstream := "bitswan-automation-server-daemon:8080"
-	if err := startOAuth2Proxy(domain, internalHostname, 9998); err != nil {
-		fmt.Printf("Warning: internal Bailey admin OAuth failed: %v (falling back to unauthenticated)\n", err)
-	} else {
-		internalUpstream = "bitswan-automation-server-daemon:9998"
-	}
-	if err := addRouteToIngress(IngressAddRouteRequest{
-		Hostname:      internalHostname,
-		Upstream:      internalUpstream,
-		IngressTarget: "internal",
-	}, ""); err != nil {
-		fmt.Printf("Warning: register internal Bailey admin route: %v\n", err)
+	// (c) traefik-protected: bailey.<domain> → daemon docs server (8080)
+	if err := traefikapi.AddRouteWithTraefik(
+		hostname, "bitswan-automation-server-daemon:8080",
+		"http://traefik-protected:8080",
+	); err != nil {
+		fmt.Printf("Warning: register traefik-protected route for %s: %v\n", hostname, err)
 	}
 }

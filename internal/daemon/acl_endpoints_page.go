@@ -9,12 +9,12 @@ import (
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
 )
 
-// Endpoints page in bailey-admin. Shows a map of every protected
+// Endpoints page in bailey. Shows a map of every protected
 // endpoint with its owner + grants. Anyone signed in can open it
 // (it's part of the chrome-wrapped bailey-admin), but the JSON API
 // filters per caller:
 //
-//   - server owner (original owner of bailey-admin.<domain>): sees
+//   - server owner (original owner of bailey.<domain>): sees
 //     EVERY endpoint, with full ACL detail, in read-only audit mode.
 //   - everyone else: sees only the endpoints they're involved with
 //     (own, are granted on, or are in a granted group of).
@@ -38,7 +38,7 @@ type endpointListing struct {
 }
 
 // callerIsServerOwner reports whether the caller is the original
-// owner of the bailey-admin.<domain> endpoint. Used to gate the
+// owner of the bailey.<domain> endpoint. Used to gate the
 // server-wide audit view.
 func callerIsServerOwner(callerEmail string, r *http.Request) (bool, error) {
 	host := serverBaileyAdminHost(r)
@@ -64,7 +64,7 @@ func callerIsServerOwner(callerEmail string, r *http.Request) (bool, error) {
 // hosts if needed); falls back to the configured domain.
 func serverBaileyAdminHost(r *http.Request) string {
 	if r != nil {
-		if h := requestEndpointHost(r); isBaileyAdminHost(h) {
+		if h := requestEndpointHost(r); isBaileyHost(h) {
 			return h
 		}
 	}
@@ -73,7 +73,7 @@ func serverBaileyAdminHost(r *http.Request) string {
 		return ""
 	}
 	if d := sc.ProtectedHostnameDomain(); d != "" {
-		return "bailey-admin." + d
+		return "bailey." + d
 	}
 	return ""
 }
