@@ -285,16 +285,20 @@ func removeAccessRequest(hostname, email string) error {
 	return err
 }
 
-// listEndpointsWhereUserCanShare returns the endpoints where the
-// caller is the original owner OR has an owner-role grant via email
-// or group. Used for the "my endpoints" landing page.
-func listEndpointsWhereUserCanShare(email string, groups []string) ([]endpointRecord, error) {
+// listAllEndpoints returns every endpoint row. Filtering by caller
+// role happens in memory because doing it in SQL would require
+// joining grants per row, and we'd still need the per-row group-
+// match logic in Go.
+//
+// IMPORTANT: this returns immediately — don't call other DB-querying
+// helpers inside a rows.Next() loop, because SetMaxOpenConns(1)
+// would deadlock (the outer rows holds the only connection while
+// the inner query waits for it).
+func listAllEndpoints() ([]endpointRecord, error) {
 	db, err := openBaileyDB()
 	if err != nil {
 		return nil, err
 	}
-	// Pull all endpoints; cheap because the row count tracks deploys,
-	// not requests. Then filter in memory using roleFor.
 	rows, err := db.Query(`SELECT hostname, owner_email, COALESCE(display_name,''), created_at FROM endpoints`)
 	if err != nil {
 		return nil, err
@@ -306,10 +310,25 @@ func listEndpointsWhereUserCanShare(email string, groups []string) ([]endpointRe
 		if err := rows.Scan(&e.Hostname, &e.OwnerEmail, &e.DisplayName, &e.CreatedAt); err != nil {
 			return nil, err
 		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// listEndpointsWhereUserCanShare returns the endpoints where the
+// caller is the original owner OR has an owner-role grant via email
+// or group. Used for the "my endpoints" landing page.
+func listEndpointsWhereUserCanShare(email string, groups []string) ([]endpointRecord, error) {
+	endpoints, err := listAllEndpoints()
+	if err != nil {
+		return nil, err
+	}
+	var out []endpointRecord
+	for _, e := range endpoints {
 		role, _ := roleFor(e.Hostname, email, groups)
 		if role == roleOwner {
 			out = append(out, e)
 		}
 	}
-	return out, rows.Err()
+	return out, nil
 }

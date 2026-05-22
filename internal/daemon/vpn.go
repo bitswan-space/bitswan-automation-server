@@ -6,6 +6,7 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -143,12 +144,17 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 		"OAUTH2_PROXY_WHITELIST_DOMAINS="+keycloakHostFromIssuer(oauthCfg.IssuerUrl),
 	)
 
-	// Bitswan-branded error template.
+	// Bitswan-branded error template. The "Not authorized" hint
+	// names the actual organisation (server name) the user needs to
+	// be a member of, so the error is actionable — saying "Keycloak"
+	// in the message is jargon that confuses users who only know it
+	// as the org/IdP.
 	homeDir := os.Getenv("HOME")
 	templateDir := filepath.Join(homeDir, ".config", "bitswan", "oauth2-proxy-templates")
 	os.MkdirAll(templateDir, 0755)
+	orgName := serverDisplayName() // e.g. "Sandbox" or "BitSwan"
 	errorTemplate := `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>BitSwan VPN — Authentication Error</title>
+<html><head><meta charset="utf-8"><title>` + html.EscapeString(orgName) + ` — Authentication Error</title>
 <style>` + bitswanPageCSS + `</style></head><body>
 <div class="header">` + bitswanLogoSVG + `<h1>Authentication Error</h1></div>
 <div class="card">
@@ -157,9 +163,9 @@ func startOAuth2Proxy(domain, hostname string, port int) error {
 </div>
 <div class="card">
 <h2>Common causes</h2>
-<div class="step"><span class="step-num">1</span><div class="step-text"><b>Email not verified</b> — your identity provider must mark your email as verified.</div></div>
+<div class="step"><span class="step-num">1</span><div class="step-text"><b>Email not verified</b> — please verify your email on your identity provider, then try again.</div></div>
 <div class="step"><span class="step-num">2</span><div class="step-text"><b>Session expired</b> — try signing in again by visiting the <a href="/bailey-admin/" style="color:#093DF5">Bailey admin page</a>.</div></div>
-<div class="step"><span class="step-num">3</span><div class="step-text"><b>Not authorized</b> — you may not be a member of this automation server's organization in Keycloak.</div></div>
+<div class="step"><span class="step-num">3</span><div class="step-text"><b>Not authorized</b> — you may not be a member of the <b>` + html.EscapeString(orgName) + `</b> organisation.</div></div>
 </div></body></html>`
 	os.WriteFile(filepath.Join(templateDir, "error.html"), []byte(errorTemplate), 0644)
 	envVars = append(envVars, "OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR="+templateDir)

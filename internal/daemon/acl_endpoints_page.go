@@ -81,56 +81,51 @@ func serverBaileyAdminHost(r *http.Request) string {
 // buildEndpointListing constructs the JSON used by the endpoints
 // page. The result is already filtered per caller — clients render
 // it directly.
+//
+// All endpoint rows are read up-front into a slice, then closed
+// before any other DB calls run. SetMaxOpenConns(1) on bailey.db
+// means a still-open rows handle holds the only connection; calling
+// roleFor or listGrants inside the loop would deadlock waiting for
+// itself.
 func buildEndpointListing(callerEmail string, callerGroups []string, r *http.Request) (*endpointListing, error) {
-	db, err := openBaileyDB()
+	endpoints, err := listAllEndpoints()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT hostname, owner_email, COALESCE(display_name,''), created_at FROM endpoints ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
 	serverOwner, err := callerIsServerOwner(callerEmail, r)
 	if err != nil {
 		return nil, err
 	}
-
 	out := &endpointListing{
 		CallerEmail:   callerEmail,
 		IsServerOwner: serverOwner,
 	}
-	for rows.Next() {
-		var e endpointListEntry
-		if err := rows.Scan(&e.Hostname, &e.OwnerEmail, &e.DisplayName, &e.CreatedAt); err != nil {
-			return nil, err
+	for _, ep := range endpoints {
+		entry := endpointListEntry{
+			Hostname:    ep.Hostname,
+			OwnerEmail:  ep.OwnerEmail,
+			DisplayName: ep.DisplayName,
+			CreatedAt:   ep.CreatedAt,
 		}
-		// Resolve caller's role on this endpoint.
-		role, err := roleFor(e.Hostname, callerEmail, callerGroups)
+		role, err := roleFor(ep.Hostname, callerEmail, callerGroups)
 		if err != nil {
 			return nil, err
 		}
-		e.CallerRole = string(role)
-		if e.CallerRole == "" && serverOwner {
-			e.CallerRole = "viewer"
+		entry.CallerRole = string(role)
+		if entry.CallerRole == "" && serverOwner {
+			entry.CallerRole = "viewer"
 		}
-		if e.CallerRole == "" {
-			// Caller has no relationship to this endpoint and isn't
-			// the server owner — skip from the per-caller view.
+		if entry.CallerRole == "" {
 			continue
 		}
-		// Owner and server-owner views include grants. Access-role
-		// callers get the bare metadata so they know the endpoint
-		// exists but can't enumerate everyone else with access.
-		if e.CallerRole == "owner" || e.CallerRole == "viewer" {
-			grants, gerr := listGrants(e.Hostname)
+		if entry.CallerRole == "owner" || entry.CallerRole == "viewer" {
+			grants, gerr := listGrants(ep.Hostname)
 			if gerr != nil {
 				return nil, gerr
 			}
-			e.Grants = grants
+			entry.Grants = grants
 		}
-		out.Endpoints = append(out.Endpoints, e)
+		out.Endpoints = append(out.Endpoints, entry)
 	}
-	return out, rows.Err()
+	return out, nil
 }
