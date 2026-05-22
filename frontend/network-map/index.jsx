@@ -92,109 +92,164 @@ function GroupNode({ data }) {
 const nodeTypes = { base: BaseNode, group: GroupNode };
 
 // -----------------------------------------------------------------------------
-// Layout. Dagre's compound (parent/child) support is incomplete in the JS
-// port — workspace/network boxes end up wrong-sized relative to their actual
-// children. Instead we use dagre purely for LEAF positioning, then derive each
-// parent's bounding box from its children's positions + sizes. Two-tier
-// nesting (workspace > network > container) is handled by computing
-// network bboxes first, then workspaces from their child networks.
+// Layout: explicit hierarchical LR. Hand-rolled rather than dagre because
+// dagre's flat layout doesn't respect parent grouping — children of different
+// workspaces ended up sharing the same dagre column, causing the workspace
+// bounding boxes to overlap unpredictably.
+//
+// Three nested layers:
+//   • Top-level chain (LR): endpoints → platform-traefik → bitswan-protected-
+//     proxy → traefik-protected → workspaces.
+//   • Inside each workspace: workspace_traefik on the left, networks stacked
+//     vertically on the right.
+//   • Inside each network: containers stacked vertically.
+//
+// All position math runs once on the data and is direction-agnostic past the
+// fact that we lay things out as columns + stacks.
 // -----------------------------------------------------------------------------
 const LEAF_W = 220;
 const LEAF_H = 64;
-const PARENT_PAD = { x: 18, top: 38, bottom: 18 }; // header takes more space than the footer
+const COL_GAP = 90;   // horizontal gap between top-level columns
+const ROW_GAP = 24;   // vertical gap between siblings stacking in a column
+const WS_INNER_X = 24, WS_INNER_TOP = 38, WS_INNER_BOTTOM = 18;
+const NET_INNER_X = 14, NET_INNER_TOP = 30, NET_INNER_BOTTOM = 12;
+const WS_INNER_GAP = 26; // gap between workspace_traefik column and network column inside a workspace
 
-function layout(nodes, edges) {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
+function layout(nodes /*, edges */) {
   const groupKinds = new Set(['workspace', 'network']);
-  const leaves = nodes.filter((n) => !groupKinds.has(n.data.kind));
-
-  // Build a flat dagre graph using ONLY leaves. Edges that touch a group
-  // are remapped to a leaf representative so the layout still respects
-  // the workspace's place in the chain.
-  const repFor = (id) => {
-    if (!groupKinds.has(byId.get(id)?.data.kind)) return id;
-    // Use the first descendant leaf as the representative.
-    const stack = [id];
-    while (stack.length) {
-      const cur = stack.pop();
-      for (const n of nodes) {
-        if (n.parentNode === cur) {
-          if (!groupKinds.has(n.data.kind)) return n.id;
-          stack.push(n.id);
-        }
-      }
-    }
-    return id;
-  };
-
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'LR', nodesep: 32, ranksep: 100, marginx: 24, marginy: 24 });
-  g.setDefaultEdgeLabel(() => ({}));
-  leaves.forEach((n) => g.setNode(n.id, { width: LEAF_W, height: LEAF_H }));
-  edges.forEach((e) => {
-    const s = repFor(e.source); const t = repFor(e.target);
-    if (s !== t && g.hasNode(s) && g.hasNode(t)) g.setEdge(s, t);
-  });
-  dagre.layout(g);
-
-  // Leaf positions (top-left coordinates).
+  const childrenOf = (parentId) => nodes.filter((n) => n.parentNode === parentId);
   const positions = new Map();
   const sizes = new Map();
-  leaves.forEach((n) => {
-    const p = g.node(n.id);
-    positions.set(n.id, { x: p.x - p.width / 2, y: p.y - p.height / 2 });
-    sizes.set(n.id, { w: LEAF_W, h: LEAF_H });
+
+  // -------- Pass 1: lay out container leaves inside each network. -------------
+  const networks = nodes.filter((n) => n.data.kind === 'network');
+  for (const net of networks) {
+    const kids = childrenOf(net.id);
+    let y = NET_INNER_TOP;
+    for (const k of kids) {
+      positions.set(k.id, { x: NET_INNER_X, y });
+      sizes.set(k.id, { w: LEAF_W, h: LEAF_H });
+      y += LEAF_H + ROW_GAP;
+    }
+    const inner = y - ROW_GAP;
+    sizes.set(net.id, {
+      w: LEAF_W + NET_INNER_X * 2,
+      h: Math.max(LEAF_H + NET_INNER_TOP + NET_INNER_BOTTOM, inner + NET_INNER_BOTTOM),
+    });
+  }
+
+  // -------- Pass 2: lay out each workspace internally. ------------------------
+  // workspace_traefik on the left, networks stacked vertically to the right.
+  const workspaces = nodes.filter((n) => n.data.kind === 'workspace');
+  for (const ws of workspaces) {
+    const kids = childrenOf(ws.id);
+    const wstraefik = kids.find((k) => k.data.kind === 'workspace_traefik');
+    const wsNetworks = kids.filter((k) => k.data.kind === 'network');
+
+    let netColX = WS_INNER_X;
+    if (wstraefik) {
+      sizes.set(wstraefik.id, { w: LEAF_W, h: LEAF_H });
+      positions.set(wstraefik.id, { x: WS_INNER_X, y: WS_INNER_TOP });
+      netColX = WS_INNER_X + LEAF_W + WS_INNER_GAP;
+    }
+
+    let netY = WS_INNER_TOP;
+    let netColW = 0;
+    for (const net of wsNetworks) {
+      const ns = sizes.get(net.id);
+      positions.set(net.id, { x: netColX, y: netY });
+      netY += ns.h + ROW_GAP;
+      if (ns.w > netColW) netColW = ns.w;
+    }
+    const innerBottom = Math.max(
+      wstraefik ? (WS_INNER_TOP + LEAF_H) : 0,
+      netY - ROW_GAP
+    );
+    sizes.set(ws.id, {
+      w: netColX + netColW + WS_INNER_X,
+      h: innerBottom + WS_INNER_BOTTOM,
+    });
+  }
+
+  // -------- Pass 3: lay out the top-level LR chain. ---------------------------
+  // Columns: endpoints (col 0), platform-traefik, bitswan-protected-proxy,
+  // traefik-protected, workspaces (each is its own row in this column).
+  const endpoints = nodes.filter((n) => n.data.kind === 'endpoint');
+  const ingressOrder = [
+    'ingress:platform-traefik',
+    'ingress:bitswan-protected-proxy',
+    'ingress:traefik-protected',
+  ];
+
+  // Stack endpoints in column 0.
+  let epColW = LEAF_W, epColH = 0;
+  endpoints.forEach((e, i) => {
+    positions.set(e.id, { x: 0, y: i * (LEAF_H + ROW_GAP) });
+    sizes.set(e.id, { w: LEAF_W, h: LEAF_H });
+    epColH = (i + 1) * LEAF_H + i * ROW_GAP;
   });
 
-  // Compute parent bboxes bottom-up: network parents first, then workspaces.
-  const computeBbox = (parentId) => {
-    const kids = nodes.filter((n) => n.parentNode === parentId);
-    if (!kids.length) {
-      // Empty parent — give it a small placeholder size.
-      positions.set(parentId, positions.get(parentId) || { x: 0, y: 0 });
-      sizes.set(parentId, { w: 160, h: 60 });
-      return;
-    }
-    // Ensure children are positioned first.
-    kids.forEach((k) => { if (groupKinds.has(k.data.kind)) computeBbox(k.id); });
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const k of kids) {
-      const p = positions.get(k.id);
-      const s = sizes.get(k.id);
-      if (!p || !s) continue;
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x + s.w > maxX) maxX = p.x + s.w;
-      if (p.y + s.h > maxY) maxY = p.y + s.h;
-    }
-    const padL = PARENT_PAD.x, padR = PARENT_PAD.x, padT = PARENT_PAD.top, padB = PARENT_PAD.bottom;
-    const parentX = minX - padL;
-    const parentY = minY - padT;
-    const parentW = (maxX - minX) + padL + padR;
-    const parentH = (maxY - minY) + padT + padB;
-    positions.set(parentId, { x: parentX, y: parentY });
-    sizes.set(parentId, { w: parentW, h: parentH });
-  };
+  // Stack workspaces in their column.
+  let wsColW = 0, wsColH = 0;
+  workspaces.forEach((ws, i) => {
+    const ss = sizes.get(ws.id);
+    if (ss.w > wsColW) wsColW = ss.w;
+    // y is provisional; will be re-applied after we know its column x.
+    positions.set(ws.id, { x: 0, y: wsColH });
+    wsColH += ss.h + (i === workspaces.length - 1 ? 0 : ROW_GAP);
+  });
 
-  const topLevelGroups = nodes
-    .filter((n) => groupKinds.has(n.data.kind) && !n.parentNode);
-  topLevelGroups.forEach((p) => computeBbox(p.id));
+  // Tallest column drives the overall vertical centering.
+  const colHeights = [epColH, LEAF_H, LEAF_H, LEAF_H, wsColH];
+  const maxColH = Math.max(...colHeights);
 
-  // Convert to React Flow positions. Children must be expressed relative
-  // to their parent.
+  // Place columns left-to-right.
+  const colXs = [];
+  let cursor = 0;
+  for (let i = 0; i < 5; i++) {
+    colXs.push(cursor);
+    const colW = [epColW, LEAF_W, LEAF_W, LEAF_W, wsColW][i];
+    cursor += colW + COL_GAP;
+  }
+
+  // Re-place endpoints with column x + vertical centering.
+  endpoints.forEach((e, i) => {
+    const cx = colXs[0];
+    const cy = (maxColH - epColH) / 2 + i * (LEAF_H + ROW_GAP);
+    positions.set(e.id, { x: cx, y: cy });
+  });
+  // Place ingresses, one per column.
+  ingressOrder.forEach((id, i) => {
+    const n = nodes.find((x) => x.id === id);
+    if (!n) return;
+    const cx = colXs[i + 1];
+    const cy = (maxColH - LEAF_H) / 2;
+    positions.set(n.id, { x: cx, y: cy });
+    sizes.set(n.id, { w: LEAF_W, h: LEAF_H });
+  });
+  // Place workspaces, stacked.
+  let wsY = (maxColH - wsColH) / 2;
+  workspaces.forEach((ws) => {
+    const ss = sizes.get(ws.id);
+    positions.set(ws.id, { x: colXs[4], y: wsY });
+    wsY += ss.h + ROW_GAP;
+  });
+
+  // -------- Pass 4: convert to React Flow positions ---------------------------
+  // Children must be expressed relative to their parent.
   return nodes.map((n) => {
     const isGroup = groupKinds.has(n.data.kind);
-    let pos = positions.get(n.id);
-    if (!pos) pos = { x: 0, y: 0 }; // shouldn't happen but be defensive
+    let pos = positions.get(n.id) || { x: 0, y: 0 };
     if (n.parentNode) {
-      const pp = positions.get(n.parentNode) || { x: 0, y: 0 };
-      pos = { x: pos.x - pp.x, y: pos.y - pp.y };
+      // child positions are already PARENT-RELATIVE (set in passes 1 & 2),
+      // so no adjustment is needed here.
     }
-    return {
-      ...n,
-      position: pos,
-      style: isGroup ? { width: sizes.get(n.id).w, height: sizes.get(n.id).h } : undefined,
-    };
+    const out = { ...n, position: pos };
+    if (isGroup) {
+      const sz = sizes.get(n.id) || { w: 220, h: 100 };
+      out.style = { width: sz.w, height: sz.h };
+    }
+    return out;
   });
 }
 
