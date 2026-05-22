@@ -95,7 +95,7 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnInternalPage(email, "devices", false))
+		fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "devices", false))
 		return
 	}
 
@@ -113,25 +113,36 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case "/bailey/devices", "/bailey/devices/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "devices", admin))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "devices", admin))
 			return
 		}
 	case "/bailey/recovery", "/bailey/recovery/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "recovery", admin))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "recovery", admin))
 			return
 		}
 	case "/bailey/endpoints", "/bailey/endpoints/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "endpoints", admin))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "endpoints", admin))
 			return
 		}
 	case "/bailey/approvals", "/bailey/approvals/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "approvals", admin))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "approvals", admin))
+			return
+		}
+	case "/bailey/notifications", "/bailey/notifications/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "notifications", admin))
+			return
+		}
+	case "/bailey/api/notifications-count":
+		if r.Method == http.MethodGet {
+			handleNotificationsCount(w, r)
 			return
 		}
 	case "/bailey/api/endpoints":
@@ -156,7 +167,7 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case "/bailey/workspaces", "/bailey/workspaces/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "workspaces", admin))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "workspaces", admin))
 			return
 		}
 	case "/bailey/api/workspaces":
@@ -182,14 +193,14 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/bailey/siem" || r.URL.Path == "/bailey/siem/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "siem", true))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "siem", true))
 			return
 		}
 
 	case r.URL.Path == "/bailey/certs" || r.URL.Path == "/bailey/certs/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "certs", true))
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "certs", true))
 			return
 		}
 
@@ -454,7 +465,7 @@ body { max-width: none; padding: 0; display: flex; min-height: 100vh; }
 .main table { white-space: nowrap; }
 `
 
-func vpnInternalPage(email, page string, admin bool) string {
+func vpnInternalPage(email string, groups []string, page string, admin bool) string {
 	cfgSlug := config.NewAutomationServerConfig()
 	scSlug, _ := cfgSlug.LoadConfig()
 	serverName := "BitSwan"
@@ -564,6 +575,10 @@ loadList();`
   <p class="note">Someone signing in from a new browser sees a 6-digit code. Ask them to read it to you, type it here, and approve.</p>
   <iframe id="approvals-iframe" src="/2fa-gate/approve" style="width:100%;min-height:600px;border:0;"></iframe>
 </div>`
+
+	case "notifications":
+		pageTitle = "Notifications"
+		pageContent = notificationsPageHTML(email, groups, admin)
 
 	case "endpoints":
 		pageTitle = "Endpoints"
@@ -739,20 +754,21 @@ function showTab(groupId, tabId) {
   <nav class="sidebar-nav">
     <a href="/bailey/workspaces" class="%s">Workspaces</a>
     <a href="/bailey/endpoints" class="%s">Endpoints</a>
+    <a href="/bailey/notifications" class="%s" id="nav-notifications">Notifications<span id="nav-notifications-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
     <a href="/bailey/devices" class="%s">Devices</a>
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
     <div class="sidebar-section">Admin</div>
-    <a href="/bailey/approvals" class="%s" id="nav-approvals">Approvals<span id="nav-approvals-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
+    <a href="/bailey/approvals" class="%s">Approvals</a>
     <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/siem" class="%s">SIEM</a>
   </nav>
   <script>
     (function(){
       function poll(){
-        fetch('/2fa-gate/approve/pending-count',{credentials:'same-origin'})
+        fetch('/bailey/api/notifications-count',{credentials:'same-origin'})
           .then(r=>r.ok?r.json():{count:0})
           .then(d=>{
-            var b=document.getElementById('nav-approvals-badge');
+            var b=document.getElementById('nav-notifications-badge');
             if(d&&d.count>0){ b.textContent=d.count; b.style.display='inline-block'; }
             else{ b.style.display='none'; }
           }).catch(function(){});
@@ -772,7 +788,7 @@ function showTab(groupId, tabId) {
 <script>%s</script>
 </body></html>`,
 		pageTitle, serverName,
-		active("workspaces"), active("endpoints"),
+		active("workspaces"), active("endpoints"), active("notifications"),
 		active("devices"), active("recovery"),
 		active("approvals"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)

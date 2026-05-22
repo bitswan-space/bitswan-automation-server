@@ -48,6 +48,14 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 // oauth2-proxy-forwarded headers. Returns ("", nil) when there is no
 // signed identity on the request (e.g. before the OIDC handshake has
 // run, or in unit tests).
+// identityGroups returns the groups slice from oauth2-proxy headers.
+// Convenience wrapper around identityFromHeaders for callers that only
+// need the groups.
+func identityGroups(r *http.Request) []string {
+	_, groups := identityFromHeaders(r)
+	return groups
+}
+
 func identityFromHeaders(r *http.Request) (string, []string) {
 	email := r.Header.Get("X-Forwarded-Email")
 	if email == "" {

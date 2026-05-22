@@ -265,8 +265,13 @@ func handleChallengeGET(w http.ResponseWriter, r *http.Request, basePath, email 
 		originRedirect(w, r)
 		return
 	}
+	// Mint a pairing code at the same time so the user has a second
+	// path: enter the code on an already-trusted browser instead of
+	// typing TOTP here. generatePendingPair is idempotent on email —
+	// reloading the page reuses the existing pending entry.
+	pair, _ := generatePendingPair(email)
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, totpChallengeHTML(email, basePath, ""))
+	fmt.Fprint(w, totpChallengeHTML(email, basePath, "", pair))
 }
 
 func handleChallengePOST(w http.ResponseWriter, r *http.Request, basePath, email string) {
@@ -283,7 +288,8 @@ func handleChallengePOST(w http.ResponseWriter, r *http.Request, basePath, email
 	if !totp.Validate(code, rec.Secret) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprint(w, totpChallengeHTML(email, basePath, "Code didn't match — try again."))
+		pair, _ := generatePendingPair(email)
+		fmt.Fprint(w, totpChallengeHTML(email, basePath, "Code didn't match — try again.", pair))
 		return
 	}
 	if err := setSessionCookie(w, r, email); err != nil {
@@ -340,10 +346,40 @@ func totpEnrollHTML(email, secret, basePath, errMsg string) string {
 		bitswanFavicon, bitswanPageCSS, body)
 }
 
-func totpChallengeHTML(email, basePath, errMsg string) string {
+func totpChallengeHTML(email, basePath, errMsg string, pair *pairingEntry) string {
 	errBlock := ""
 	if errMsg != "" {
 		errBlock = `<p class="note" style="color:#b00020;"><b>` + html.EscapeString(errMsg) + `</b></p>`
+	}
+	pairBlock := ""
+	pairScript := ""
+	if pair != nil {
+		pairBlock = fmt.Sprintf(`
+<div class="card">
+  <h2 style="margin:0 0 4px;">Or, approve from another browser</h2>
+  <p class="note">Already signed in on a browser you've paired before? Open <code>/bailey/approvals</code> there and approve this code:</p>
+  <div style="text-align:center;padding:8px 0;">
+    <div style="font-size:48px;letter-spacing:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:300;color:#18181B;">%s</div>
+    <p class="note" id="pair-status" style="margin-top:8px;">Waiting for approval…</p>
+  </div>
+</div>`, html.EscapeString(pair.Code))
+		pairScript = `<script>
+(async function(){
+  async function poll(){
+    try {
+      const r = await fetch('` + mfaGatePathPrefix + `/pending-pair/poll', {credentials:'same-origin'});
+      if (r.status === 200) {
+        const d = await r.json();
+        document.getElementById('pair-status').textContent = 'Approved — redirecting…';
+        setTimeout(() => { window.location = d.redirect_path || '/'; }, 500);
+        return;
+      }
+    } catch(e) {}
+    setTimeout(poll, 2000);
+  }
+  poll();
+})();
+</script>`
 	}
 	body := fmt.Sprintf(`
 <div class="header">%s<h1>Second factor</h1></div>
@@ -354,9 +390,11 @@ func totpChallengeHTML(email, basePath, errMsg string) string {
     <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autofocus required style="font-size:18px;letter-spacing:4px;padding:6px 8px;width:120px;">
     <button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;margin-left:8px;border-radius:4px;font-size:14px;cursor:pointer;">Continue</button>
   </form>
-</div>`,
+</div>
+%s`,
 		bitswanLogoSVG, html.EscapeString(email),
-		errBlock, html.EscapeString(basePath), challengePathSuffix)
-	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Second factor</title>%s<style>%s</style></head><body>%s</body></html>`,
-		bitswanFavicon, bitswanPageCSS, body)
+		errBlock, html.EscapeString(basePath), challengePathSuffix,
+		pairBlock)
+	return fmt.Sprintf(`<!doctype html><html><head><meta charset="utf-8"><title>Second factor</title>%s<style>%s</style></head><body>%s%s</body></html>`,
+		bitswanFavicon, bitswanPageCSS, body, pairScript)
 }

@@ -273,6 +273,38 @@ func listAccessRequests(hostname string) ([]struct {
 	return out, rows.Err()
 }
 
+// AccessRequestRecord is one row from the access_requests table.
+type AccessRequestRecord struct {
+	Hostname    string
+	Email       string
+	RequestedAt string
+}
+
+// listAllAccessRequests returns every pending access request across
+// all endpoints, newest first. The caller is expected to filter by
+// ownership in-memory (we'd need a per-row join + group-match anyway,
+// so it's easier in Go).
+func listAllAccessRequests() ([]AccessRequestRecord, error) {
+	db, err := openBaileyDB()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.Query(`SELECT endpoint_host, email, requested_at FROM access_requests ORDER BY requested_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AccessRequestRecord
+	for rows.Next() {
+		var r AccessRequestRecord
+		if err := rows.Scan(&r.Hostname, &r.Email, &r.RequestedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // removeAccessRequest drops a request (after approval).
 func removeAccessRequest(hostname, email string) error {
 	db, err := openBaileyDB()

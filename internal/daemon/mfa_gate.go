@@ -92,6 +92,13 @@ func mfaGateHandler(w http.ResponseWriter, r *http.Request, proxy *httputil.Reve
 		handleGatePath(w, r)
 		return
 	}
+	// JSON-only bailey endpoints (XHR fetches) bypass the gate's 303
+	// redirects, which a fetch() can't follow into a TOTP form. The
+	// inner handler still enforces admin status where needed.
+	if strings.HasPrefix(r.URL.Path, "/bailey/api/") {
+		proxy.ServeHTTP(w, r)
+		return
+	}
 	if !enforceMFAGate(w, r) {
 		return
 	}
