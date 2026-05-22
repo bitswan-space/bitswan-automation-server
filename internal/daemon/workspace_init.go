@@ -1043,9 +1043,9 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 // initVPNAutomatically sets up the local internal-routing infrastructure
 // during workspace init: the bitswan_protected_network bridge, the per-server CA
 // and *.bswn.internal TLS cert, and the traefik-protected container that
-// terminates HTTPS for internal services. The actual user tunnel is owned
-// by an external ZTNA provider (NetBird etc.) — wired up later from the
-// admin UI's Network Access page.
+// terminates HTTPS for internal services. Public traffic enters through
+// platform-traefik (Let's Encrypt) and is authenticated by the shared
+// bitswan-protected-proxy — no external tunnel involved in the default flow.
 func initVPNAutomatically(domain string, verbose bool, writer io.Writer) {
 	if IsVPNEnabled() {
 		return
@@ -1151,7 +1151,7 @@ providers:
 	// decisions, idempotency on re-init) can short-circuit.
 	os.WriteFile(filepath.Join(vpnPath, "enabled"), []byte("true\n"), 0644)
 
-	fmt.Fprintln(writer, "Internal routing ready. Configure a ZTNA provider in the Bailey admin Network Access page to allow user devices in.")
+	fmt.Fprintln(writer, "Internal routing ready. Workspace endpoints are reachable through the wrap at bailey.<domain> after you sign in.")
 }
 
 func dockerComposeUpQuiet(projectName, composeContent, workDir string) {

@@ -179,13 +179,6 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch {
-	case r.URL.Path == "/bailey/network" || r.URL.Path == "/bailey/network/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, "network", true))
-			return
-		}
-
 	case r.URL.Path == "/bailey/siem" || r.URL.Path == "/bailey/siem/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
@@ -452,6 +445,7 @@ body { max-width: none; padding: 0; display: flex; min-height: 100vh; }
 .sidebar-nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: #3F3F46; text-decoration: none; font-size: 14px; font-weight: 500; border-left: 3px solid transparent; }
 .sidebar-nav a:hover { background: #F5F5F6; color: #18181B; }
 .sidebar-nav a.active { background: #EFF6FF; color: #093DF5; border-left-color: #093DF5; }
+.sidebar-section { padding: 20px 20px 6px; font-size: 11px; font-weight: 600; color: #A1A1AA; text-transform: uppercase; letter-spacing: 0.5px; border-top: 1px solid #F4F4F5; margin-top: 8px; }
 .sidebar-footer { padding: 16px 20px; border-top: 1px solid #E4E4E7; font-size: 13px; color: #71717A; }
 .sidebar-footer a { color: #71717A; text-decoration: none; }
 .sidebar-footer a:hover { color: #18181B; }
@@ -626,11 +620,6 @@ fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).
   <iframe src="/2fa-gate/account/2fa?_bailey_iframe=1" style="width:100%;min-height:380px;border:0;"></iframe>
 </div>`
 
-	case "network":
-		pageTitle = "Network Access"
-		pageContent = networkAccessHTML
-		pageScript = networkAccessScript
-
 	case "siem":
 		pageTitle = "SIEM Integration"
 		pageContent = `
@@ -750,12 +739,12 @@ function showTab(groupId, tabId) {
   <nav class="sidebar-nav">
     <a href="/bailey/workspaces" class="%s">Workspaces</a>
     <a href="/bailey/endpoints" class="%s">Endpoints</a>
-    <a href="/bailey/approvals" class="%s" id="nav-approvals">Approvals<span id="nav-approvals-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
-    <a href="/bailey/network" class="%s">Network Access</a>
-    <a href="/bailey/siem" class="%s">SIEM</a>
-    <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/devices" class="%s">Devices</a>
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
+    <div class="sidebar-section">Admin</div>
+    <a href="/bailey/approvals" class="%s" id="nav-approvals">Approvals<span id="nav-approvals-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
+    <a href="/bailey/certs" class="%s">Certificates</a>
+    <a href="/bailey/siem" class="%s">SIEM</a>
   </nav>
   <script>
     (function(){
@@ -783,8 +772,8 @@ function showTab(groupId, tabId) {
 <script>%s</script>
 </body></html>`,
 		pageTitle, serverName,
-		active("workspaces"), active("endpoints"), active("approvals"),
-		active("network"), active("siem"), active("certs"),
+		active("workspaces"), active("endpoints"),
 		active("devices"), active("recovery"),
+		active("approvals"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)
 }
