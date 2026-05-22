@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/http"
@@ -8,6 +9,10 @@ import (
 	"strings"
 	"time"
 )
+
+// jsonNewEncoder is a local alias so the helper at the bottom of the
+// file doesn't pull "encoding/json" into the imports a second time.
+var jsonNewEncoder = json.NewEncoder
 
 // /2fa-gate/share/<hostname>: owner-only UI for managing grants on
 // a specific endpoint. Lists current grants, lets the owner add new
@@ -111,6 +116,103 @@ func handleShareIndex(w http.ResponseWriter, r *http.Request, email string, grou
 	endpoints, _ := listEndpointsWhereUserCanShare(email, groups)
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, shareIndexHTML(email, endpoints))
+}
+
+// handleShareAPI is the JSON sibling of handleShareEndpoint. It's
+// what the in-wrap modal calls so the user can manage grants
+// without leaving the page.
+//
+//   GET    /2fa-gate/api/share/<host> → {owner_email, grants:[...]}
+//   POST   /2fa-gate/api/share/<host> → add grant (form-encoded:
+//          principal_type, principal_value, role) → return updated GET
+//   DELETE /2fa-gate/api/share/<host> → revoke grant (same form fields)
+//                                       → return updated GET
+//
+// Only owners may use it — same rule as the HTML share page.
+func handleShareAPI(w http.ResponseWriter, r *http.Request, email string, groups []string) {
+	prefix := mfaGatePathPrefix + "/api/share/"
+	host := strings.TrimPrefix(r.URL.Path, prefix)
+	host = strings.TrimRight(host, "/")
+	host, _ = url.PathUnescape(host)
+	if host == "" {
+		http.Error(w, `{"error":"host required"}`, http.StatusBadRequest)
+		return
+	}
+
+	ep, err := getEndpoint(host)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if ep == nil {
+		http.Error(w, `{"error":"endpoint not registered"}`, http.StatusNotFound)
+		return
+	}
+	role, err := roleFor(host, email, groups)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if role != roleOwner {
+		http.Error(w, `{"error":"owners only"}`, http.StatusForbidden)
+		return
+	}
+
+	writeListing := func() {
+		grants, _ := listGrants(host)
+		requests, _ := listAccessRequests(host)
+		w.Header().Set("Content-Type", "application/json")
+		_ = jsonEncode(w, map[string]any{
+			"hostname":     ep.Hostname,
+			"owner_email":  ep.OwnerEmail,
+			"display_name": ep.DisplayName,
+			"grants":       grants,
+			"requests":     requests,
+		})
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeListing()
+		return
+	case http.MethodPost, http.MethodDelete:
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		pType := strings.TrimSpace(r.FormValue("principal_type"))
+		pVal := strings.TrimSpace(r.FormValue("principal_value"))
+		roleVal := strings.TrimSpace(r.FormValue("role"))
+		if pVal == "" || pType == "" || roleVal == "" {
+			http.Error(w, `{"error":"principal_type, principal_value, role required"}`, http.StatusBadRequest)
+			return
+		}
+		if r.Method == http.MethodPost {
+			if err := addGrant(host, pType, pVal, roleVal, email); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			if pType == "email" {
+				_ = removeAccessRequest(host, pVal)
+			}
+		} else {
+			if err := removeGrant(host, pType, pVal, roleVal); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+		}
+		writeListing()
+		return
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+// jsonEncode wraps json.NewEncoder for use in handlers that don't
+// already import encoding/json.
+func jsonEncode(w http.ResponseWriter, v any) error {
+	enc := jsonNewEncoder(w)
+	return enc.Encode(v)
 }
 
 // handleRequestAccess records an access request via POST.

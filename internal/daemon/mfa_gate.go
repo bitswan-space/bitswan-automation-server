@@ -280,6 +280,9 @@ func handleGatePath(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintf(w, "email=%s\ngroups=%s\nadmin=%v\n", email, strings.Join(groups, ","), admin)
 
+	case strings.HasPrefix(r.URL.Path, mfaGatePathPrefix+"/api/share/"):
+		handleShareAPI(w, r, email, groups)
+
 	case r.URL.Path == mfaGatePathPrefix+"/share" ||
 		r.URL.Path == mfaGatePathPrefix+"/share/" ||
 		strings.HasPrefix(r.URL.Path, mfaGatePathPrefix+"/share/"):

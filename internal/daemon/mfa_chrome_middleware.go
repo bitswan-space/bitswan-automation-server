@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,6 +35,11 @@ import (
 func chromeWrapMiddleware(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		marker := r.URL.Query().Get(iframeMarkerQueryKey)
+		email := r.Header.Get("X-Forwarded-Email")
+		wrap := marker == "" && email != "" && shouldWrapWithChrome(r)
+		fmt.Printf("[wrap-mw] host=%s path=%q method=%s email=%q marker=%q acc=%q sfd=%q wrap=%v\n",
+			r.Host, r.URL.Path, r.Method, email, marker,
+			r.Header.Get("Accept"), r.Header.Get("Sec-Fetch-Dest"), wrap)
 
 		// Top-level navigation (no marker) → wrap. We only wrap
 		// AUTHENTICATED requests (X-Forwarded-Email set by
@@ -41,7 +47,7 @@ func chromeWrapMiddleware(inner http.Handler) http.Handler {
 		// oauth2-proxy's redirect-to-Keycloak inside an iframe, and
 		// Keycloak refuses iframe embedding (X-Frame-Options: DENY),
 		// breaking the login flow.
-		if marker == "" && r.Header.Get("X-Forwarded-Email") != "" && shouldWrapWithChrome(r) {
+		if wrap {
 			serveBaileyChrome(w, r)
 			return
 		}
