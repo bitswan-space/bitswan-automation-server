@@ -92,57 +92,108 @@ function GroupNode({ data }) {
 const nodeTypes = { base: BaseNode, group: GroupNode };
 
 // -----------------------------------------------------------------------------
-// Dagre layout
+// Layout. Dagre's compound (parent/child) support is incomplete in the JS
+// port — workspace/network boxes end up wrong-sized relative to their actual
+// children. Instead we use dagre purely for LEAF positioning, then derive each
+// parent's bounding box from its children's positions + sizes. Two-tier
+// nesting (workspace > network > container) is handled by computing
+// network bboxes first, then workspaces from their child networks.
 // -----------------------------------------------------------------------------
-const NODE_W = 220;
-const NODE_H = 64;
+const LEAF_W = 220;
+const LEAF_H = 64;
+const PARENT_PAD = { x: 18, top: 38, bottom: 18 }; // header takes more space than the footer
 
 function layout(nodes, edges) {
-  const g = new dagre.graphlib.Graph({ compound: true });
-  g.setGraph({ rankdir: 'TB', nodesep: 30, ranksep: 70, marginx: 24, marginy: 24 });
-  g.setDefaultEdgeLabel(() => ({}));
-
-  // First pass: insert all groups (compound parents).
+  const byId = new Map(nodes.map((n) => [n.id, n]));
   const groupKinds = new Set(['workspace', 'network']);
-  nodes.forEach((n) => {
-    if (groupKinds.has(n.data.kind)) {
-      g.setNode(n.id, { width: 1, height: 1 }); // sized by dagre based on children
-    }
-  });
-  // Leaves.
-  nodes.forEach((n) => {
-    if (!groupKinds.has(n.data.kind)) {
-      g.setNode(n.id, { width: NODE_W, height: NODE_H });
-    }
-    if (n.parentNode) g.setParent(n.id, n.parentNode);
-  });
+  const leaves = nodes.filter((n) => !groupKinds.has(n.data.kind));
 
-  edges.forEach((e) => g.setEdge(e.source, e.target));
+  // Build a flat dagre graph using ONLY leaves. Edges that touch a group
+  // are remapped to a leaf representative so the layout still respects
+  // the workspace's place in the chain.
+  const repFor = (id) => {
+    if (!groupKinds.has(byId.get(id)?.data.kind)) return id;
+    // Use the first descendant leaf as the representative.
+    const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const n of nodes) {
+        if (n.parentNode === cur) {
+          if (!groupKinds.has(n.data.kind)) return n.id;
+          stack.push(n.id);
+        }
+      }
+    }
+    return id;
+  };
 
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 80, marginx: 24, marginy: 24 });
+  g.setDefaultEdgeLabel(() => ({}));
+  leaves.forEach((n) => g.setNode(n.id, { width: LEAF_W, height: LEAF_H }));
+  edges.forEach((e) => {
+    const s = repFor(e.source); const t = repFor(e.target);
+    if (s !== t && g.hasNode(s) && g.hasNode(t)) g.setEdge(s, t);
+  });
   dagre.layout(g);
 
+  // Leaf positions (top-left coordinates).
+  const positions = new Map();
+  const sizes = new Map();
+  leaves.forEach((n) => {
+    const p = g.node(n.id);
+    positions.set(n.id, { x: p.x - p.width / 2, y: p.y - p.height / 2 });
+    sizes.set(n.id, { w: LEAF_W, h: LEAF_H });
+  });
+
+  // Compute parent bboxes bottom-up: network parents first, then workspaces.
+  const computeBbox = (parentId) => {
+    const kids = nodes.filter((n) => n.parentNode === parentId);
+    if (!kids.length) {
+      // Empty parent — give it a small placeholder size.
+      positions.set(parentId, positions.get(parentId) || { x: 0, y: 0 });
+      sizes.set(parentId, { w: 160, h: 60 });
+      return;
+    }
+    // Ensure children are positioned first.
+    kids.forEach((k) => { if (groupKinds.has(k.data.kind)) computeBbox(k.id); });
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const k of kids) {
+      const p = positions.get(k.id);
+      const s = sizes.get(k.id);
+      if (!p || !s) continue;
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x + s.w > maxX) maxX = p.x + s.w;
+      if (p.y + s.h > maxY) maxY = p.y + s.h;
+    }
+    const padL = PARENT_PAD.x, padR = PARENT_PAD.x, padT = PARENT_PAD.top, padB = PARENT_PAD.bottom;
+    const parentX = minX - padL;
+    const parentY = minY - padT;
+    const parentW = (maxX - minX) + padL + padR;
+    const parentH = (maxY - minY) + padT + padB;
+    positions.set(parentId, { x: parentX, y: parentY });
+    sizes.set(parentId, { w: parentW, h: parentH });
+  };
+
+  const topLevelGroups = nodes
+    .filter((n) => groupKinds.has(n.data.kind) && !n.parentNode);
+  topLevelGroups.forEach((p) => computeBbox(p.id));
+
+  // Convert to React Flow positions. Children must be expressed relative
+  // to their parent.
   return nodes.map((n) => {
-    const pos = g.node(n.id);
     const isGroup = groupKinds.has(n.data.kind);
-    // dagre returns center; React Flow expects top-left.
-    const x = pos.x - pos.width / 2;
-    const y = pos.y - pos.height / 2;
+    let pos = positions.get(n.id);
+    if (!pos) pos = { x: 0, y: 0 }; // shouldn't happen but be defensive
     if (n.parentNode) {
-      // Children positions must be RELATIVE to the parent in React Flow.
-      const parentPos = g.node(n.parentNode);
-      return {
-        ...n,
-        position: {
-          x: x - (parentPos.x - parentPos.width / 2),
-          y: y - (parentPos.y - parentPos.height / 2),
-        },
-        style: isGroup ? { width: pos.width, height: pos.height } : undefined,
-      };
+      const pp = positions.get(n.parentNode) || { x: 0, y: 0 };
+      pos = { x: pos.x - pp.x, y: pos.y - pp.y };
     }
     return {
       ...n,
-      position: { x, y },
-      style: isGroup ? { width: pos.width, height: pos.height } : undefined,
+      position: pos,
+      style: isGroup ? { width: sizes.get(n.id).w, height: sizes.get(n.id).h } : undefined,
     };
   });
 }
