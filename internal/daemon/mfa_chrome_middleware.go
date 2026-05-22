@@ -49,6 +49,14 @@ func chromeWrapMiddleware(inner http.Handler) http.Handler {
 			inner.ServeHTTP(w, r)
 			return
 		}
+		// XHR endpoints the wrap itself calls — the share modal's
+		// fetch hits /2fa-gate/api/share/<host>, the nav-sync ack
+		// could also land here in the future. Same-origin so CSP is
+		// happy; routed to the inner handler which knows these paths.
+		if strings.HasPrefix(r.URL.Path, "/2fa-gate/api/") {
+			inner.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") {
 			http.NotFound(w, r)
 			return

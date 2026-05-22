@@ -97,8 +97,12 @@ func serveBaileyChrome(w http.ResponseWriter, r *http.Request) {
 	// 'unsafe-inline' on script-src is the small share-modal + nav-sync
 	// listener we ship inline. No external scripts allowed on this
 	// page — the iframe carries the actual app and has its own CSP.
+	// connect-src 'self' lets the share modal's fetch reach
+	// /2fa-gate/api/share/<host> on the same outer host (passed
+	// through to the inner handler by the wrap middleware).
 	csp := "frame-src https://" + innerHost + "; default-src 'none'; " +
-		"script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src data:"
+		"script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+		"img-src 'self' data:; font-src data:; connect-src 'self'"
 	w.Header().Set("Content-Security-Policy", csp)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
