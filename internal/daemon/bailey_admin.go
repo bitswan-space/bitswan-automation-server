@@ -134,11 +134,10 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "/bailey/endpoints", "/bailey/endpoints/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "endpoints", admin))
-			return
-		}
+		// Legacy URL — kept as a redirect to the merged workspaces page
+		// for anyone with a bookmark. Plain 301 so browsers update.
+		http.Redirect(w, r, "/bailey/workspaces", http.StatusMovedPermanently)
+		return
 	case "/bailey/approvals", "/bailey/approvals/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
@@ -535,75 +534,219 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
 	case "workspaces":
 		pageTitle = "Workspaces"
 		pageContent = `
-<div class="card" id="workspaces-box" style="margin-top:0;">
-  <h2>Your workspaces</h2>
-  <p class="note">Workspaces you own or have been granted access to. Click the editor link to open it.</p>
-  <div id="workspaces-list"><p class="note">Loading…</p></div>
+<style>
+  .ws-toolbar {
+    display:flex; align-items:center; gap:12px; margin:0 0 18px;
+  }
+  .ws-toolbar h1 { margin:0; flex:1; }
+  .ws-new-btn {
+    background:#093DF5; color:#fff; border:0; padding:9px 16px;
+    border-radius:8px; cursor:pointer; font-size:14px; font-weight:500;
+  }
+  .ws-new-btn:hover { background:#0731C4; }
+
+  .ws-card {
+    background:#fff; border:1px solid #E4E4E7; border-radius:10px;
+    padding:18px 20px; margin-bottom:18px;
+  }
+  .ws-card-head {
+    display:flex; align-items:center; gap:14px; margin-bottom:14px;
+    border-bottom:1px solid #F4F4F5; padding-bottom:12px;
+  }
+  .ws-card-head h2 {
+    margin:0; font-size:16px; font-weight:600; color:#18181B; flex:1;
+  }
+  .ws-card-head .role {
+    font-size:11px; padding:2px 8px; border-radius:999px;
+    background:#F4F4F5; color:#52525B; text-transform:uppercase;
+    letter-spacing:0.4px; font-weight:600;
+  }
+  .ws-card-head .role.owner { background:#DBEAFE; color:#1E40AF; }
+  .ws-editor-btn {
+    display:inline-flex; align-items:center; gap:8px;
+    background:#18181B; color:#fff; border:0;
+    padding:8px 14px; border-radius:8px; cursor:pointer; font-size:13px;
+    text-decoration:none; font-weight:500;
+  }
+  .ws-editor-btn:hover { background:#27272A; }
+
+  .ws-apps {
+    display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px;
+  }
+  .ws-app-card {
+    display:block; padding:14px; border:1px solid #E4E4E7; border-radius:8px;
+    text-decoration:none; color:inherit; background:#fff;
+    transition: border-color 0.12s, box-shadow 0.12s;
+  }
+  .ws-app-card:hover {
+    border-color:#93C5FD; box-shadow: 0 1px 3px rgba(9,61,245,0.08);
+  }
+  .ws-app-card .name {
+    font-size:14px; font-weight:600; color:#18181B; margin-bottom:4px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .ws-app-card .host {
+    font-size:12px; color:#71717A; font-family:ui-monospace,monospace;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .ws-app-empty { font-size:13px; color:#A1A1AA; padding:8px 4px; }
+
+  .ws-modal-backdrop {
+    position:fixed; inset:0; background:rgba(15,23,42,0.55);
+    display:none; align-items:center; justify-content:center; z-index:1000;
+  }
+  .ws-modal-backdrop.open { display:flex; }
+  .ws-modal-card {
+    background:#fff; border-radius:12px; padding:22px;
+    width:min(420px, 92vw); box-shadow:0 24px 60px rgba(0,0,0,0.25);
+  }
+  .ws-modal-card h2 { margin:0 0 6px; font-size:17px; font-weight:600; }
+  .ws-modal-card .note { color:#71717A; font-size:13px; margin-bottom:14px; }
+  .ws-modal-card input {
+    width:100%; padding:9px 12px; border:1px solid #E4E4E7; border-radius:8px;
+    font-size:14px; box-sizing:border-box; font-family:ui-monospace,monospace;
+  }
+  .ws-modal-card .actions {
+    display:flex; justify-content:flex-end; gap:8px; margin-top:14px;
+  }
+  .ws-modal-card button {
+    padding:9px 16px; border-radius:8px; border:0; cursor:pointer;
+    font-size:13px; font-weight:500;
+  }
+  .ws-modal-card .cancel { background:#F4F4F5; color:#3F3F46; }
+  .ws-modal-card .create { background:#093DF5; color:#fff; }
+  .ws-modal-card .create:hover { background:#0731C4; }
+  .ws-modal-card .status { font-size:12px; color:#71717A; margin-top:10px; min-height:14px; }
+</style>
+
+<div class="ws-toolbar">
+  <h1>Your workspaces</h1>
+  <button class="ws-new-btn" onclick="document.getElementById('ws-modal').classList.add('open');document.getElementById('ws-modal-input').focus();">+ New workspace</button>
 </div>
 
-<div class="card">
-  <h2>Create a new workspace</h2>
-  <p class="note">You'll be the owner of the editor and gitops endpoints. You can share access from those endpoints' share pages later.</p>
-  <form id="create-form" onsubmit="return createWorkspace(event)" style="display:flex;gap:8px;align-items:center;">
-    <input type="text" id="new-name" placeholder="my-workspace" pattern="[a-z][a-z0-9-]{1,32}"
-      title="lowercase, alphanumeric + hyphens, starts with a letter, 2-33 chars"
-      style="padding:6px 8px;font-family:ui-monospace,monospace;" required>
-    <button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px;">Create</button>
-  </form>
-  <p id="create-status" class="note" style="margin-top:10px;"></p>
+<div id="workspaces-list"><p class="note">Loading…</p></div>
+
+<div class="ws-modal-backdrop" id="ws-modal" onclick="if(event.target===this){this.classList.remove('open')}">
+  <div class="ws-modal-card">
+    <h2>New workspace</h2>
+    <p class="note">You'll be the owner of every endpoint this workspace creates (editor, dashboard, automations).</p>
+    <form id="ws-create-form">
+      <input type="text" id="ws-modal-input" placeholder="my-workspace" pattern="[a-z][a-z0-9-]{1,32}"
+        title="lowercase, alphanumeric + hyphens, starts with a letter, 2-33 chars" required autocomplete="off">
+      <div class="actions">
+        <button type="button" class="cancel" onclick="document.getElementById('ws-modal').classList.remove('open')">Cancel</button>
+        <button type="submit" class="create">Create</button>
+      </div>
+      <p class="status" id="ws-modal-status"></p>
+    </form>
+  </div>
 </div>`
 		pageScript = `
+function escapeHTML(s){ return String(s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]); }
+// Friendly app-card name: prefix-stripped, capitalised.
+function appName(host, workspace) {
+  var label = host.split('.')[0];
+  var tail = label.replace(workspace + '-', '');
+  return tail.charAt(0).toUpperCase() + tail.slice(1);
+}
 function loadList() {
-  fetch('/bailey/api/workspaces', {credentials:'same-origin'}).then(r => r.ok ? r.json() : {workspaces:[]}).then(d => {
-    const box = document.getElementById('workspaces-list');
-    if (!d.workspaces || !d.workspaces.length) {
-      box.innerHTML = '<p class="note">You don\'t have access to any workspaces yet. Create one below, or wait for someone to share one with you.</p>';
+  // Pull workspaces + endpoints in parallel. Workspaces tells us
+  // which names exist (and our role); endpoints gives us the per-app
+  // hostnames we can render as cards.
+  Promise.all([
+    fetch('/bailey/api/workspaces', {credentials:'same-origin'}).then(r => r.ok ? r.json() : {workspaces:[]}),
+    fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.ok ? r.json() : {endpoints:[]})
+  ]).then(function(arr){
+    var wsResp = arr[0], epResp = arr[1];
+    var workspaces = (wsResp.workspaces || []).slice();
+    var endpoints = (epResp.endpoints || []).filter(function(e){
+      return e.caller_role && e.caller_role !== 'none' && e.caller_role !== '';
+    });
+    // Map workspace name → { editor: ep, apps: [ep, ...] }.
+    // Workspace name matches the longest known-workspace prefix of the hostname label.
+    var wsNames = workspaces.map(function(w){ return w.name; });
+    wsNames.sort(function(a,b){ return b.length - a.length; }); // longest first so we match greedily
+
+    var byWs = {};
+    workspaces.forEach(function(w){ byWs[w.name] = { ws: w, editor: null, apps: [] }; });
+
+    endpoints.forEach(function(ep){
+      var label = ep.hostname.split('.')[0];
+      var match = null;
+      for (var i = 0; i < wsNames.length; i++) {
+        var name = wsNames[i];
+        if (label === name || label.indexOf(name + '-') === 0) { match = name; break; }
+      }
+      if (!match) return;
+      var tail = label === match ? '' : label.slice(match.length + 1);
+      if (tail === 'gitops') return;                     // no gitops links — per UX policy
+      if (tail === 'editor') { byWs[match].editor = ep; return; }
+      byWs[match].apps.push(ep);
+    });
+
+    var box = document.getElementById('workspaces-list');
+    if (!workspaces.length) {
+      box.innerHTML = '<div class="ws-card"><p class="note">No workspaces visible to you. Create one with the button above, or wait for someone to share one with you.</p></div>';
       return;
     }
-    let html = '<table style="width:100%;border-collapse:collapse;">';
-    html += '<thead><tr style="text-align:left;border-bottom:1px solid #E4E4E7;"><th style="padding:8px 0;">Name</th><th>Your role</th><th>Links</th></tr></thead><tbody>';
-    for (const w of d.workspaces) {
-      const role = w.is_owner ? 'owner' : (w.editor_role || w.gitops_role || 'access');
-      html += '<tr style="border-top:1px solid #F4F4F5;">'
-        + '<td style="padding:8px 0;"><b>' + w.name + '</b></td>'
-        + '<td>' + role + '</td>'
-        + '<td><a href="' + w.editor_url + '" target="_blank" style="color:#093DF5;text-decoration:none;margin-right:12px;">Editor →</a>'
-        + '<a href="' + w.gitops_url + '" target="_blank" style="color:#093DF5;text-decoration:none;">GitOps →</a></td>'
-        + '</tr>';
-    }
-    html += '</tbody></table>';
+    var html = '';
+    workspaces.forEach(function(w){
+      var bucket = byWs[w.name];
+      var role = w.is_owner ? 'owner' : (w.editor_role || w.gitops_role || 'access');
+      var appsHTML;
+      if (bucket.apps.length) {
+        appsHTML = '<div class="ws-apps">' + bucket.apps.map(function(ep){
+          var url = 'https://' + ep.hostname + '/';
+          return '<a class="ws-app-card" href="' + escapeHTML(url) + '" target="_blank" rel="noopener">' +
+            '<div class="name">' + escapeHTML(appName(ep.hostname, w.name)) + '</div>' +
+            '<div class="host">' + escapeHTML(ep.hostname) + '</div>' +
+          '</a>';
+        }).join('') + '</div>';
+      } else {
+        appsHTML = '<p class="ws-app-empty">No deployed apps yet. Push automations from the editor to see them here.</p>';
+      }
+      var editorBtn = bucket.editor
+        ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.editor.hostname) + '/" target="_blank" rel="noopener">Open editor ↗</a>'
+        : '<span class="note">Editor not deployed.</span>';
+      html += '<div class="ws-card" data-ws="' + escapeHTML(w.name) + '">' +
+        '<div class="ws-card-head">' +
+          '<h2>' + escapeHTML(w.name) + '</h2>' +
+          '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
+          editorBtn +
+        '</div>' +
+        appsHTML +
+        '</div>';
+    });
     box.innerHTML = html;
-  }).catch(e => {
-    document.getElementById('workspaces-list').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load workspaces: ' + e + '</p>';
+  }).catch(function(e){
+    document.getElementById('workspaces-list').innerHTML = '<div class="ws-card"><p class="note" style="color:#b00020;">Couldn\'t load: ' + escapeHTML(String(e)) + '</p></div>';
   });
 }
-function createWorkspace(e) {
+document.getElementById('ws-create-form').addEventListener('submit', function(e){
   e.preventDefault();
-  const name = document.getElementById('new-name').value.trim();
-  const statusEl = document.getElementById('create-status');
-  statusEl.textContent = 'Creating ' + name + '… (this can take 30-60s while the editor + gitops images come up)';
-  statusEl.style.color = '#71717A';
+  var name = document.getElementById('ws-modal-input').value.trim();
+  var status = document.getElementById('ws-modal-status');
+  status.textContent = 'Creating ' + name + '… (30-60s while the editor + dashboard come up)';
+  status.style.color = '#71717A';
   fetch('/bailey/api/workspaces', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json'},
+    method:'POST', credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
     body: JSON.stringify({name: name})
-  }).then(r => r.json()).then(d => {
+  }).then(function(r){ return r.json(); }).then(function(d){
     if (d.ok) {
-      statusEl.textContent = 'Created. Editor: ' + d.editor_url;
-      statusEl.style.color = '#0a7d24';
-      document.getElementById('new-name').value = '';
-      loadList();
+      status.textContent = 'Created.';
+      status.style.color = '#0a7d24';
+      document.getElementById('ws-modal-input').value = '';
+      setTimeout(function(){ document.getElementById('ws-modal').classList.remove('open'); loadList(); }, 600);
     } else {
-      statusEl.textContent = 'Failed: ' + (d.error || 'unknown error');
-      statusEl.style.color = '#b00020';
+      status.textContent = 'Failed: ' + (d.error || 'unknown error');
+      status.style.color = '#b00020';
     }
-  }).catch(e => {
-    statusEl.textContent = 'Failed: ' + e;
-    statusEl.style.color = '#b00020';
+  }).catch(function(e){
+    status.textContent = 'Failed: ' + e;
+    status.style.color = '#b00020';
   });
-  return false;
-}
+});
 loadList();`
 
 	case "devices":
@@ -821,52 +964,6 @@ setInterval(renderTree, 8000);`
 		pageTitle = "Notifications"
 		pageContent = notificationsPageHTML(email, groups, admin)
 
-	case "endpoints":
-		pageTitle = "Endpoints"
-		pageContent = `
-<div class="card" style="margin-top:0;">
-  <h2>Protected endpoints on this server</h2>
-  <p class="note">Every endpoint that's been registered shows up here. If you own one you can manage its sharing. If you're an access grantee you see the endpoint but not who else has access. Server owners see everything in read-only audit mode.</p>
-  <div id="ep-list"><p class="note">Loading…</p></div>
-</div>`
-		pageScript = `
-fetch('/bailey/api/endpoints', {credentials:'same-origin'}).then(r => r.json()).then(d => {
-  const box = document.getElementById('ep-list');
-  if (d.is_server_owner) {
-    box.insertAdjacentHTML('beforebegin', '<p class="note"><b>Server-owner audit view</b> — you see every endpoint registered on this server, read-only.</p>');
-  }
-  if (!d.endpoints || !d.endpoints.length) {
-    box.innerHTML = '<p class="note">No endpoints visible to you. Create a workspace or wait for someone to share one.</p>';
-    return;
-  }
-  let html = '<table style="width:100%;border-collapse:collapse;">';
-  html += '<thead><tr style="text-align:left;border-bottom:1px solid #E4E4E7;"><th style="padding:8px 0;">Endpoint</th><th>Owner</th><th>Your role</th><th>Grants</th><th></th></tr></thead><tbody>';
-  for (const e of d.endpoints) {
-    let grantsHtml = '<span class="note">—</span>';
-    if (e.grants && e.grants.length) {
-      grantsHtml = e.grants.map(g =>
-        '<div style="font-size:13px;color:#3F3F46;"><code>' + g.principal_value + '</code> <span class="note">(' + g.principal_type + ', ' + g.role + ')</span></div>'
-      ).join('');
-    } else if (e.caller_role === 'access') {
-      grantsHtml = '<span class="note">visible to owners only</span>';
-    }
-    const manageBtn = (e.caller_role === 'owner')
-      ? '<a href="/2fa-gate/share/' + encodeURIComponent(e.hostname) + '" style="color:#093DF5;text-decoration:none;">Manage →</a>'
-      : '';
-    html += '<tr style="border-bottom:1px solid #F4F4F5;">'
-      + '<td style="padding:8px 4px;"><b>' + e.hostname + '</b><br><span class="note">' + (e.display_name || '') + '</span></td>'
-      + '<td><code>' + e.owner_email + '</code></td>'
-      + '<td>' + e.caller_role + '</td>'
-      + '<td>' + grantsHtml + '</td>'
-      + '<td style="text-align:right;">' + manageBtn + '</td>'
-      + '</tr>';
-  }
-  html += '</tbody></table>';
-  box.innerHTML = html;
-}).catch(e => {
-  document.getElementById('ep-list').innerHTML = '<p class="note" style="color:#b00020;">Couldn\'t load endpoints: ' + e + '</p>';
-});`
-
 	case "recovery":
 		pageTitle = "Recovery (TOTP)"
 		pageContent = `
@@ -1002,7 +1099,6 @@ function showTab(groupId, tabId) {
   <div class="sidebar-logo">`+bitswanLogoSVG+`</div>
   <nav class="sidebar-nav">
     <a href="/bailey/workspaces" class="%s">Workspaces</a>
-    <a href="/bailey/endpoints" class="%s">Endpoints</a>
     <a href="/bailey/notifications" class="%s" id="nav-notifications">Notifications<span id="nav-notifications-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
     <a href="/bailey/devices" class="%s">Devices</a>
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
@@ -1038,7 +1134,7 @@ function showTab(groupId, tabId) {
 <script>%s</script>
 </body></html>`,
 		pageTitle, serverName,
-		active("workspaces"), active("endpoints"), active("notifications"),
+		active("workspaces"), active("notifications"),
 		active("devices"), active("recovery"),
 		active("approvals"), active("map"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)
