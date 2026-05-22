@@ -679,7 +679,7 @@ func DeleteTraefikRecordsWithWriter(workspaceName string, writer io.Writer) erro
 	if domain != "" {
 		log("Deleting service routes for domain %s...", domain)
 		traefiks := []string{traefikBaseURL, "http://traefik-protected:8080"}
-		for _, service := range []string{"gitops", "editor"} {
+		for _, service := range []string{"gitops", "editor", "dashboard"} {
 			hostname := fmt.Sprintf("%s-%s.%s", workspaceName, service, domain)
 			for _, base := range traefiks {
 				log("Removing route for %s from %s...", hostname, base)

@@ -44,9 +44,9 @@ func NewEditorService(workspaceName string) (*EditorService, error) {
 	}, nil
 }
 
-// EditorDevConfig holds dev mode configuration for the editor
+// EditorDevConfig holds dev mode configuration for the editor.
+// Dev mode is implied by a non-empty EditorDevSourceDir.
 type EditorDevConfig struct {
-	DevMode            bool
 	EditorDevSourceDir string
 }
 
@@ -115,18 +115,19 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), caEnvVars...)
 	}
 
-	// Add dev mode configuration if provided
-	if devConfig != nil && devConfig.DevMode {
-		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), "BITSWAN_DEV_MODE=true")
-
-		// Mount editor extension source directory for live development
-		if devConfig.EditorDevSourceDir != "" {
-			bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string),
-				devConfig.EditorDevSourceDir+":/opt/bitswan-extension-dev:z")
-			bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string),
-				"BITSWAN_EXTENSION_DEV_DIR=/opt/bitswan-extension-dev")
-		}
+	// Dev mode: mount the extension source for live reload. Dev mode is
+	// implied by a non-empty EditorDevSourceDir — there is no separate flag.
+	if devConfig != nil && devConfig.EditorDevSourceDir != "" {
+		bitswanEditor["volumes"] = append(bitswanEditor["volumes"].([]string),
+			devConfig.EditorDevSourceDir+":/opt/bitswan-extension-dev:z")
+		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string),
+			"BITSWAN_DEV_MODE=true",
+			"BITSWAN_EXTENSION_DEV_DIR=/opt/bitswan-extension-dev",
+		)
 	}
+
+	// The workspace-dashboard sidecar lives in its own compose file —
+	// see DashboardService in internal/services/dashboard.go.
 
 	// Construct the docker-compose data structure
 	dockerCompose := map[string]interface{}{
@@ -232,15 +233,11 @@ func (e *EditorService) Enable(gitopsSecretToken, bitswanEditorImage, domain str
 		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PASSWORD="+*metadata.MqttPassword)
 	}
 
+	// Dev mode is implied by a non-empty editor source dir in metadata.
 	var devConfig *EditorDevConfig
-	if metadata.DevMode {
-		devConfig = &EditorDevConfig{
-			DevMode: true,
-		}
-		if metadata.EditorDevSourceDir != nil {
-			devConfig.EditorDevSourceDir = *metadata.EditorDevSourceDir
-		}
-		fmt.Printf("Dev mode enabled for editor (extension source: %s)\n", devConfig.EditorDevSourceDir)
+	if metadata.EditorDevSourceDir != nil && *metadata.EditorDevSourceDir != "" {
+		devConfig = &EditorDevConfig{EditorDevSourceDir: *metadata.EditorDevSourceDir}
+		fmt.Printf("Editor dev mode enabled (source: %q)\n", devConfig.EditorDevSourceDir)
 	}
 
 	// Generate docker-compose content
@@ -708,16 +705,11 @@ func (e *EditorService) RegenerateDockerCompose(editorImage string, staging bool
 		mqttEnvVars = append(mqttEnvVars, "OAUTH2_PROXY_MQTT_PASSWORD="+*metadata.MqttPassword)
 	}
 
-	// Prepare dev mode configuration
+	// Dev mode is implied by a non-empty editor source dir in metadata.
 	var devConfig *EditorDevConfig
-	if metadata.DevMode {
-		devConfig = &EditorDevConfig{
-			DevMode: true,
-		}
-		if metadata.EditorDevSourceDir != nil {
-			devConfig.EditorDevSourceDir = *metadata.EditorDevSourceDir
-		}
-		fmt.Printf("Dev mode enabled for editor (extension source: %s)\n", devConfig.EditorDevSourceDir)
+	if metadata.EditorDevSourceDir != nil && *metadata.EditorDevSourceDir != "" {
+		devConfig = &EditorDevConfig{EditorDevSourceDir: *metadata.EditorDevSourceDir}
+		fmt.Printf("Editor dev mode enabled (source: %q)\n", devConfig.EditorDevSourceDir)
 	}
 
 	// Generate docker-compose content

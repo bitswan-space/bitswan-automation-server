@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -98,6 +99,11 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 		},
 	}
 
+	// Mount built-in automation templates so the gitops `template_service`
+	// can scaffold new automations from the same `examples/` tree the editor
+	// reads. The path mirrors the computation in editor.go.
+	bitswanSrcPath := filepath.Dir(filepath.Dir(gitopsPathForVolumes)) + "/bitswan-src"
+
 	gitopsService := map[string]interface{}{
 		"image":    config.GitopsImage,
 		"restart":  "always",
@@ -112,6 +118,8 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			cmSocketDir + ":" + cmSocketDir + ":ro",
 			// Daemon socket for ingress route registration (read-only)
 			"/var/run/bitswan:/var/run/bitswan:ro",
+			// Built-in automation templates for the gitops template_service.
+			bitswanSrcPath + "/examples:/workspace/examples:ro",
 		},
 		"environment": []string{
 			"BITSWAN_GITOPS_DIR=/gitops",

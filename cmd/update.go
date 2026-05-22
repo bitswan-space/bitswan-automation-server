@@ -11,6 +11,7 @@ import (
 type updateOptions struct {
 	gitopsImage        string
 	editorImage        string
+	dashboardImage     string
 	kafkaImage         string
 	zookeeperImage     string
 	couchdbImage       string
@@ -18,8 +19,9 @@ type updateOptions struct {
 	trustCA            bool
 	devMode            bool
 	disableDevMode     bool
-	gitopsDevSourceDir string
-	editorDevSourceDir string
+	gitopsDevSourceDir    string
+	editorDevSourceDir    string
+	dashboardDevSourceDir string
 }
 
 func newUpdateCmd() *cobra.Command {
@@ -48,6 +50,7 @@ func newUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
+	cmd.Flags().StringVar(&o.dashboardImage, "dashboard-image", "", "Custom image for the workspace-dashboard")
 	cmd.Flags().StringVar(&o.kafkaImage, "kafka-image", "", "Custom image for Kafka")
 	cmd.Flags().StringVar(&o.zookeeperImage, "zookeeper-image", "", "Custom image for Zookeeper")
 	cmd.Flags().StringVar(&o.couchdbImage, "couchdb-image", "", "Custom image for CouchDB")
@@ -57,6 +60,7 @@ func newUpdateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&o.disableDevMode, "disable-dev-mode", false, "Disable development mode")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
+	cmd.Flags().StringVar(&o.dashboardDevSourceDir, "dashboard-dev-source-dir", "", "Directory to mount as /workspace/dashboard-src in the workspace-dashboard container for hot-reload development")
 
 	cmd.ValidArgsFunction = validWorkspaceArgs
 

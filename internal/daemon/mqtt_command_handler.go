@@ -25,12 +25,15 @@ type WorkspaceCreateRequest struct {
 	Verbose                bool   `json:"verbose,omitempty"`
 	MkCerts                bool   `json:"mkcerts,omitempty"`
 	NoIde                  bool   `json:"no-ide,omitempty"`
+	NoDashboard            bool   `json:"no-dashboard,omitempty"`
 	SetHosts               bool   `json:"set-hosts,omitempty"`
 	Local                  bool   `json:"local,omitempty"`
 	GitopsImage            string `json:"gitops-image,omitempty"`
 	EditorImage            string `json:"editor-image,omitempty"`
+	DashboardImage         string `json:"dashboard-image,omitempty"`
 	GitopsDevSourceDir     string `json:"gitops-dev-source-dir,omitempty"`
 	EditorDevSourceDir     string `json:"editor-dev-source-dir,omitempty"`
+	DashboardDevSourceDir  string `json:"dashboard-dev-source-dir,omitempty"`
 	OauthConfigFile        string `json:"oauth-config,omitempty"`
 	NoOauth                bool   `json:"no-oauth,omitempty"`
 	SshPort                string `json:"ssh-port,omitempty"`
@@ -101,6 +104,9 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	if req.NoIde {
 		args = append(args, "--no-ide")
 	}
+	if req.NoDashboard {
+		args = append(args, "--no-dashboard")
+	}
 	if req.SetHosts {
 		args = append(args, "--set-hosts")
 	}
@@ -113,11 +119,17 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	if req.EditorImage != "" {
 		args = append(args, "--editor-image", req.EditorImage)
 	}
+	if req.DashboardImage != "" {
+		args = append(args, "--dashboard-image", req.DashboardImage)
+	}
 	if req.GitopsDevSourceDir != "" {
 		args = append(args, "--gitops-dev-source-dir", req.GitopsDevSourceDir)
 	}
 	if req.EditorDevSourceDir != "" {
 		args = append(args, "--editor-dev-source-dir", req.EditorDevSourceDir)
+	}
+	if req.DashboardDevSourceDir != "" {
+		args = append(args, "--dashboard-dev-source-dir", req.DashboardDevSourceDir)
 	}
 	if req.OauthConfigFile != "" {
 		args = append(args, "--oauth-config", req.OauthConfigFile)

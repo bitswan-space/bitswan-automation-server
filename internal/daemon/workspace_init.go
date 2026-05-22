@@ -88,12 +88,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	verbose := fs.Bool("verbose", false, "")
 	mkCerts := fs.Bool("mkcerts", false, "")
 	noIde := fs.Bool("no-ide", false, "")
+	noDashboard := fs.Bool("no-dashboard", false, "")
 	setHosts := fs.Bool("set-hosts", false, "")
 	local := fs.Bool("local", false, "")
 	gitopsImage := fs.String("gitops-image", "", "")
 	editorImage := fs.String("editor-image", "", "")
+	dashboardImage := fs.String("dashboard-image", "", "")
 	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
 	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
+	dashboardDevSourceDir := fs.String("dashboard-dev-source-dir", "", "")
 	oauthConfigFile := fs.String("oauth-config", "", "")
 	noOauth := fs.Bool("no-oauth", false, "")
 	sshPort := fs.String("ssh-port", "", "")
@@ -618,12 +621,30 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
-	bitswanEditorImage := *editorImage
-	if bitswanEditorImage == "" {
-		var err error
-		bitswanEditorImage, err = dockerhub.ResolveEditorImage(*staging)
-		if err != nil {
-			return fmt.Errorf("failed to get latest BitSwan Editor image: %w", err)
+	// Resolve service images lazily — only hit Docker Hub for services we'll
+	// actually deploy. Otherwise `bitswan workspace init --no-ide --no-dashboard`
+	// fails if the editor or dashboard image repo isn't reachable.
+	var bitswanEditorImage string
+	if !*noIde {
+		bitswanEditorImage = *editorImage
+		if bitswanEditorImage == "" {
+			var err error
+			bitswanEditorImage, err = dockerhub.ResolveEditorImage(*staging)
+			if err != nil {
+				return fmt.Errorf("failed to get latest BitSwan Editor image: %w", err)
+			}
+		}
+	}
+
+	var bitswanDashboardImage string
+	if !*noDashboard {
+		bitswanDashboardImage = *dashboardImage
+		if bitswanDashboardImage == "" {
+			var err error
+			bitswanDashboardImage, err = dockerhub.ResolveDashboardImage(*staging)
+			if err != nil {
+				return fmt.Errorf("failed to get latest BitSwan workspace-dashboard image: %w", err)
+			}
 		}
 	}
 
@@ -785,7 +806,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	fmt.Println("GitOps deployment set up successfully!")
 
 	// Save metadata to file
-	if err := saveMetadata(gitopsConfig, workspaceName, token, *domain, *noIde, &workspaceId, mqttEnvVars, *gitopsDevSourceDir, *editorDevSourceDir); err != nil {
+	if err := saveMetadata(gitopsConfig, workspaceName, token, *domain, *noIde, *noDashboard, &workspaceId, mqttEnvVars, *gitopsDevSourceDir, *editorDevSourceDir, *dashboardDevSourceDir); err != nil {
 		fmt.Printf("Warning: Failed to save metadata: %v\n", err)
 	}
 
@@ -810,13 +831,11 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	if !*noIde {
 		fmt.Println("Setting up editor service...")
 
-		// Create editor service
 		editorService, err := services.NewEditorService(workspaceName)
 		if err != nil {
 			return fmt.Errorf("failed to create editor service: %w", err)
 		}
 
-		// Enable the editor service
 		if err := editorService.Enable(token, bitswanEditorImage, *domain, oauthConfig, true); err != nil {
 			return fmt.Errorf("failed to enable editor service: %w", err)
 		}
@@ -848,21 +867,17 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			return fmt.Errorf("failed to register Editor service: %w", err)
 		}
 
-		// Start the editor container
 		if err := editorService.StartContainer(); err != nil {
 			return fmt.Errorf("failed to start editor container: %w", err)
 		}
 
 		fmt.Println("Downloading and installing editor...")
-
-		// Wait for the editor service to be ready by streaming logs
 		if err := editorService.WaitForEditorReady(); err != nil {
 			return fmt.Errorf("failed to wait for editor to be ready: %w", err)
 		}
 
 		fmt.Println("------------BITSWAN EDITOR INFO------------")
 		fmt.Printf("Bitswan Editor URL: https://%s-editor.%s\n", workspaceName, *domain)
-
 		if oauthConfig == nil {
 			editorPassword, err := editorService.GetEditorPassword()
 			if err != nil {
@@ -870,6 +885,39 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			}
 			fmt.Printf("Bitswan Editor Password: %s\n", editorPassword)
 		}
+	}
+
+	// Setup dashboard service if not disabled — fully independent from the editor.
+	if !*noDashboard {
+		fmt.Println("Setting up workspace-dashboard service...")
+
+		dashboardService, err := services.NewDashboardService(workspaceName)
+		if err != nil {
+			return fmt.Errorf("failed to create dashboard service: %w", err)
+		}
+
+		if err := dashboardService.Enable(token, bitswanDashboardImage, *domain, oauthConfig, true); err != nil {
+			return fmt.Errorf("failed to enable dashboard service: %w", err)
+		}
+
+		dashboardHostname := fmt.Sprintf("%s-dashboard.%s", workspaceName, *domain)
+		dashboardUpstream := fmt.Sprintf("%s-dashboard:8080", workspaceName)
+		if err := addRouteToIngress(IngressAddRouteRequest{
+			Hostname:      dashboardHostname,
+			Upstream:      dashboardUpstream,
+			Mkcert:        *mkCerts,
+			CertsDir:      *certsDir,
+			WorkspaceName: workspaceName,
+		}, ""); err != nil {
+			return fmt.Errorf("failed to register Dashboard service: %w", err)
+		}
+
+		if err := dashboardService.StartContainer(); err != nil {
+			return fmt.Errorf("failed to start dashboard container: %w", err)
+		}
+
+		fmt.Println("------------WORKSPACE DASHBOARD INFO------------")
+		fmt.Printf("Workspace Dashboard URL: https://%s-dashboard.%s\n", workspaceName, *domain)
 	}
 
 	fmt.Println("------------GITOPS INFO------------")
@@ -985,7 +1033,7 @@ func setHostsFile(workspaceName, domain string, noIde bool) error {
 	return nil
 }
 
-func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir, editorDevSourceDir string) error {
+func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde, noDashboard bool, workspaceId *string, mqttEnvVars []string, gitopsDevSourceDir, editorDevSourceDir, dashboardDevSourceDir string) error {
 	metadata := config.WorkspaceMetadata{
 		Domain:       domain,
 		GitopsURL:    fmt.Sprintf("https://%s-gitops.%s", workspaceName, domain),
@@ -1023,12 +1071,25 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde bool,
 		metadata.EditorURL = &editorURL
 	}
 
+	if !noDashboard {
+		dashboardURL := fmt.Sprintf("https://%s-dashboard.%s", workspaceName, domain)
+		metadata.DashboardURL = &dashboardURL
+	}
+
 	if gitopsDevSourceDir != "" {
 		metadata.GitopsDevSourceDir = &gitopsDevSourceDir
 	}
 
+	// Dev mode for editor / dashboard is implied by their source dirs being set.
+	// The DevMode bool is still written for backward-compat consumers but no
+	// longer gates the per-service dev-mode behavior.
 	if editorDevSourceDir != "" {
 		metadata.EditorDevSourceDir = &editorDevSourceDir
+		metadata.DevMode = true
+	}
+
+	if dashboardDevSourceDir != "" {
+		metadata.DashboardDevSourceDir = &dashboardDevSourceDir
 		metadata.DevMode = true
 	}
 

@@ -23,6 +23,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	fs := flag.NewFlagSet("workspace-update", flag.ContinueOnError)
 	gitopsImage := fs.String("gitops-image", "", "")
 	editorImage := fs.String("editor-image", "", "")
+	dashboardImage := fs.String("dashboard-image", "", "")
 	kafkaImage := fs.String("kafka-image", "", "")
 	zookeeperImage := fs.String("zookeeper-image", "", "")
 	couchdbImage := fs.String("couchdb-image", "", "")
@@ -32,6 +33,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	disableDevMode := fs.Bool("disable-dev-mode", false, "")
 	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
 	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
+	dashboardDevSourceDir := fs.String("dashboard-dev-source-dir", "", "")
 
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("failed to parse flags: %w", err)
@@ -50,7 +52,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 	metadataPath := filepath.Join(workspacePath, "metadata.yaml")
 
 	// Handle dev mode settings - update metadata if dev mode flags are provided
-	if *devMode || *disableDevMode || *gitopsDevSourceDir != "" || *editorDevSourceDir != "" {
+	if *devMode || *disableDevMode || *gitopsDevSourceDir != "" || *editorDevSourceDir != "" || *dashboardDevSourceDir != "" {
 		fmt.Println("Updating dev mode settings...")
 		metadata, err := config.GetWorkspaceMetadata(workspaceName)
 		if err != nil {
@@ -66,6 +68,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 			// Clear dev source directories when disabling dev mode
 			metadata.GitopsDevSourceDir = nil
 			metadata.EditorDevSourceDir = nil
+			metadata.DashboardDevSourceDir = nil
 			fmt.Println("Dev mode disabled")
 		}
 		if *gitopsDevSourceDir != "" {
@@ -77,6 +80,11 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 			metadata.EditorDevSourceDir = editorDevSourceDir
 			metadata.DevMode = true
 			fmt.Printf("Editor dev source directory set to: %s\n", *editorDevSourceDir)
+		}
+		if *dashboardDevSourceDir != "" {
+			metadata.DashboardDevSourceDir = dashboardDevSourceDir
+			metadata.DevMode = true
+			fmt.Printf("Dashboard dev source directory set to: %s\n", *dashboardDevSourceDir)
 		}
 
 		if err := metadata.SaveToFile(metadataPath); err != nil {
@@ -101,7 +109,7 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 
 	// 3. Update services if they are enabled
 	fmt.Println("Checking for enabled services to update...")
-	if err := updateServices(workspaceName, *editorImage, *kafkaImage, *zookeeperImage, *couchdbImage, *staging, *trustCA); err != nil {
+	if err := updateServices(workspaceName, *editorImage, *dashboardImage, *kafkaImage, *zookeeperImage, *couchdbImage, *staging, *trustCA); err != nil {
 		fmt.Printf("Warning: some services failed to update: %v\n", err)
 	}
 
@@ -110,13 +118,21 @@ func (s *Server) runWorkspaceUpdate(args []string) error {
 }
 
 // updateServices updates all enabled services for the workspace
-func updateServices(workspaceName, editorImage, kafkaImage, zookeeperImage, couchdbImage string, staging, trustCA bool) error {
+func updateServices(workspaceName, editorImage, dashboardImage, kafkaImage, zookeeperImage, couchdbImage string, staging, trustCA bool) error {
 	// Always try to update editor service if enabled
 	fmt.Println("Checking editor service...")
 	if err := updateEditorService(workspaceName, editorImage, staging, trustCA); err != nil {
 		fmt.Printf("Warning: failed to update editor service: %v\n", err)
 	} else {
 		fmt.Println("Editor service updated successfully!")
+	}
+
+	// Always try to update dashboard service if enabled
+	fmt.Println("Checking dashboard service...")
+	if err := updateDashboardService(workspaceName, dashboardImage, staging, trustCA); err != nil {
+		fmt.Printf("Warning: failed to update dashboard service: %v\n", err)
+	} else {
+		fmt.Println("Dashboard service updated successfully!")
 	}
 
 	// Always try to update Kafka service if enabled
@@ -155,15 +171,11 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 		return fmt.Errorf("failed to stop current editor container: %w", err)
 	}
 
-	// Fix permissions before updating (daemon runs as root, so volumes may be root-owned)
 	fmt.Println("Fixing volume permissions...")
 	if err := fixEditorPermissions(workspaceName); err != nil {
-		// Don't continue if permissions fix fails - this will cause container startup issues
 		return fmt.Errorf("failed to fix permissions: %w", err)
 	}
 
-	// Regenerate the entire docker-compose file to ensure all config changes are applied
-	// This handles image updates, dev mode settings, certificates, etc.
 	fmt.Println("Regenerating editor docker-compose configuration...")
 	if err := editorService.RegenerateDockerCompose(editorImage, staging, trustCA); err != nil {
 		return fmt.Errorf("failed to regenerate docker-compose file: %w", err)
@@ -177,6 +189,37 @@ func updateEditorService(workspaceName, editorImage string, staging bool, trustC
 	fmt.Println("Waiting for editor to be ready...")
 	if err := editorService.WaitForEditorReady(); err != nil {
 		return fmt.Errorf("editor failed to start properly: %w", err)
+	}
+
+	return nil
+}
+
+// updateDashboardService updates the workspace-dashboard service for a specific workspace.
+// Mirrors updateEditorService: stop, fix permissions, regenerate compose, start.
+func updateDashboardService(workspaceName, dashboardImage string, staging bool, trustCA bool) error {
+	dashboardService, err := services.NewDashboardService(workspaceName)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+
+	if !dashboardService.IsEnabled() {
+		fmt.Printf("Dashboard service is not enabled for workspace '%s', skipping update\n", workspaceName)
+		return nil
+	}
+
+	fmt.Println("Stopping current dashboard container...")
+	if err := dashboardService.StopContainer(); err != nil {
+		return fmt.Errorf("failed to stop current dashboard container: %w", err)
+	}
+
+	fmt.Println("Regenerating dashboard docker-compose configuration...")
+	if err := dashboardService.RegenerateDockerCompose(dashboardImage, staging, trustCA); err != nil {
+		return fmt.Errorf("failed to regenerate dashboard docker-compose file: %w", err)
+	}
+
+	fmt.Println("Starting dashboard container...")
+	if err := dashboardService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start dashboard container: %w", err)
 	}
 
 	return nil
