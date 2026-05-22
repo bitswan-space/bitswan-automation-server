@@ -294,6 +294,10 @@ func handleGatePath(w http.ResponseWriter, r *http.Request) {
 		handlePendingPairPoll(w, r, email)
 	case r.URL.Path == mfaGatePathPrefix+"/approve":
 		handleApprovePair(w, r, email)
+	case r.URL.Path == mfaGatePathPrefix+"/approve/pending-count":
+		pending := visiblePendingRequests(email, admin)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"count":%d}`, len(pending))
 	case r.URL.Path == mfaGatePathPrefix+"/recovery":
 		handleRecovery(w, r, email)
 	case r.URL.Path == mfaGatePathPrefix+"/account/devices":

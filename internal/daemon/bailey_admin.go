@@ -128,6 +128,12 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, vpnInternalPage(email, "endpoints", admin))
 			return
 		}
+	case "/bailey/approvals", "/bailey/approvals/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, "approvals", admin))
+			return
+		}
 	case "/bailey/api/endpoints":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -553,7 +559,16 @@ loadList();`
 <div class="card" style="margin-top:0;">
   <h2>Paired devices</h2>
   <p class="note">Browsers you've trusted to access this server. Removing a device immediately invalidates its session.</p>
-  <iframe src="/2fa-gate/account/devices?_bailey_iframe=1" style="width:100%;min-height:480px;border:0;"></iframe>
+  <iframe src="/2fa-gate/account/devices" style="width:100%;min-height:480px;border:0;"></iframe>
+</div>`
+
+	case "approvals":
+		pageTitle = "Device approvals"
+		pageContent = `
+<div class="card" style="margin-top:0;">
+  <h2>Pending device approvals</h2>
+  <p class="note">Someone signing in from a new browser sees a 6-digit code. Ask them to read it to you, type it here, and approve.</p>
+  <iframe id="approvals-iframe" src="/2fa-gate/approve" style="width:100%;min-height:600px;border:0;"></iframe>
 </div>`
 
 	case "endpoints":
@@ -735,12 +750,27 @@ function showTab(groupId, tabId) {
   <nav class="sidebar-nav">
     <a href="/bailey/workspaces" class="%s">Workspaces</a>
     <a href="/bailey/endpoints" class="%s">Endpoints</a>
+    <a href="/bailey/approvals" class="%s" id="nav-approvals">Approvals<span id="nav-approvals-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
     <a href="/bailey/network" class="%s">Network Access</a>
     <a href="/bailey/siem" class="%s">SIEM</a>
     <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/devices" class="%s">Devices</a>
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
   </nav>
+  <script>
+    (function(){
+      function poll(){
+        fetch('/2fa-gate/approve/pending-count',{credentials:'same-origin'})
+          .then(r=>r.ok?r.json():{count:0})
+          .then(d=>{
+            var b=document.getElementById('nav-approvals-badge');
+            if(d&&d.count>0){ b.textContent=d.count; b.style.display='inline-block'; }
+            else{ b.style.display='none'; }
+          }).catch(function(){});
+      }
+      poll(); setInterval(poll, 4000);
+    })();
+  </script>
   <div class="sidebar-footer">
     <div style="margin-bottom:4px;">%s</div>
     <a href="/bailey/signout">Sign out</a>
@@ -753,7 +783,7 @@ function showTab(groupId, tabId) {
 <script>%s</script>
 </body></html>`,
 		pageTitle, serverName,
-		active("workspaces"), active("endpoints"),
+		active("workspaces"), active("endpoints"), active("approvals"),
 		active("network"), active("siem"), active("certs"),
 		active("devices"), active("recovery"),
 		email, pageTitle, pageContent, pageScript)
