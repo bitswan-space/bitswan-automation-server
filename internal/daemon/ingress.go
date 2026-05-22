@@ -677,54 +677,22 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 
 	ingressType := DetectIngressType()
 
-	if !IsVPNEnabled() {
-		// No VPN — single ingress, ignore IngressTarget
-		switch ingressType {
-		case IngressCaddy:
-			return addRouteCaddy(req)
-		case IngressTraefik:
-			workspaceName := resolveWorkspaceName(req, jwtToken)
-			return addRouteTraefik(req, workspaceName)
-		}
-		return fmt.Errorf("no ingress proxy detected")
-	}
-
-	// VPN enabled — dispatch to external, internal, or both.
-	// Empty IngressTarget means the caller hasn't been updated for VPN yet,
-	// so default to external-only (safe default — internal routes must be
-	// explicitly requested).
-	target := req.IngressTarget
-	if target == "" {
-		target = "external"
-	}
-
-	var errs []error
-
-	if target == "external" || target == "both" {
-		switch ingressType {
-		case IngressCaddy:
-			if err := addRouteCaddy(req); err != nil {
-				errs = append(errs, fmt.Errorf("external ingress: %w", err))
-			}
-		case IngressTraefik:
-			workspaceName := resolveWorkspaceName(req, jwtToken)
-			if err := addRouteTraefik(req, workspaceName); err != nil {
-				errs = append(errs, fmt.Errorf("external ingress: %w", err))
-			}
-		}
-	}
-
-	if target == "internal" || target == "both" {
+	// VPN/internal-only routing is dead — traefik-protected was
+	// collapsed into the daemon's MFA gate, which resolves upstreams
+	// by hostname directly. addRouteTraefik now registers the
+	// outer+inner pair in platform-traefik and the workspace's own
+	// traefik in one call, so IngressTarget ('external'/'internal'/
+	// 'both') no longer means anything different. Treat every call
+	// as 'external' and forward.
+	_ = req.IngressTarget
+	switch ingressType {
+	case IngressCaddy:
+		return addRouteCaddy(req)
+	case IngressTraefik:
 		workspaceName := resolveWorkspaceName(req, jwtToken)
-		if err := addRouteVPNTraefik(req, workspaceName); err != nil {
-			errs = append(errs, fmt.Errorf("vpn ingress: %w", err))
-		}
+		return addRouteTraefik(req, workspaceName)
 	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("%v", errs)
-	}
-	return nil
+	return fmt.Errorf("no ingress proxy detected")
 }
 
 // addRouteVPNTraefik adds a route to the VPN-internal Traefik instance.
