@@ -108,6 +108,23 @@ func serverDisplayName() string {
 	return "Bailey"
 }
 
+// baileyCourtyardHost returns the bailey-admin hostname (the
+// "courtyard" — the central page from which the user manages all
+// their endpoints). Currently bailey-admin.<protected-domain>.
+//
+// Returns empty if no domain is configured (e.g. during init).
+func baileyCourtyardHost() string {
+	sc, err := config.NewAutomationServerConfig().LoadConfig()
+	if err != nil || sc == nil {
+		return ""
+	}
+	d := sc.ProtectedHostnameDomain()
+	if d == "" {
+		return ""
+	}
+	return "bailey-admin." + d
+}
+
 func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
 	emailDisp := "anonymous"
 	if email != "" {
@@ -127,6 +144,16 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
 		shareBtn = `<a class="btn" href="#" onclick="window.__baileyShareOpen();return false;">Share</a>`
 		shareModal = shareModalHTML()
 		shareScript = shareModalJS(host, emailDisp, apiURL)
+	}
+
+	// "Back to bailey" link — the courtyard from which the user
+	// manages all their endpoints. Suppressed when we ARE on the
+	// bailey host (showing a self-link would be pointless).
+	courtyardBtn := ""
+	if cy := baileyCourtyardHost(); cy != "" && !strings.EqualFold(cy, host) {
+		courtyardBtn = fmt.Sprintf(
+			`<a class="btn courtyard" href="https://%[1]s/" target="_top" title="Back to the bailey">↩ %[1]s</a>`,
+			html.EscapeString(cy))
 	}
 
 	return fmt.Sprintf(`<!doctype html>
@@ -149,6 +176,7 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
   footer.bailey-footer .fence   { flex: 1; opacity: 0.45; letter-spacing: 1px; overflow: hidden; }
   footer.bailey-footer a.btn    { padding: 0 12px; color: %[3]s; text-decoration: none; flex-shrink: 0; border-left: 1px solid rgba(255,255,255,0.18); cursor: pointer; }
   footer.bailey-footer a.btn:hover { background: rgba(255,255,255,0.06); }
+  footer.bailey-footer a.btn.courtyard { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; opacity: 0.9; }
 %[9]s
 </style>
 </head><body>
@@ -158,6 +186,7 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
   <span class="sep">·</span>
   <span class="label">Logged in as <b>%[6]s</b></span>
   <span class="fence">%[7]s</span>
+  %[12]s
   %[8]s
   <a class="btn" href="/oauth2/sign_out" target="_top">Logout</a>
 </footer>
@@ -171,5 +200,6 @@ func baileyChromeHTML(email, host, iframeSrc string, isOwner bool) string {
 		shareBtn,
 		shareModalCSS,
 		shareModal,
-		shareScript)
+		shareScript,
+		courtyardBtn)
 }
