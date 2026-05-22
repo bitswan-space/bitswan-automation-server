@@ -16,6 +16,7 @@ type initOptions struct {
 	verbose            bool
 	mkCerts            bool
 	noIde              bool
+	noDashboard        bool
 	setHosts           bool
 	local              bool
 	gitopsImage        string
@@ -63,6 +64,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.domain, "domain", "", "The domain to use for the Caddyfile")
 	cmd.Flags().StringVar(&o.certsDir, "certs-dir", "", "The directory where the certificates are located")
 	cmd.Flags().BoolVar(&o.noIde, "no-ide", false, "Do not start Bitswan Editor")
+	cmd.Flags().BoolVar(&o.noDashboard, "no-dashboard", false, "Do not start the workspace-dashboard sidecar")
 	cmd.Flags().BoolVarP(&o.verbose, "verbose", "v", false, "Verbose output")
 	cmd.Flags().BoolVar(&o.mkCerts, "mkcerts", false, "Automatically generate local certificates using the mkcerts utility")
 	cmd.Flags().BoolVar(&o.setHosts, "set-hosts", false, "Automatically set hosts to /etc/hosts file")

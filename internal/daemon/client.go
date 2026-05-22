@@ -1573,6 +1573,9 @@ func (c *Client) UpdateService(serviceType, workspace string, options map[string
 	if editorImage, ok := options["editor_image"].(string); ok {
 		reqBody.EditorImage = editorImage
 	}
+	if dashboardImage, ok := options["dashboard_image"].(string); ok {
+		reqBody.DashboardImage = dashboardImage
+	}
 	if trustCA, ok := options["trust_ca"].(bool); ok {
 		reqBody.TrustCA = trustCA
 	}

@@ -75,6 +75,7 @@ type ServiceUpdateRequest struct {
 	Workspace        string `json:"workspace"`
 	Stage            string `json:"stage,omitempty"`
 	EditorImage      string `json:"editor_image,omitempty"`
+	DashboardImage   string `json:"dashboard_image,omitempty"`
 	TrustCA          bool   `json:"trust_ca,omitempty"`
 	KafkaImage       string `json:"kafka_image,omitempty"`
 	ZookeeperImage   string `json:"zookeeper_image,omitempty"`
@@ -288,6 +289,9 @@ func (s *Server) handleServiceEnable(w http.ResponseWriter, r *http.Request, ser
 	case "editor":
 		// Editor stays managed locally by the automation server
 		s.handleEditorEnableLocal(w, req)
+	case "dashboard":
+		// Workspace-dashboard is also managed locally
+		s.handleDashboardEnableLocal(w, req)
 	case "coding-agent":
 		s.handleCodingAgentEnableLocal(w, req)
 	case "kafka", "couchdb", "postgres", "minio":
@@ -338,6 +342,18 @@ func (s *Server) handleServiceDisable(w http.ResponseWriter, r *http.Request, se
 			Success: true,
 			Message: "editor service disabled successfully",
 		})
+	case "dashboard":
+		err := s.disableDashboardService(req.Workspace)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "dashboard service disabled successfully",
+		})
 	case "coding-agent":
 		err := s.disableCodingAgentService(req.Workspace)
 		if err != nil {
@@ -377,6 +393,18 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request, ser
 	switch serviceType {
 	case "editor":
 		statusData, err := s.getEditorStatus(workspace, showPasswords)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Data:    statusData,
+		})
+	case "dashboard":
+		statusData, err := s.getDashboardStatus(workspace)
 		if err != nil {
 			writeJSONError(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -439,6 +467,18 @@ func (s *Server) handleServiceStart(w http.ResponseWriter, r *http.Request, serv
 			Success: true,
 			Message: "editor service started successfully",
 		})
+	case "dashboard":
+		err := s.startDashboardService(req.Workspace)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "dashboard service started successfully",
+		})
 	case "coding-agent":
 		err := s.startCodingAgentService(req.Workspace)
 		if err != nil {
@@ -490,6 +530,18 @@ func (s *Server) handleServiceStop(w http.ResponseWriter, r *http.Request, servi
 			Success: true,
 			Message: "editor service stopped successfully",
 		})
+	case "dashboard":
+		err := s.stopDashboardService(req.Workspace)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "dashboard service stopped successfully",
+		})
 	case "coding-agent":
 		err := s.stopCodingAgentService(req.Workspace)
 		if err != nil {
@@ -540,6 +592,18 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request, ser
 		json.NewEncoder(w).Encode(ServiceResponse{
 			Success: true,
 			Message: "editor service updated successfully",
+		})
+	case "dashboard":
+		err := s.updateDashboardService(req)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(ServiceResponse{
+			Success: true,
+			Message: "dashboard service updated successfully",
 		})
 	case "coding-agent":
 		err := s.updateCodingAgentService(req)
@@ -790,11 +854,6 @@ func (s *Server) enableEditorService(req ServiceEnableRequest) error {
 		bitswanEditorImage = "bitswan/bitswan-editor:latest"
 	}
 
-	bitswanDashboardImage := req.DashboardImage
-	if bitswanDashboardImage == "" {
-		bitswanDashboardImage = "bitswan/workspace-dashboard:latest"
-	}
-
 	var oauthConfig *oauth.Config
 	if req.OAuthConfig != nil {
 		oauthJSON, err := json.Marshal(req.OAuthConfig)
@@ -806,7 +865,7 @@ func (s *Server) enableEditorService(req ServiceEnableRequest) error {
 		}
 	}
 
-	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, bitswanDashboardImage, domain, oauthConfig, req.TrustCA); err != nil {
+	if err := editorService.Enable(gitopsSecretToken, bitswanEditorImage, domain, oauthConfig, req.TrustCA); err != nil {
 		return err
 	}
 
@@ -1122,4 +1181,189 @@ func (s *Server) updateCodingAgentService(req ServiceUpdateRequest) error {
 	}
 
 	return agentService.StartContainer()
+}
+
+// =============================================================================
+// Dashboard service — handled locally by the automation server (not proxied)
+// Mirrors the editor's handler set: each method maps 1:1 to its editor sibling.
+// =============================================================================
+
+func (s *Server) handleDashboardEnableLocal(w http.ResponseWriter, req ServiceEnableRequest) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	stdoutMutex.Lock()
+	oldStdout := os.Stdout
+	rPipe, wPipe, err := os.Pipe()
+	if err != nil {
+		stdoutMutex.Unlock()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
+		return
+	}
+	os.Stdout = wPipe
+	stdoutMutex.Unlock()
+
+	defer func() {
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+	}()
+
+	logWriter := NewLogStreamWriter(w, "info")
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := rPipe.Read(buf)
+			if n > 0 {
+				logWriter.Write(buf[:n])
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", readErr))
+				break
+			}
+		}
+	}()
+
+	operationErr := s.enableDashboardService(req)
+
+	wPipe.Close()
+	wg.Wait()
+
+	if operationErr != nil {
+		WriteLogEntry(w, "error", fmt.Sprintf("Operation failed: %v", operationErr))
+	}
+}
+
+func (s *Server) enableDashboardService(req ServiceEnableRequest) error {
+	dashboardService, err := services.NewDashboardService(req.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+
+	if dashboardService.IsEnabled() {
+		return fmt.Errorf("Dashboard service is already enabled for workspace '%s'", req.Workspace)
+	}
+
+	metadata, err := dashboardService.GetMetadata()
+	if err != nil {
+		return fmt.Errorf("failed to read workspace metadata: %w", err)
+	}
+
+	gitopsSecretToken := metadata.GitopsSecret
+	domain := metadata.Domain
+
+	bitswanDashboardImage := req.DashboardImage
+	if bitswanDashboardImage == "" {
+		bitswanDashboardImage = "bitswan/workspace-dashboard:latest"
+	}
+
+	var oauthConfig *oauth.Config
+	if req.OAuthConfig != nil {
+		oauthJSON, err := json.Marshal(req.OAuthConfig)
+		if err != nil {
+			return fmt.Errorf("failed to marshal OAuth config: %w", err)
+		}
+		if err := json.Unmarshal(oauthJSON, &oauthConfig); err != nil {
+			return fmt.Errorf("failed to parse OAuth config: %w", err)
+		}
+	}
+
+	if err := dashboardService.Enable(gitopsSecretToken, bitswanDashboardImage, domain, oauthConfig, req.TrustCA); err != nil {
+		return err
+	}
+	if err := dashboardService.StartContainer(); err != nil {
+		return fmt.Errorf("failed to start dashboard container: %w", err)
+	}
+	return nil
+}
+
+func (s *Server) disableDashboardService(workspace string) error {
+	dashboardService, err := services.NewDashboardService(workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+	if !dashboardService.IsEnabled() {
+		return fmt.Errorf("Dashboard service is not enabled for workspace '%s'", workspace)
+	}
+	return dashboardService.Disable()
+}
+
+func (s *Server) getDashboardStatus(workspace string) (map[string]interface{}, error) {
+	dashboardService, err := services.NewDashboardService(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+	status := map[string]interface{}{
+		"enabled": dashboardService.IsEnabled(),
+		"running": dashboardService.IsContainerRunning(),
+	}
+	if dashboardService.IsEnabled() {
+		status["workspace_path"] = dashboardService.WorkspacePath
+	}
+	return status, nil
+}
+
+func (s *Server) startDashboardService(workspace string) error {
+	dashboardService, err := services.NewDashboardService(workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+	if !dashboardService.IsEnabled() {
+		return fmt.Errorf("Dashboard service is not enabled for workspace '%s'", workspace)
+	}
+	if dashboardService.IsContainerRunning() {
+		return nil
+	}
+	return dashboardService.StartContainer()
+}
+
+func (s *Server) stopDashboardService(workspace string) error {
+	dashboardService, err := services.NewDashboardService(workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+	if !dashboardService.IsEnabled() {
+		return fmt.Errorf("Dashboard service is not enabled for workspace '%s'", workspace)
+	}
+	if !dashboardService.IsContainerRunning() {
+		return nil
+	}
+	return dashboardService.StopContainer()
+}
+
+func (s *Server) updateDashboardService(req ServiceUpdateRequest) error {
+	dashboardService, err := services.NewDashboardService(req.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Dashboard service: %w", err)
+	}
+	if !dashboardService.IsEnabled() {
+		return fmt.Errorf("Dashboard service is not enabled for workspace '%s'", req.Workspace)
+	}
+
+	if err := dashboardService.StopContainer(); err != nil {
+		return fmt.Errorf("failed to stop dashboard container: %w", err)
+	}
+
+	if req.DashboardImage != "" {
+		if err := dashboardService.UpdateImage(req.DashboardImage); err != nil {
+			return fmt.Errorf("failed to update dashboard docker-compose file: %w", err)
+		}
+	} else {
+		if err := dashboardService.UpdateToLatest(); err != nil {
+			return fmt.Errorf("failed to update dashboard to latest version: %w", err)
+		}
+	}
+
+	return dashboardService.StartContainer()
 }
