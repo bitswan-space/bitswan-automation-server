@@ -20,20 +20,27 @@ func injectNavSyncMiddleware(inner http.Handler) http.Handler {
 			inner.ServeHTTP(w, r)
 			return
 		}
-		rec := &capturingWriter{ResponseWriter: w, status: 200, buf: &bytes.Buffer{}}
+		rec := &capturingWriter{
+			real:    w,
+			headers: http.Header{},
+			status:  200,
+			buf:     &bytes.Buffer{},
+		}
 		inner.ServeHTTP(rec, r)
 
-		ct := rec.Header().Get("Content-Type")
+		ct := rec.headers.Get("Content-Type")
 		body := rec.buf.Bytes()
 		if strings.HasPrefix(ct, "text/html") && len(body) > 0 {
 			body = appendNavSyncToHTML(body)
-			rec.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			rec.headers.Set("Content-Length", strconv.Itoa(len(body)))
 		}
-		// Copy headers to the real writer, set status, write body.
-		for k, vv := range rec.Header() {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
+		// Flush the recorded headers ONCE to the real writer. Earlier
+		// we double-emitted because rec.Header() and w.Header() were
+		// the same map (we embedded ResponseWriter), so iterating and
+		// Add()-ing duplicated every entry.
+		dst := w.Header()
+		for k, vv := range rec.headers {
+			dst[k] = append(dst[k][:0:0], vv...)
 		}
 		w.WriteHeader(rec.status)
 		_, _ = w.Write(body)
@@ -54,12 +61,18 @@ func appendNavSyncToHTML(body []byte) []byte {
 
 // capturingWriter buffers everything an inner handler writes so the
 // middleware can rewrite text/html bodies before flushing them.
+// Does NOT embed http.ResponseWriter — that would make Header()
+// return the real writer's headers, causing the flush-back loop to
+// duplicate every entry. Keep a private header map instead.
 type capturingWriter struct {
-	http.ResponseWriter
+	real        http.ResponseWriter
+	headers     http.Header
 	status      int
 	wroteHeader bool
 	buf         *bytes.Buffer
 }
+
+func (c *capturingWriter) Header() http.Header { return c.headers }
 
 func (c *capturingWriter) WriteHeader(status int) {
 	if !c.wroteHeader {
