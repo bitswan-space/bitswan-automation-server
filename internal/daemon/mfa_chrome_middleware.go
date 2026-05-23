@@ -57,6 +57,20 @@ func chromeWrapMiddleware(inner http.Handler) http.Handler {
 			inner.ServeHTTP(w, r)
 			return
 		}
+		// Bailey's own admin JSON API. The UI normally calls this from
+		// inside the inner-host iframe, but if the wrap iframe isn't up
+		// (cold load, popup, broken nav-sync) the fetch lands on the
+		// outer origin. Returning 404 here trips the frontend's
+		// `r.json()` with "unexpected character at line 2 column 1"
+		// — the user's first sign that "+ New workspace" silently
+		// hits the wall before reaching the handler. The downstream
+		// handler still enforces X-Forwarded-Email + admin checks,
+		// so letting these through doesn't expand the trust boundary.
+		if strings.HasPrefix(r.URL.Path, "/bailey/api/") ||
+			strings.HasPrefix(r.URL.Path, "/bailey/static/") {
+			inner.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodGet || !strings.Contains(r.Header.Get("Accept"), "text/html") {
 			http.NotFound(w, r)
 			return
