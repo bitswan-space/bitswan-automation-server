@@ -158,7 +158,14 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	logWriter := NewLogStreamWriter(w, "info")
-	errLogWriter := NewLogStreamWriter(w, "error")
+	// Stderr is tagged "warn", not "error". Many tools (docker compose,
+	// dnsmasq, mkcert) write warnings + progress to stderr that we want
+	// the client to see — but the client treats level=error as the
+	// failure signal, so tagging every stderr line as "error" would
+	// turn benign warnings (e.g. "the attribute `version` is obsolete")
+	// into operation failures. Real failures still surface via the
+	// error returned from runWorkspaceInit below.
+	errLogWriter := NewLogStreamWriter(w, "warning")
 
 	var wg sync.WaitGroup
 	wg.Add(2)
