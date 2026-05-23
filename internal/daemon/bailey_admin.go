@@ -208,6 +208,31 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+	case "/bailey/api/workspaces/empty-trash":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.handleEmptyTrash(w, r, email)
+		return
+	}
+	// Per-workspace trash + restore — path: /bailey/api/workspaces/{name}/{action}.
+	// Handled outside the switch because Go's net/http switch is exact-match;
+	// rather than introducing a router for two endpoints, just prefix-match here.
+	if strings.HasPrefix(r.URL.Path, "/bailey/api/workspaces/") && r.Method == http.MethodPost {
+		rest := strings.TrimPrefix(r.URL.Path, "/bailey/api/workspaces/")
+		parts := strings.Split(rest, "/")
+		if len(parts) == 2 {
+			workspaceName, action := parts[0], parts[1]
+			switch action {
+			case "trash":
+				s.handleTrashWorkspace(w, r, email, workspaceName)
+				return
+			case "restore":
+				s.handleRestoreWorkspace(w, r, email, workspaceName)
+				return
+			}
+		}
 	}
 
 	// Everything below this point is admin-only.
@@ -590,6 +615,27 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   }
   .ws-app-empty { font-size:13px; color:#A1A1AA; padding:8px 4px; }
+  .ws-trash-btn {
+    background:transparent; border:1px solid #E4E4E7; color:#71717A;
+    padding:6px 10px; border-radius:6px; cursor:pointer; font-size:12px;
+    margin-left:8px;
+  }
+  .ws-trash-btn:hover { border-color:#FCA5A5; color:#B91C1C; background:#FEF2F2; }
+  .ws-card.trashed { opacity:0.65; background:#FAFAFA; border-style:dashed; }
+  .ws-card.trashed .ws-card-head h2::after {
+    content:' (trashed)'; color:#A1A1AA; font-weight:normal; font-size:13px;
+  }
+  .trash-section { margin-top:32px; }
+  .trash-section h2 {
+    font-size:14px; color:#71717A; text-transform:uppercase;
+    letter-spacing:0.04em; margin:0 0 12px;
+  }
+  .trash-empty-btn {
+    margin-top:12px; padding:8px 14px; border:1px solid #FCA5A5;
+    background:#fff; color:#B91C1C; border-radius:6px; cursor:pointer;
+    font-size:13px; font-weight:500;
+  }
+  .trash-empty-btn:hover { background:#FEF2F2; }
 
   .ws-modal-backdrop {
     position:fixed; inset:0; background:rgba(15,23,42,0.55);
@@ -625,6 +671,30 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
 </div>
 
 <div id="workspaces-list"><p class="note">Loading…</p></div>
+
+<div class="trash-section" id="trash-section" style="display:none;">
+  <h2>Trash</h2>
+  <div id="trash-list"></div>
+  <div id="trash-empty-wrap" style="display:none;">
+    <button class="trash-empty-btn" onclick="document.getElementById('empty-trash-modal').classList.add('open');document.getElementById('empty-trash-input').focus();">Empty trash…</button>
+  </div>
+</div>
+
+<div class="ws-modal-backdrop" id="empty-trash-modal" onclick="if(event.target===this){this.classList.remove('open')}">
+  <div class="ws-modal-card">
+    <h2>Empty trash</h2>
+    <p class="note">This permanently deletes every trashed workspace you own — containers, volumes, gitops folders, AOC registrations. There is no undo.</p>
+    <p class="note">Type <code>empty trash</code> to confirm:</p>
+    <form id="empty-trash-form">
+      <input type="text" id="empty-trash-input" placeholder="empty trash" autocomplete="off">
+      <div class="actions">
+        <button type="button" class="cancel" onclick="document.getElementById('empty-trash-modal').classList.remove('open');document.getElementById('empty-trash-input').value='';">Cancel</button>
+        <button type="submit" class="create" style="background:#B91C1C;" id="empty-trash-confirm" disabled>Empty trash</button>
+      </div>
+      <pre id="empty-trash-log" style="display:none;margin-top:10px;padding:8px;background:#f6f7f9;border:1px solid #e4e4e7;border-radius:6px;font-size:11px;max-height:200px;overflow:auto;font-family:ui-monospace,monospace;"></pre>
+    </form>
+  </div>
+</div>
 
 <div class="ws-modal-backdrop" id="ws-modal" onclick="if(event.target===this){this.classList.remove('open')}">
   <div class="ws-modal-card">
@@ -686,16 +756,24 @@ function loadList() {
     });
 
     var box = document.getElementById('workspaces-list');
+    var trashBox = document.getElementById('trash-list');
+    var trashSection = document.getElementById('trash-section');
     if (!workspaces.length) {
       box.innerHTML = '<div class="ws-card"><p class="note">No workspaces visible to you. Create one with the button above, or wait for someone to share one with you.</p></div>';
+      trashSection.style.display = 'none';
       return;
     }
-    var html = '';
-    workspaces.forEach(function(w){
+    function renderCard(w, opts){
       var bucket = byWs[w.name];
       var role = w.is_owner ? 'owner' : (w.editor_role || w.gitops_role || 'access');
       var appsHTML;
-      if (bucket.apps.length) {
+      // Trashed workspaces: containers are down, so the apps + dashboard
+      // links would 502. Skip rendering them and show a restore hint
+      // instead — keeps the trash row visually quieter and avoids
+      // dead-end clicks.
+      if (opts.trashed) {
+        appsHTML = '<p class="ws-app-empty">Containers are stopped. Restore to bring them back up, or empty the trash to delete everything permanently.</p>';
+      } else if (bucket.apps.length) {
         appsHTML = '<div class="ws-apps">' + bucket.apps.map(function(ep){
           var url = 'https://' + ep.hostname + '/';
           return '<a class="ws-app-card" href="' + escapeHTML(url) + '" target="_blank" rel="noopener">' +
@@ -706,19 +784,72 @@ function loadList() {
       } else {
         appsHTML = '<p class="ws-app-empty">No deployed automations yet.</p>';
       }
-      var dashboardBtn = bucket.dashboard
-        ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.dashboard.hostname) + '/" target="_blank" rel="noopener">Open dashboard ↗</a>'
-        : '<span class="note">Dashboard not deployed.</span>';
-      html += '<div class="ws-card" data-ws="' + escapeHTML(w.name) + '">' +
+      var actionBtn;
+      if (opts.trashed) {
+        actionBtn = w.is_owner
+          ? '<button class="ws-editor-btn" data-action="restore" data-ws="' + escapeHTML(w.name) + '">Restore</button>'
+          : '<span class="note">Trashed by owner.</span>';
+      } else {
+        actionBtn = bucket.dashboard
+          ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.dashboard.hostname) + '/" target="_blank" rel="noopener">Open dashboard ↗</a>'
+          : '<span class="note">Dashboard not deployed.</span>';
+      }
+      var trashBtn = (w.is_owner && !opts.trashed)
+        ? '<button class="ws-trash-btn" data-action="trash" data-ws="' + escapeHTML(w.name) + '" title="Move to trash (stops all containers, keeps data)">🗑 Trash</button>'
+        : '';
+      return '<div class="ws-card ' + (opts.trashed ? 'trashed' : '') + '" data-ws="' + escapeHTML(w.name) + '">' +
         '<div class="ws-card-head">' +
           '<h2>' + escapeHTML(w.name) + '</h2>' +
           '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
-          dashboardBtn +
+          actionBtn +
+          trashBtn +
         '</div>' +
         appsHTML +
         '</div>';
+    }
+
+    var active = workspaces.filter(function(w){ return !w.is_trashed; });
+    var trashed = workspaces.filter(function(w){ return w.is_trashed; });
+
+    box.innerHTML = active.length
+      ? active.map(function(w){ return renderCard(w, {trashed:false}); }).join('')
+      : '<div class="ws-card"><p class="note">All your workspaces are in the trash. Restore one or empty the trash to start fresh.</p></div>';
+
+    if (trashed.length) {
+      trashBox.innerHTML = trashed.map(function(w){ return renderCard(w, {trashed:true}); }).join('');
+      // Empty-trash button is shown when the caller owns at least one trashed
+      // workspace — otherwise they have nothing to empty.
+      var ownsAnyTrashed = trashed.some(function(w){ return w.is_owner; });
+      document.getElementById('trash-empty-wrap').style.display = ownsAnyTrashed ? '' : 'none';
+      trashSection.style.display = '';
+    } else {
+      trashSection.style.display = 'none';
+    }
+
+    // Wire up trash / restore buttons. Delegating on the container so we
+    // don't have to re-bind after every loadList() re-render.
+    document.querySelectorAll('[data-action="trash"], [data-action="restore"]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var action = btn.getAttribute('data-action');
+        var ws = btn.getAttribute('data-ws');
+        if (!confirm(action === 'trash'
+          ? 'Move "' + ws + '" to trash? Containers will stop but data is preserved.'
+          : 'Restore "' + ws + '"? Containers will start back up.')) return;
+        btn.disabled = true;
+        btn.textContent = action === 'trash' ? 'Trashing…' : 'Restoring…';
+        fetch('/bailey/api/workspaces/' + encodeURIComponent(ws) + '/' + action, {
+          method:'POST', credentials:'same-origin'
+        }).then(function(r){ return r.json(); }).then(function(d){
+          if (!d.ok) {
+            alert('Failed: ' + (d.error || 'unknown error'));
+          }
+          loadList();
+        }).catch(function(e){
+          alert('Failed: ' + e.message);
+          loadList();
+        });
+      });
     });
-    box.innerHTML = html;
   }).catch(function(e){
     document.getElementById('workspaces-list').innerHTML = '<div class="ws-card"><p class="note" style="color:#b00020;">Couldn\'t load: ' + escapeHTML(String(e)) + '</p></div>';
   });
@@ -847,6 +978,77 @@ document.getElementById('ws-create-form').addEventListener('submit', function(e)
     stageEl.style.color = '#b00020';
   });
 });
+// Empty-trash modal: confirm button only enables when the user types
+// the exact phrase. Submit streams NDJSON the same way create does.
+document.getElementById('empty-trash-input').addEventListener('input', function(e){
+  document.getElementById('empty-trash-confirm').disabled = e.target.value.trim() !== 'empty trash';
+});
+document.getElementById('empty-trash-form').addEventListener('submit', function(e){
+  e.preventDefault();
+  var input = document.getElementById('empty-trash-input');
+  var confirmBtn = document.getElementById('empty-trash-confirm');
+  var logEl = document.getElementById('empty-trash-log');
+  logEl.style.display = '';
+  logEl.textContent = '';
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Emptying…';
+  fetch('/bailey/api/workspaces/empty-trash', {
+    method:'POST', credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({confirmation: input.value.trim()})
+  }).then(function(r){
+    if (!r.ok && r.status !== 200) throw new Error('HTTP ' + r.status);
+    var reader = r.body.getReader();
+    var decoder = new TextDecoder();
+    var partial = '';
+    function readLoop(){
+      return reader.read().then(function(chunk){
+        if (chunk.done) {
+          if (partial.trim()) handleLine(partial);
+          return;
+        }
+        partial += decoder.decode(chunk.value, {stream:true});
+        var lines = partial.split('\n');
+        partial = lines.pop();
+        lines.forEach(handleLine);
+        return readLoop();
+      });
+    }
+    function handleLine(line){
+      if (!line.trim()) return;
+      var ev;
+      try { ev = JSON.parse(line); } catch(e){
+        logEl.textContent += line + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+        return;
+      }
+      if (ev.event === 'log' || ev.event === 'start') {
+        logEl.textContent += (ev.message || '') + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      } else if (ev.event === 'done') {
+        logEl.textContent += '\n✓ Trash emptied.\n';
+        confirmBtn.textContent = 'Done';
+        setTimeout(function(){
+          document.getElementById('empty-trash-modal').classList.remove('open');
+          input.value = '';
+          confirmBtn.textContent = 'Empty trash';
+          logEl.style.display = 'none';
+          loadList();
+        }, 1200);
+      } else if (ev.event === 'error') {
+        logEl.textContent += '\n✗ Failed: ' + (ev.error || 'unknown') + '\n';
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Empty trash';
+      }
+    }
+    return readLoop();
+  }).catch(function(e){
+    logEl.textContent += '\n✗ Failed: ' + e.message + '\n';
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Empty trash';
+  });
+});
+
 loadList();`
 
 	case "devices":

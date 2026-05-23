@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ type accessibleWorkspace struct {
 	EditorRole  string `json:"editor_role,omitempty"`  // owner | access | none
 	GitopsRole  string `json:"gitops_role,omitempty"`
 	IsOwner     bool   `json:"is_owner"`
+	IsTrashed   bool   `json:"is_trashed,omitempty"`
 }
 
 type listAccessibleResponse struct {
@@ -76,6 +78,7 @@ func handleListAccessibleWorkspaces(w http.ResponseWriter, r *http.Request, emai
 				EditorRole: string(editorRole),
 				GitopsRole: string(gitopsRole),
 				IsOwner:    isOwner,
+				IsTrashed:  IsWorkspaceTrashed(name),
 			}
 			out.Workspaces = append(out.Workspaces, entry)
 		}
@@ -244,4 +247,142 @@ func (s *Server) handleCreateWorkspaceFromBaileyAdmin(w http.ResponseWriter, r *
 		"gitops_url":    gitopsURL,
 		"dashboard_url": dashboardURL,
 	})
+}
+
+// callerOwnsWorkspace is the auth check for trash + restore.
+// A caller owns the workspace if they're the owner of its gitops
+// endpoint, OR they're the server owner (audit override).
+func callerOwnsWorkspace(callerEmail string, callerGroups []string, isServerOwner bool, workspaceName string) bool {
+	if isServerOwner {
+		return true
+	}
+	sc, _ := config.NewAutomationServerConfig().LoadConfig()
+	if sc == nil {
+		return false
+	}
+	gitopsHost := workspaceName + "-gitops." + sc.ProtectedHostnameDomain()
+	role, err := roleFor(gitopsHost, callerEmail, callerGroups)
+	if err != nil {
+		return false
+	}
+	return role == roleOwner
+}
+
+// handleTrashWorkspace stops the workspace's containers without
+// deleting any data and marks it as trashed. Owner-only.
+func (s *Server) handleTrashWorkspace(w http.ResponseWriter, r *http.Request, email, workspaceName string) {
+	_, groups := identityFromHeaders(r)
+	serverOwner, _ := callerIsServerOwner(email, r)
+	if !callerOwnsWorkspace(email, groups, serverOwner, workspaceName) {
+		http.Error(w, `{"error":"only the workspace owner can trash it"}`, http.StatusForbidden)
+		return
+	}
+	var buf bytes.Buffer
+	if err := TrashWorkspace(workspaceName, &buf); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error(), "log": buf.String()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "log": buf.String()})
+}
+
+// handleRestoreWorkspace removes the trash marker and brings the
+// workspace's containers back up. Owner-only.
+func (s *Server) handleRestoreWorkspace(w http.ResponseWriter, r *http.Request, email, workspaceName string) {
+	_, groups := identityFromHeaders(r)
+	serverOwner, _ := callerIsServerOwner(email, r)
+	if !callerOwnsWorkspace(email, groups, serverOwner, workspaceName) {
+		http.Error(w, `{"error":"only the workspace owner can restore it"}`, http.StatusForbidden)
+		return
+	}
+	var buf bytes.Buffer
+	if err := RestoreWorkspace(workspaceName, &buf); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error(), "log": buf.String()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "log": buf.String()})
+}
+
+// emptyTrashRequest is the JSON body the frontend sends to confirm
+// destructive permanent deletion. The literal "empty trash" must be
+// typed exactly — anything else returns 400 without touching disk.
+type emptyTrashRequest struct {
+	Confirmation string `json:"confirmation"`
+}
+
+// handleEmptyTrash permanently removes every trashed workspace the
+// caller owns. Body must contain the exact confirmation string
+// "empty trash" to guard against accidental empty-body posts.
+func (s *Server) handleEmptyTrash(w http.ResponseWriter, r *http.Request, email string) {
+	var req emptyTrashRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if req.Confirmation != "empty trash" {
+		http.Error(w, `{"error":"confirmation must be exactly 'empty trash'"}`, http.StatusBadRequest)
+		return
+	}
+	_, groups := identityFromHeaders(r)
+	serverOwner, _ := callerIsServerOwner(email, r)
+
+	// Stream the log just like the create flow — empty-trash can also
+	// take a while if there are several workspaces to tear down.
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	writeMu := sync.Mutex{}
+	writeEvent := func(payload map[string]any) {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		line, _ := json.Marshal(payload)
+		_, _ = w.Write(append(line, '\n'))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	writeEvent(map[string]any{"event": "start", "message": "Emptying trash…"})
+
+	// EmptyTrashFor writes plain text to an io.Writer; wrap it in a
+	// streaming relay so each line becomes a `log` event.
+	pr, pw := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- EmptyTrashFor(email, groups, serverOwner, pw)
+		pw.Close()
+	}()
+	go func() {
+		buf := make([]byte, 4096)
+		var partial []byte
+		for {
+			n, err := pr.Read(buf)
+			if n > 0 {
+				data := append(partial, buf[:n]...)
+				lines := strings.Split(string(data), "\n")
+				partial = []byte(lines[len(lines)-1])
+				for _, line := range lines[:len(lines)-1] {
+					if line == "" {
+						continue
+					}
+					writeEvent(map[string]any{"event": "log", "message": line})
+				}
+			}
+			if err != nil {
+				if len(partial) > 0 {
+					writeEvent(map[string]any{"event": "log", "message": string(partial)})
+				}
+				return
+			}
+		}
+	}()
+	if err := <-done; err != nil {
+		writeEvent(map[string]any{"event": "error", "error": err.Error()})
+		return
+	}
+	writeEvent(map[string]any{"event": "done"})
 }
