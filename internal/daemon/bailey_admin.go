@@ -726,25 +726,103 @@ document.getElementById('ws-create-form').addEventListener('submit', function(e)
   e.preventDefault();
   var name = document.getElementById('ws-modal-input').value.trim();
   var status = document.getElementById('ws-modal-status');
-  status.textContent = 'Creating ' + name + '… (30-60s while the editor + dashboard come up)';
-  status.style.color = '#71717A';
+  var form   = document.getElementById('ws-create-form');
+  // Stage names are derived from server log lines — we don't depend on
+  // a structured progress event, so this stays robust if the daemon
+  // rewords a message. Mapping is best-effort.
+  var stageRules = [
+    {re: /Init bitswan network|EnsureDocker(IPv6)?Network/i,           label: 'Preparing docker networks…'},
+    {re: /Setting up GitOps worktree|GitOps worktree set up/i,         label: 'Setting up gitops worktree…'},
+    {re: /Generating SSH key pair|SSH key pair generated/i,            label: 'Generating SSH keys…'},
+    {re: /Setting up GitOps deployment|GitOps deployment set up/i,     label: 'Wiring gitops ingress routes…'},
+    {re: /Installing certs from|Certs copied successfully/i,           label: 'Installing TLS certs…'},
+    {re: /Launching BitSwan Workspace services|docker compose .* up/i, label: 'Starting workspace containers…'},
+    {re: /Setting up workspace-dashboard|Dashboard service enabled/i,  label: 'Starting dashboard…'},
+    {re: /Internal routing ready/i,                                    label: 'Finalising routes…'},
+    {re: /BitSwan GitOps initialized successfully/i,                   label: 'Almost done — finishing up…'},
+  ];
+  function classify(line){
+    for (var i = 0; i < stageRules.length; i++) {
+      if (stageRules[i].re.test(line)) return stageRules[i].label;
+    }
+    return null;
+  }
+
+  // Swap the form for a streaming progress view inside the same modal.
+  form.style.display = 'none';
+  var progressBox = document.createElement('div');
+  progressBox.id = 'ws-progress';
+  progressBox.innerHTML = ''
+    + '<h2 style="margin:0 0 6px;">Creating <code>' + escapeHTML(name) + '</code></h2>'
+    + '<p id="ws-stage" style="margin:0 0 8px;font-size:14px;color:#3F3F46;">Starting…</p>'
+    + '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#71717A;">Show log</summary>'
+    + '  <pre id="ws-log" style="margin-top:6px;padding:8px;background:#f6f7f9;border:1px solid #e4e4e7;border-radius:6px;font-size:11px;max-height:220px;overflow:auto;"></pre>'
+    + '</details>';
+  form.parentNode.appendChild(progressBox);
+  var stageEl = document.getElementById('ws-stage');
+  var logEl   = document.getElementById('ws-log');
+
   fetch('/bailey/api/workspaces', {
     method:'POST', credentials:'same-origin',
-    headers:{'Content-Type':'application/json'},
+    headers:{'Content-Type':'application/json', 'Accept': 'application/x-ndjson'},
     body: JSON.stringify({name: name})
-  }).then(function(r){ return r.json(); }).then(function(d){
-    if (d.ok) {
-      status.textContent = 'Created.';
-      status.style.color = '#0a7d24';
-      document.getElementById('ws-modal-input').value = '';
-      setTimeout(function(){ document.getElementById('ws-modal').classList.remove('open'); loadList(); }, 600);
-    } else {
-      status.textContent = 'Failed: ' + (d.error || 'unknown error');
-      status.style.color = '#b00020';
+  }).then(function(r){
+    if (!r.ok && r.status !== 200) {
+      throw new Error('HTTP ' + r.status);
     }
+    var reader = r.body.getReader();
+    var decoder = new TextDecoder();
+    var partial = '';
+    function readLoop(){
+      return reader.read().then(function(chunk){
+        if (chunk.done) {
+          if (partial.trim()) handleLine(partial);
+          return;
+        }
+        partial += decoder.decode(chunk.value, {stream:true});
+        var lines = partial.split('\n');
+        partial = lines.pop();  // last is incomplete
+        lines.forEach(handleLine);
+        return readLoop();
+      });
+    }
+    function handleLine(line){
+      if (!line.trim()) return;
+      var ev;
+      try { ev = JSON.parse(line); } catch (e) {
+        // Non-JSON line — show it raw in the log, don't fail.
+        logEl.textContent += line + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+        return;
+      }
+      if (ev.event === 'log') {
+        logEl.textContent += (ev.stream === 'stderr' ? '! ' : '') + (ev.message || '') + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+        var stage = classify(ev.message || '');
+        if (stage) stageEl.textContent = stage;
+      } else if (ev.event === 'start') {
+        stageEl.textContent = ev.message || 'Starting…';
+      } else if (ev.event === 'done') {
+        stageEl.textContent = 'Done.';
+        stageEl.style.color = '#0a7d24';
+        document.getElementById('ws-modal-input').value = '';
+        setTimeout(function(){
+          document.getElementById('ws-modal').classList.remove('open');
+          form.style.display = '';
+          progressBox.remove();
+          loadList();
+        }, 800);
+      } else if (ev.event === 'error') {
+        stageEl.textContent = 'Failed: ' + (ev.error || 'unknown error');
+        stageEl.style.color = '#b00020';
+        // Leave the modal open so the user can read the log + close manually.
+        progressBox.innerHTML += '<p style="margin-top:8px;"><button type="button" onclick="this.closest(\'.ws-modal-backdrop\').classList.remove(\'open\');document.getElementById(\'ws-create-form\').style.display=\'\';document.getElementById(\'ws-progress\').remove();" style="padding:6px 12px;border:1px solid #d4d4d8;background:#F4F4F5;color:#3F3F46;border-radius:6px;cursor:pointer;">Close</button></p>';
+      }
+    }
+    return readLoop();
   }).catch(function(e){
-    status.textContent = 'Failed: ' + e;
-    status.style.color = '#b00020';
+    stageEl.textContent = 'Failed: ' + e.message;
+    stageEl.style.color = '#b00020';
   });
 });
 loadList();`
