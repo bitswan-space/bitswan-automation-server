@@ -77,6 +77,15 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	workspaceName := fmt.Sprintf("test-workspace-%d", time.Now().Unix())
 	fmt.Printf("Test workspace name: %s\n", workspaceName)
 
+	// Rebuild gitops from the branch under test so integration tests
+	// don't run new daemon code against an outdated gitops image. The
+	// workflow's own 'Build gitops image from source' step always
+	// clones gitops main, which would silently mask bugs that depend
+	// on contracts only present on the gitops feature branch.
+	if err := ensureGitopsImage(); err != nil {
+		return fmt.Errorf("failed to build gitops image from branch: %w", err)
+	}
+
 	// The container-manager image is referenced by the gitops compose
 	// template but has no published Docker Hub repository (bitswan/
 	// container-manager 404s). Build it from this repo so docker

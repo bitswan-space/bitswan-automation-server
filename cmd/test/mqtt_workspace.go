@@ -31,6 +31,11 @@ func runTestMqttWorkspace() error {
 	fmt.Println("=== BitSwan Test Suite: MQTT Workspace ===")
 	fmt.Println()
 
+	// Rebuild gitops from the branch under test (see ensureGitopsImage).
+	if err := ensureGitopsImage(); err != nil {
+		return fmt.Errorf("failed to build gitops image from branch: %w", err)
+	}
+
 	// Build the container-manager image up-front. The MQTT path lands in
 	// the same workspace_init code as the CLI path, and that compose
 	// template references bitswan/container-manager:latest which has no

@@ -94,6 +94,9 @@ func runTestUpdate(noRemove bool, customGitopsImage, customEditorImage string) e
 		initEditorImage = fmt.Sprintf("bitswan/bitswan-editor:%s", latestEditorVersion)
 	}
 
+	if err := ensureGitopsImage(); err != nil {
+		return fmt.Errorf("failed to build gitops image from branch: %w", err)
+	}
 	if err := ensureContainerManagerImage(); err != nil {
 		return fmt.Errorf("failed to build container-manager image: %w", err)
 	}

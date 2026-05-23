@@ -68,6 +68,9 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		return fmt.Errorf("failed to create daemon client: %w", err)
 	}
 
+	if err := ensureGitopsImage(); err != nil {
+		return fmt.Errorf("failed to build gitops image from branch: %w", err)
+	}
 	if err := ensureContainerManagerImage(); err != nil {
 		return fmt.Errorf("failed to build container-manager image: %w", err)
 	}
