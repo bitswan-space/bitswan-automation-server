@@ -777,6 +777,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		LocalRemotePath:    localRemotePath,
 		LocalRemoteName:    localRemoteName,
 		KeycloakURL:        keycloakURL,
+		WorkspaceOwner:     *ownerEmail,
 	}
 	compose, token, err := config.CreateDockerComposeFile()
 

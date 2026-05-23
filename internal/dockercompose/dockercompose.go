@@ -34,6 +34,7 @@ type DockerComposeConfig struct {
 	LocalRemotePath    string // Host path to local repository (if using local remote)
 	LocalRemoteName    string // Mount name for local repository (used for mount point path)
 	KeycloakURL        string // Keycloak base URL for authentication
+	WorkspaceOwner     string // Owner email — propagated to gitops as the deployer for exposed automations
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -137,6 +138,14 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 	// Add Keycloak URL if configured
 	if config.KeycloakURL != "" {
 		gitopsService["environment"] = append(gitopsService["environment"].([]string), "KEYCLOAK_URL="+config.KeycloakURL)
+	}
+
+	// Pass the workspace owner's email so gitops can register exposed
+	// automations under the right deployer in the bailey ACL. Without this
+	// the ACL row is created with an empty owner and the app never surfaces
+	// on the dashboard.
+	if config.WorkspaceOwner != "" {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string), "BITSWAN_WORKSPACE_OWNER="+config.WorkspaceOwner)
 	}
 
 	// Append AOC env variables when workspace is registered as an automation server
