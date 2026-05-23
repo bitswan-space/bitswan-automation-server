@@ -94,6 +94,14 @@ func startMFAGate() error {
 				r.Host = h
 			}
 		},
+		// Flush immediately after every chunk so streaming upstream
+		// responses (NDJSON from /bailey/api/workspaces, SSE elsewhere)
+		// reach the client incrementally instead of being buffered until
+		// the upstream closes. Without this, the bailey "create workspace"
+		// modal sat silent for 30 seconds then collapsed in a flash.
+		// Negative = flush after each write; safe for non-streaming
+		// responses too.
+		FlushInterval: -1,
 	}
 	// Two responsibilities on the inner content:
 	//   1. Strip iframe-blocking headers so the wrap can embed it.

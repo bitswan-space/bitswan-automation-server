@@ -668,7 +668,7 @@ function loadList() {
     wsNames.sort(function(a,b){ return b.length - a.length; }); // longest first so we match greedily
 
     var byWs = {};
-    workspaces.forEach(function(w){ byWs[w.name] = { ws: w, editor: null, apps: [] }; });
+    workspaces.forEach(function(w){ byWs[w.name] = { ws: w, dashboard: null, apps: [] }; });
 
     endpoints.forEach(function(ep){
       var label = ep.hostname.split('.')[0];
@@ -680,7 +680,8 @@ function loadList() {
       if (!match) return;
       var tail = label === match ? '' : label.slice(match.length + 1);
       if (tail === 'gitops') return;                     // no gitops links — per UX policy
-      if (tail === 'editor') { byWs[match].editor = ep; return; }
+      if (tail === 'editor') return;                     // editor is gone; ignore stale entries
+      if (tail === 'dashboard') { byWs[match].dashboard = ep; return; }
       byWs[match].apps.push(ep);
     });
 
@@ -703,16 +704,16 @@ function loadList() {
           '</a>';
         }).join('') + '</div>';
       } else {
-        appsHTML = '<p class="ws-app-empty">No deployed apps yet. Push automations from the editor to see them here.</p>';
+        appsHTML = '<p class="ws-app-empty">No deployed automations yet.</p>';
       }
-      var editorBtn = bucket.editor
-        ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.editor.hostname) + '/" target="_blank" rel="noopener">Open editor ↗</a>'
-        : '<span class="note">Editor not deployed.</span>';
+      var dashboardBtn = bucket.dashboard
+        ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.dashboard.hostname) + '/" target="_blank" rel="noopener">Open dashboard ↗</a>'
+        : '<span class="note">Dashboard not deployed.</span>';
       html += '<div class="ws-card" data-ws="' + escapeHTML(w.name) + '">' +
         '<div class="ws-card-head">' +
           '<h2>' + escapeHTML(w.name) + '</h2>' +
           '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
-          editorBtn +
+          dashboardBtn +
         '</div>' +
         appsHTML +
         '</div>';
@@ -731,15 +732,22 @@ document.getElementById('ws-create-form').addEventListener('submit', function(e)
   // a structured progress event, so this stays robust if the daemon
   // rewords a message. Mapping is best-effort.
   var stageRules = [
-    {re: /Init bitswan network|EnsureDocker(IPv6)?Network/i,           label: 'Preparing docker networks…'},
+    {re: /Init bitswan network|EnsureDocker(IPv6)?Network|Creating per-workspace stage networks/i, label: 'Preparing docker networks…'},
+    {re: /Workspace sub-Traefik started|sub-Traefik/i,                 label: 'Starting workspace sub-traefik…'},
+    {re: /Initializing git in workspace|Git initialized in workspace/i,label: 'Initialising git workspace…'},
     {re: /Setting up GitOps worktree|GitOps worktree set up/i,         label: 'Setting up gitops worktree…'},
     {re: /Generating SSH key pair|SSH key pair generated/i,            label: 'Generating SSH keys…'},
+    {re: /Registering workspace|Workspace registered/i,                label: 'Registering workspace with AOC…'},
+    {re: /Getting automation server token|automation server token/i,   label: 'Getting AOC token…'},
+    {re: /Getting EMQX JWT|EMQX JWT/i,                                 label: 'Getting MQTT credentials…'},
     {re: /Setting up GitOps deployment|GitOps deployment set up/i,     label: 'Wiring gitops ingress routes…'},
     {re: /Installing certs from|Certs copied successfully/i,           label: 'Installing TLS certs…'},
     {re: /Launching BitSwan Workspace services|docker compose .* up/i, label: 'Starting workspace containers…'},
+    {re: /Container .* (Started|Created)/i,                            label: 'Bringing up containers…'},
     {re: /Setting up workspace-dashboard|Dashboard service enabled/i,  label: 'Starting dashboard…'},
+    {re: /Starting Dashboard container/i,                              label: 'Starting dashboard container…'},
     {re: /Internal routing ready/i,                                    label: 'Finalising routes…'},
-    {re: /BitSwan GitOps initialized successfully/i,                   label: 'Almost done — finishing up…'},
+    {re: /BitSwan GitOps initialized successfully|GITOPS INFO/i,       label: 'Almost done — finishing up…'},
   ];
   function classify(line){
     for (var i = 0; i < stageRules.length; i++) {
@@ -749,15 +757,15 @@ document.getElementById('ws-create-form').addEventListener('submit', function(e)
   }
 
   // Swap the form for a streaming progress view inside the same modal.
+  // The log is expanded by default so the user can see the stream tick
+  // along even when stage-classification regexes don't match a line.
   form.style.display = 'none';
   var progressBox = document.createElement('div');
   progressBox.id = 'ws-progress';
   progressBox.innerHTML = ''
     + '<h2 style="margin:0 0 6px;">Creating <code>' + escapeHTML(name) + '</code></h2>'
     + '<p id="ws-stage" style="margin:0 0 8px;font-size:14px;color:#3F3F46;">Starting…</p>'
-    + '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#71717A;">Show log</summary>'
-    + '  <pre id="ws-log" style="margin-top:6px;padding:8px;background:#f6f7f9;border:1px solid #e4e4e7;border-radius:6px;font-size:11px;max-height:220px;overflow:auto;"></pre>'
-    + '</details>';
+    + '<pre id="ws-log" style="margin:6px 0 0;padding:8px;background:#f6f7f9;border:1px solid #e4e4e7;border-radius:6px;font-size:11px;max-height:280px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"></pre>';
   form.parentNode.appendChild(progressBox);
   var stageEl = document.getElementById('ws-stage');
   var logEl   = document.getElementById('ws-log');
@@ -803,15 +811,29 @@ document.getElementById('ws-create-form').addEventListener('submit', function(e)
       } else if (ev.event === 'start') {
         stageEl.textContent = ev.message || 'Starting…';
       } else if (ev.event === 'done') {
-        stageEl.textContent = 'Done.';
+        stageEl.textContent = 'Workspace created.';
         stageEl.style.color = '#0a7d24';
         document.getElementById('ws-modal-input').value = '';
-        setTimeout(function(){
+        // Show the dashboard link prominently with a Close button. The
+        // user dismisses the modal themselves — auto-closing in 800ms
+        // before they can read it (and miss the dashboard URL entirely)
+        // is what made the previous flow feel broken.
+        var done = document.createElement('div');
+        done.style.marginTop = '10px';
+        done.innerHTML = ''
+          + (ev.dashboard_url
+              ? '<p style="margin:0 0 8px;font-size:13px;">Dashboard: <a href="' + escapeHTML(ev.dashboard_url) + '" target="_blank" rel="noopener">' + escapeHTML(ev.dashboard_url) + ' ↗</a></p>'
+              : '')
+          + '<button type="button" id="ws-progress-close" style="padding:6px 14px;border:none;background:#093DF5;color:#fff;border-radius:6px;cursor:pointer;">Close</button>';
+        progressBox.appendChild(done);
+        document.getElementById('ws-progress-close').onclick = function(){
           document.getElementById('ws-modal').classList.remove('open');
           form.style.display = '';
           progressBox.remove();
           loadList();
-        }, 800);
+        };
+        // Reload list in background so when they hit Close it's fresh.
+        loadList();
       } else if (ev.event === 'error') {
         stageEl.textContent = 'Failed: ' + (ev.error || 'unknown error');
         stageEl.style.color = '#b00020';
