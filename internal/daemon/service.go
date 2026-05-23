@@ -19,6 +19,11 @@ import (
 // stdoutMutex protects stdout redirection from concurrent requests
 var stdoutMutex sync.Mutex
 
+// stderrMutex protects stderr redirection from concurrent requests.
+// Distinct lock so handlers can route stdout and stderr independently
+// if they choose.
+var stderrMutex sync.Mutex
+
 // ServiceEnableRequest represents the request to enable a service
 type ServiceEnableRequest struct {
 	ServiceType    string                 `json:"service_type"` // "editor", "kafka", "couchdb", "postgres", "minio"

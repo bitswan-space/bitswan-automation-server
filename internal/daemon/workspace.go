@@ -120,9 +120,28 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create pipe: %v", err))
 		return
 	}
-
 	os.Stdout = wPipe
 	stdoutMutex.Unlock()
+
+	// Same trick for stderr. Subprocess stderr (notably docker compose's
+	// failure output) was previously going to the daemon's own stderr,
+	// so the client only ever saw "exit status 1" with no detail.
+	stderrMutex.Lock()
+	oldStderr := os.Stderr
+	rErrPipe, wErrPipe, err := os.Pipe()
+	if err != nil {
+		stderrMutex.Unlock()
+		// Undo stdout redirect before bailing out.
+		stdoutMutex.Lock()
+		os.Stdout = oldStdout
+		stdoutMutex.Unlock()
+		rPipe.Close()
+		wPipe.Close()
+		WriteLogEntry(w, "error", fmt.Sprintf("Failed to create stderr pipe: %v", err))
+		return
+	}
+	os.Stderr = wErrPipe
+	stderrMutex.Unlock()
 
 	defer func() {
 		stdoutMutex.Lock()
@@ -130,12 +149,19 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 		stdoutMutex.Unlock()
 		rPipe.Close()
 		wPipe.Close()
+
+		stderrMutex.Lock()
+		os.Stderr = oldStderr
+		stderrMutex.Unlock()
+		rErrPipe.Close()
+		wErrPipe.Close()
 	}()
 
 	logWriter := NewLogStreamWriter(w, "info")
+	errLogWriter := NewLogStreamWriter(w, "error")
 
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, 4096)
@@ -148,7 +174,24 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if err != nil {
-				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from pipe: %v", err))
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from stdout pipe: %v", err))
+				break
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := rErrPipe.Read(buf)
+			if n > 0 {
+				errLogWriter.Write(buf[:n])
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				WriteLogEntry(w, "error", fmt.Sprintf("Error reading from stderr pipe: %v", err))
 				break
 			}
 		}
@@ -169,6 +212,7 @@ func (s *Server) handleWorkspaceInit(w http.ResponseWriter, r *http.Request) {
 	// Parse args and run init logic
 	err = s.runWorkspaceInit(req.Args[2:], confirmCh)
 	wPipe.Close()
+	wErrPipe.Close()
 	wg.Wait()
 
 	if err != nil {
