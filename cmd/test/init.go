@@ -210,7 +210,11 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	fmt.Printf("✓ Deployment ready at: %s\n", endpointURL)
 
 	fmt.Println("\n[6/8] Testing endpoint...")
-	if err := testEndpoint(endpointURL, workspaceName); err != nil {
+	// gitops reports the user-facing (outer) URL, which traefik routes to
+	// bitswan-protected-proxy for OAuth. The test client carries no session,
+	// so use the inner hostname that goes straight to the automation.
+	endpointTestURL := innerGitopsURL(endpointURL)
+	if err := testEndpoint(endpointTestURL, workspaceName); err != nil {
 		if !noRemove {
 			cleanupWorkspace(workspaceName)
 		}

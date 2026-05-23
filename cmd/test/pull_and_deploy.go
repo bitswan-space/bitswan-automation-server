@@ -163,7 +163,10 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 
 	// Step 3: Verify endpoint on workspace 1
 	fmt.Println("\n[3/9] Verifying endpoint on workspace 1...")
-	if err := testEndpoint(endpointURL1, workspace1Name); err != nil {
+	// gitops reports the user-facing (outer) URL → bailey OAuth wrap.
+	// Use the inner hostname so the test client (no session cookie) lands
+	// on the automation directly. Same trick as the gitops health check.
+	if err := testEndpoint(innerGitopsURL(endpointURL1), workspace1Name); err != nil {
 		cleanupWorkspace(workspace1Name)
 		return fmt.Errorf("endpoint test failed: %w", err)
 	}
@@ -434,7 +437,8 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 
 	// Step 8: Test endpoint on workspace 2
 	fmt.Println("\n[8/9] Testing endpoint on workspace 2...")
-	if err := testEndpoint(endpointURL2, workspace2Name); err != nil {
+	// Inner hostname bypasses the bailey OAuth wrap (see step 3 above).
+	if err := testEndpoint(innerGitopsURL(endpointURL2), workspace2Name); err != nil {
 		cleanupWorkspace(workspace1Name)
 		cleanupWorkspace(workspace2Name)
 		return fmt.Errorf("endpoint test failed on workspace 2: %w", err)
