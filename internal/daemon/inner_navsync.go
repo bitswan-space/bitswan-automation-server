@@ -20,6 +20,12 @@ func injectNavSyncMiddleware(inner http.Handler) http.Handler {
 			inner.ServeHTTP(w, r)
 			return
 		}
+		// capturingWriter only buffers when the upstream sets
+		// Content-Type: text/html (the only case where we need to
+		// rewrite the body to append the nav-sync script). Anything
+		// else — JSON, NDJSON streams, JS, CSS, images — falls through
+		// to the real writer immediately, preserving Flush() for
+		// streaming endpoints like POST /bailey/api/workspaces.
 		rec := &capturingWriter{
 			real:    w,
 			headers: http.Header{},
@@ -27,6 +33,12 @@ func injectNavSyncMiddleware(inner http.Handler) http.Handler {
 			buf:     &bytes.Buffer{},
 		}
 		inner.ServeHTTP(rec, r)
+
+		// Pass-through path already wrote headers + body straight to
+		// `real`; nothing left to flush here.
+		if rec.passthrough {
+			return
+		}
 
 		ct := rec.headers.Get("Content-Type")
 		body := rec.buf.Bytes()
@@ -59,8 +71,22 @@ func appendNavSyncToHTML(body []byte) []byte {
 	return append(body, insertion...)
 }
 
-// capturingWriter buffers everything an inner handler writes so the
-// middleware can rewrite text/html bodies before flushing them.
+// capturingWriter routes writes one of two ways depending on the
+// handler's Content-Type:
+//
+//   - text/html: buffer the whole body so the middleware can append
+//     the nav-sync script before flushing.
+//   - everything else: pass through to the real writer, preserving
+//     Flush() semantics. Critical for streaming endpoints like
+//     POST /bailey/api/workspaces (NDJSON) — buffering those would
+//     hold the entire response until the upstream closes, defeating
+//     the whole point of incremental events.
+//
+// The text/html vs. other split is decided lazily on the first Write
+// (or WriteHeader) because the handler typically calls Header().Set
+// before WriteHeader. Once `passthrough` is set, subsequent writes
+// bypass the buffer entirely.
+//
 // Does NOT embed http.ResponseWriter — that would make Header()
 // return the real writer's headers, causing the flush-back loop to
 // duplicate every entry. Keep a private header map instead.
@@ -70,22 +96,51 @@ type capturingWriter struct {
 	status      int
 	wroteHeader bool
 	buf         *bytes.Buffer
+	passthrough bool // once true, Write goes straight to `real`
 }
 
 func (c *capturingWriter) Header() http.Header { return c.headers }
 
 func (c *capturingWriter) WriteHeader(status int) {
-	if !c.wroteHeader {
-		c.status = status
-		c.wroteHeader = true
+	if c.wroteHeader {
+		return
+	}
+	c.wroteHeader = true
+	c.status = status
+	// Decide here whether we need to rewrite the body. If not, copy
+	// the headers + status straight to the real writer now so
+	// subsequent Write()s pass through unbuffered (preserves Flush
+	// for streaming responses).
+	ct := c.headers.Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		c.passthrough = true
+		dst := c.real.Header()
+		for k, vv := range c.headers {
+			dst[k] = append(dst[k][:0:0], vv...)
+		}
+		c.real.WriteHeader(status)
 	}
 }
 func (c *capturingWriter) Write(p []byte) (int, error) {
 	if !c.wroteHeader {
-		c.wroteHeader = true
-		c.status = 200
+		c.WriteHeader(200)
+	}
+	if c.passthrough {
+		return c.real.Write(p)
 	}
 	return c.buf.Write(p)
+}
+
+// Flush makes capturingWriter satisfy http.Flusher so handler-side
+// w.(http.Flusher).Flush() calls actually reach the real writer when
+// we're in passthrough mode. In buffering mode the call is a no-op
+// (we can't partially flush text/html before the rewrite anyway).
+func (c *capturingWriter) Flush() {
+	if c.passthrough {
+		if f, ok := c.real.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
 }
 
 // inner-content URL sync. The wrap's outer URL (the one the user sees
