@@ -612,12 +612,24 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		}
 	}
 
+	// Image resolution precedence:
+	//   1. Explicit --gitops-image / --dashboard-image flag (caller intent).
+	//   2. server_settings default (set by the bailey admin Updates page).
+	//   3. Docker Hub latest-tag lookup.
+	// The middle tier lets ops pin a known-good image (or a custom dev
+	// build like bitswan/gitops:bailey-dev) without rebuilding the daemon
+	// or passing the flag on every create.
 	imgopsImage := *gitopsImage
 	if imgopsImage == "" {
-		var err error
-		imgopsImage, err = dockerhub.ResolveGitopsImage(*staging)
-		if err != nil {
-			return fmt.Errorf("failed to get latest BitSwan GitOps image: %w", err)
+		if persisted, _ := dbGetSetting(settingDefaultGitopsImage); persisted != "" {
+			imgopsImage = persisted
+			fmt.Printf("Using gitops image from server settings: %s\n", imgopsImage)
+		} else {
+			var err error
+			imgopsImage, err = dockerhub.ResolveGitopsImage(*staging)
+			if err != nil {
+				return fmt.Errorf("failed to get latest BitSwan GitOps image: %w", err)
+			}
 		}
 	}
 
@@ -634,10 +646,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	if !*noDashboard {
 		bitswanDashboardImage = *dashboardImage
 		if bitswanDashboardImage == "" {
-			var err error
-			bitswanDashboardImage, err = dockerhub.ResolveDashboardImage(*staging)
-			if err != nil {
-				return fmt.Errorf("failed to get latest BitSwan workspace-dashboard image: %w", err)
+			if persisted, _ := dbGetSetting(settingDefaultDashboardImage); persisted != "" {
+				bitswanDashboardImage = persisted
+				fmt.Printf("Using dashboard image from server settings: %s\n", bitswanDashboardImage)
+			} else {
+				var err error
+				bitswanDashboardImage, err = dockerhub.ResolveDashboardImage(*staging)
+				if err != nil {
+					return fmt.Errorf("failed to get latest BitSwan workspace-dashboard image: %w", err)
+				}
 			}
 		}
 	}

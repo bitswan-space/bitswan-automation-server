@@ -231,6 +231,9 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			case "restore":
 				s.handleRestoreWorkspace(w, r, email, workspaceName)
 				return
+			case "update":
+				s.handleUpdateWorkspace(w, r, email, workspaceName)
+				return
 			}
 		}
 	}
@@ -273,6 +276,26 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "certs", true))
+			return
+		}
+
+	case r.URL.Path == "/bailey/updates" || r.URL.Path == "/bailey/updates/":
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "updates", true))
+			return
+		}
+
+	case r.URL.Path == "/bailey/api/admin/default-images":
+		switch r.Method {
+		case http.MethodGet:
+			s.handleAdminDefaultImagesGet(w, r)
+			return
+		case http.MethodPost:
+			s.handleAdminDefaultImagesPost(w, r, email)
+			return
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
@@ -797,11 +820,15 @@ function loadList() {
       var trashBtn = (w.is_owner && !opts.trashed)
         ? '<button class="ws-trash-btn" data-action="trash" data-ws="' + escapeHTML(w.name) + '" title="Move to trash (stops all containers, keeps data)">🗑 Trash</button>'
         : '';
+      var updateBtn = (w.is_owner && !opts.trashed)
+        ? '<button class="ws-trash-btn" data-action="update" data-ws="' + escapeHTML(w.name) + '" title="Pull current default images and recreate containers">↻ Update</button>'
+        : '';
       return '<div class="ws-card ' + (opts.trashed ? 'trashed' : '') + '" data-ws="' + escapeHTML(w.name) + '">' +
         '<div class="ws-card-head">' +
           '<h2>' + escapeHTML(w.name) + '</h2>' +
           '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
           actionBtn +
+          updateBtn +
           trashBtn +
         '</div>' +
         appsHTML +
@@ -825,6 +852,72 @@ function loadList() {
     } else {
       trashSection.style.display = 'none';
     }
+
+    // Wire up update buttons. POST streams NDJSON progress events
+    // (pull + recreate); render them in a small log row below the
+    // card so the operator can see what's happening without blocking
+    // the whole page.
+    document.querySelectorAll('[data-action="update"]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var ws = btn.getAttribute('data-ws');
+        if (!confirm('Update "' + ws + '"? This pulls the current default images and recreates containers — workspace will briefly be unavailable.')) return;
+        var card = btn.closest('.ws-card');
+        var logRow = document.createElement('pre');
+        logRow.style.cssText = 'margin:10px 0 0;padding:8px;background:#f6f7f9;border:1px solid #e4e4e7;border-radius:6px;font-size:11px;max-height:180px;overflow:auto;font-family:ui-monospace,monospace;';
+        logRow.textContent = 'Updating…\n';
+        card.appendChild(logRow);
+        btn.disabled = true;
+        btn.textContent = 'Updating…';
+        fetch('/bailey/api/workspaces/' + encodeURIComponent(ws) + '/update', {
+          method:'POST', credentials:'same-origin'
+        }).then(function(r){
+          if (!r.ok && r.status !== 200) throw new Error('HTTP ' + r.status);
+          var reader = r.body.getReader();
+          var decoder = new TextDecoder();
+          var partial = '';
+          function readLoop(){
+            return reader.read().then(function(chunk){
+              if (chunk.done) {
+                if (partial.trim()) handleLine(partial);
+                return;
+              }
+              partial += decoder.decode(chunk.value, {stream:true});
+              var lines = partial.split('\n');
+              partial = lines.pop();
+              lines.forEach(handleLine);
+              return readLoop();
+            });
+          }
+          function handleLine(line){
+            if (!line.trim()) return;
+            var ev;
+            try { ev = JSON.parse(line); } catch(e){
+              logRow.textContent += line + '\n';
+              logRow.scrollTop = logRow.scrollHeight;
+              return;
+            }
+            if (ev.event === 'log' || ev.event === 'start') {
+              logRow.textContent += (ev.message || '') + '\n';
+              logRow.scrollTop = logRow.scrollHeight;
+            } else if (ev.event === 'done') {
+              logRow.textContent += '\n✓ Updated.\n';
+              btn.textContent = '↻ Update';
+              btn.disabled = false;
+              setTimeout(function(){ loadList(); }, 800);
+            } else if (ev.event === 'error') {
+              logRow.textContent += '\n✗ ' + (ev.error || 'unknown error') + '\n';
+              btn.textContent = '↻ Update';
+              btn.disabled = false;
+            }
+          }
+          return readLoop();
+        }).catch(function(e){
+          logRow.textContent += '\n✗ Failed: ' + e.message + '\n';
+          btn.textContent = '↻ Update';
+          btn.disabled = false;
+        });
+      });
+    });
 
     // Wire up trash / restore buttons. Trash is optimistic — the card
     // moves to the trash section the moment the button is clicked,
@@ -1415,6 +1508,11 @@ function showTab(groupId, tabId) {
 }
 %s
 `, caFilename, certsAdminScript(admin))
+
+	case "updates":
+		pageTitle = "Updates"
+		pageContent = updatesPageHTML
+		pageScript = updatesPageJS
 	}
 
 	// admin is always true for the internal admin (handler gates non-admins),
@@ -1434,6 +1532,7 @@ function showTab(groupId, tabId) {
     <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
     <div class="sidebar-section">Admin</div>
     <a href="/bailey/approvals" class="%s">Users &amp; devices</a>
+    <a href="/bailey/updates" class="%s">Updates</a>
     <a href="/bailey/map" class="%s">Network map</a>
     <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/siem" class="%s">SIEM</a>
@@ -1466,6 +1565,6 @@ function showTab(groupId, tabId) {
 		pageTitle, serverName,
 		active("workspaces"), active("notifications"),
 		active("devices"), active("recovery"),
-		active("approvals"), active("map"), active("certs"), active("siem"),
+		active("approvals"), active("updates"), active("map"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)
 }

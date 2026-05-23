@@ -100,6 +100,18 @@ CREATE TABLE IF NOT EXISTS pending_pairs (
   approver_info TEXT
 );
 CREATE INDEX IF NOT EXISTS pending_pairs_code_idx ON pending_pairs(code);
+
+-- Server-wide key/value settings. Used today for default container
+-- images (default_gitops_image, default_dashboard_image) — the bailey
+-- admin Updates page writes here, and workspace_init reads the value
+-- before falling back to a Docker Hub latest-tag lookup. Free-form so
+-- future settings don't need their own table.
+CREATE TABLE IF NOT EXISTS server_settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL COLLATE NOCASE
+);
 `
 
 // baileyDBPath returns the absolute on-disk location of the daemon's
