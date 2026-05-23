@@ -767,27 +767,49 @@ func addRouteVPNTraefik(req IngressAddRouteRequest, workspaceName string) error 
 
 // addRouteCaddy adds a route to Caddy
 func addRouteCaddy(req IngressAddRouteRequest) error {
-	if req.Mkcert {
-		parts := strings.Split(req.Hostname, ".")
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid hostname format: must contain at least one dot")
-		}
-		domain := strings.Join(parts[1:], ".")
+	// Caddy doesn't run the bailey iframe wrap (no bitswan-protected-proxy
+	// container in the Caddy path), so we can't do the outer→proxy +
+	// inner→upstream split that addRouteTraefik does. To keep the
+	// two-subdomain contract stable for clients that hit either form,
+	// register the inner sibling pointing at the *same* upstream — both
+	// hostnames resolve to the container directly. Anything that wants
+	// the outer→proxy wrap should use Traefik.
+	if isInnerHost(req.Hostname) {
+		return fmt.Errorf("addRouteCaddy: refusing to register inner hostname %q directly — pass the outer hostname; the inner pair is registered automatically", req.Hostname)
+	}
+	outer := req.Hostname
+	inner := toInnerHost(outer)
 
-		if err := caddyapi.GenerateAndInstallCertsForHostname(req.Hostname, domain); err != nil {
-			return fmt.Errorf("failed to generate and install certificates: %w", err)
-		}
-		if err := caddyapi.InstallTLSCertsForHostname(req.Hostname, domain, "default"); err != nil {
-			return fmt.Errorf("failed to install TLS policies: %w", err)
+	if req.Mkcert {
+		for _, h := range []string{outer, inner} {
+			parts := strings.Split(h, ".")
+			if len(parts) < 2 {
+				return fmt.Errorf("invalid hostname format: must contain at least one dot")
+			}
+			domain := strings.Join(parts[1:], ".")
+			if err := caddyapi.GenerateAndInstallCertsForHostname(h, domain); err != nil {
+				return fmt.Errorf("failed to generate and install certificates for %s: %w", h, err)
+			}
+			if err := caddyapi.InstallTLSCertsForHostname(h, domain, "default"); err != nil {
+				return fmt.Errorf("failed to install TLS policies for %s: %w", h, err)
+			}
 		}
 	} else if req.CertsDir != "" {
 		caddyConfig := os.Getenv("HOME") + "/.config/bitswan/caddy"
-		if err := caddyapi.InstallCertsFromDir(req.CertsDir, req.Hostname, caddyConfig); err != nil {
-			return fmt.Errorf("failed to install certificates from directory: %w", err)
+		for _, h := range []string{outer, inner} {
+			if err := caddyapi.InstallCertsFromDir(req.CertsDir, h, caddyConfig); err != nil {
+				return fmt.Errorf("failed to install certificates from directory for %s: %w", h, err)
+			}
 		}
 	}
 
-	return caddyapi.AddRoute(req.Hostname, req.Upstream)
+	if err := caddyapi.AddRoute(outer, req.Upstream); err != nil {
+		return fmt.Errorf("add outer route: %w", err)
+	}
+	if err := caddyapi.AddRoute(inner, req.Upstream); err != nil {
+		return fmt.Errorf("add inner route: %w", err)
+	}
+	return nil
 }
 
 // isWorkspaceTraefikRunning checks if a workspace sub-traefik container is running.
