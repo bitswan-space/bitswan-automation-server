@@ -629,7 +629,7 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
 <div class="ws-modal-backdrop" id="ws-modal" onclick="if(event.target===this){this.classList.remove('open')}">
   <div class="ws-modal-card">
     <h2>New workspace</h2>
-    <p class="note">You'll be the owner of every endpoint this workspace creates (editor, dashboard, automations).</p>
+    <p class="note">You'll be the owner of every endpoint this workspace creates (dashboard, automations).</p>
     <form id="ws-create-form">
       <input type="text" id="ws-modal-input" placeholder="my-workspace" pattern="[a-z][a-z0-9-]{1,32}"
         title="lowercase, alphanumeric + hyphens, starts with a letter, 2-33 chars" required autocomplete="off">
