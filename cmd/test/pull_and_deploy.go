@@ -100,6 +100,8 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		cleanupWorkspace(workspace1Name)
 		return fmt.Errorf("failed to get workspace 1 metadata: %w", err)
 	}
+	// Bypass the bailey OAuth wrap; see init.go.
+	metadata1.GitopsURL = innerGitopsURL(metadata1.GitopsURL)
 
 	// Wait for gitops service to be ready
 	fmt.Println("\n[1.5/9] Waiting for gitops service to be ready...")
@@ -264,6 +266,8 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		cleanupWorkspace(workspace2Name)
 		return fmt.Errorf("failed to get workspace 2 metadata: %w", err)
 	}
+	// Bypass the bailey OAuth wrap; see init.go.
+	metadata2.GitopsURL = innerGitopsURL(metadata2.GitopsURL)
 
 	// Debug: Check docker-compose.yml and git remote
 	hostHomeDir = os.Getenv("HOME")

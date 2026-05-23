@@ -122,6 +122,12 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
 
+	// Tests carry a gitops-issued bearer token; they need to bypass the
+	// bailey OAuth wrap that fronts the user-facing GitopsURL. Pin the
+	// in-test URL to the inner hostname, which traefik routes straight
+	// to the gitops container.
+	metadata.GitopsURL = innerGitopsURL(metadata.GitopsURL)
+
 	// Wait for gitops service to be ready
 	fmt.Println("\n[1.5/7] Waiting for gitops service to be ready...")
 	if err := waitForGitopsReady(metadata.GitopsURL, metadata.GitopsSecret, workspaceName); err != nil {
