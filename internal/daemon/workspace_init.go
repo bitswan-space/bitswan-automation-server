@@ -92,7 +92,7 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	setHosts := fs.Bool("set-hosts", false, "")
 	local := fs.Bool("local", false, "")
 	gitopsImage := fs.String("gitops-image", "", "")
-	editorImage := fs.String("editor-image", "", "")
+	_ = fs.String("editor-image", "", "") // accepted for CLI compat; editor support is gone
 	dashboardImage := fs.String("dashboard-image", "", "")
 	gitopsDevSourceDir := fs.String("gitops-dev-source-dir", "", "")
 	editorDevSourceDir := fs.String("editor-dev-source-dir", "", "")
@@ -624,17 +624,11 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 	// Resolve service images lazily — only hit Docker Hub for services we'll
 	// actually deploy. Otherwise `bitswan workspace init --no-ide --no-dashboard`
 	// fails if the editor or dashboard image repo isn't reachable.
+	// Editor support is gone; this declaration is kept so the
+	// removed-block reference at the bottom of the file still
+	// compiles. Will be deleted once that reference goes too.
 	var bitswanEditorImage string
-	if !*noIde {
-		bitswanEditorImage = *editorImage
-		if bitswanEditorImage == "" {
-			var err error
-			bitswanEditorImage, err = dockerhub.ResolveEditorImage(*staging)
-			if err != nil {
-				return fmt.Errorf("failed to get latest BitSwan Editor image: %w", err)
-			}
-		}
-	}
+	_ = bitswanEditorImage
 
 	var bitswanDashboardImage string
 	if !*noDashboard {
@@ -719,13 +713,10 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		} else {
 			fmt.Println("Automation server token received successfully!")
 
-			var editorURL *string
-			if !*noIde {
-				url := fmt.Sprintf("https://%s-editor.%s", workspaceName, *domain)
-				editorURL = &url
-			}
-
-			workspaceId, err = aocClient.RegisterWorkspace(workspaceName, editorURL, *domain)
+			// Editor URL stays nil — editor support was removed. AOC's
+			// RegisterWorkspace signature still takes a pointer for
+			// backward compatibility; passing nil means "no editor URL".
+			workspaceId, err = aocClient.RegisterWorkspace(workspaceName, nil, *domain)
 			if err != nil {
 				return fmt.Errorf("failed to register workspace: %w", err)
 			}
@@ -827,65 +818,12 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 		fmt.Printf("Warning: Failed to sync workspace list to AOC: %v\n", err)
 	}
 
-	// Setup editor service if not disabled
-	if !*noIde {
-		fmt.Println("Setting up editor service...")
-
-		editorService, err := services.NewEditorService(workspaceName)
-		if err != nil {
-			return fmt.Errorf("failed to create editor service: %w", err)
-		}
-
-		if err := editorService.Enable(token, bitswanEditorImage, *domain, oauthConfig, true); err != nil {
-			return fmt.Errorf("failed to enable editor service: %w", err)
-		}
-
-		// Register editor route.
-		editorHostname := fmt.Sprintf("%s-editor.%s", workspaceName, *domain)
-		if _, err := registerEndpoint(editorHostname, *ownerEmail,
-			fmt.Sprintf("Editor (%s)", workspaceName)); err != nil {
-			fmt.Printf("Warning: failed to register endpoint ACL row for %s: %v\n", editorHostname, err)
-		}
-		// Add the hostname to the shared bitswan-protected-client's
-		// allowed redirect URIs so the Keycloak OAuth flow accepts it.
-		if err := registerProtectedRedirectURI(editorHostname); err != nil {
-			fmt.Printf("Warning: AOC didn't accept the protected-client redirect URI for %s: %v\n", editorHostname, err)
-		}
-		// Editor upstream is the editor container itself (port 8079).
-		// The editor's own oauth2-proxy is bypassed — authentication
-		// happens at bitswan-protected-proxy, not per-workspace.
-		editorUpstream := fmt.Sprintf("%s-editor:8079", workspaceName)
-		editorRoute := IngressAddRouteRequest{
-			Hostname:      editorHostname,
-			Upstream:      editorUpstream,
-			Mkcert:        *mkCerts,
-			CertsDir:      *certsDir,
-			WorkspaceName: workspaceName,
-			IngressTarget: "both",
-		}
-		if err := addRouteToIngress(editorRoute, ""); err != nil {
-			return fmt.Errorf("failed to register Editor service: %w", err)
-		}
-
-		if err := editorService.StartContainer(); err != nil {
-			return fmt.Errorf("failed to start editor container: %w", err)
-		}
-
-		fmt.Println("Downloading and installing editor...")
-		if err := editorService.WaitForEditorReady(); err != nil {
-			return fmt.Errorf("failed to wait for editor to be ready: %w", err)
-		}
-
-		fmt.Println("------------BITSWAN EDITOR INFO------------")
-		fmt.Printf("Bitswan Editor URL: https://%s-editor.%s\n", workspaceName, *domain)
-		if oauthConfig == nil {
-			editorPassword, err := editorService.GetEditorPassword()
-			if err != nil {
-				return fmt.Errorf("failed to get Bitswan Editor password: %w", err)
-			}
-			fmt.Printf("Bitswan Editor Password: %s\n", editorPassword)
-		}
-	}
+	// Editor support was removed. The workspace-dashboard service is the
+	// primary in-workspace UX now; it provides terminal access and any
+	// future authoring UI inside the bailey iframe. The --no-ide CLI flag
+	// is preserved as a silent no-op so existing CLI callers don't break.
+	_ = bitswanEditorImage
+	_ = editorDevSourceDir
 
 	// Setup dashboard service if not disabled — fully independent from the editor.
 	if !*noDashboard {
@@ -1064,11 +1002,6 @@ func saveMetadata(gitopsConfig, workspaceName, token, domain string, noIde, noDa
 				metadata.MqttTopic = &value
 			}
 		}
-	}
-
-	if !noIde {
-		editorURL := fmt.Sprintf("https://%s-editor.%s", workspaceName, domain)
-		metadata.EditorURL = &editorURL
 	}
 
 	if !noDashboard {
