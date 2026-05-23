@@ -268,8 +268,12 @@ func callerOwnsWorkspace(callerEmail string, callerGroups []string, isServerOwne
 	return role == roleOwner
 }
 
-// handleTrashWorkspace stops the workspace's containers without
-// deleting any data and marks it as trashed. Owner-only.
+// handleTrashWorkspace flips the trash marker synchronously (so the
+// next /api/workspaces GET sees the workspace as trashed) and then
+// spawns the slow `docker compose down` into a goroutine. The HTTP
+// response returns in milliseconds — the frontend can move the card
+// to the trash section immediately and the actual container teardown
+// happens in the background. Owner-only.
 func (s *Server) handleTrashWorkspace(w http.ResponseWriter, r *http.Request, email, workspaceName string) {
 	_, groups := identityFromHeaders(r)
 	serverOwner, _ := callerIsServerOwner(email, r)
@@ -277,14 +281,22 @@ func (s *Server) handleTrashWorkspace(w http.ResponseWriter, r *http.Request, em
 		http.Error(w, `{"error":"only the workspace owner can trash it"}`, http.StatusForbidden)
 		return
 	}
-	var buf bytes.Buffer
-	if err := TrashWorkspace(workspaceName, &buf); err != nil {
+	if err := MarkWorkspaceTrashed(workspaceName); err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error(), "log": buf.String()})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	// Fire-and-forget the container teardown. Output goes to the
+	// daemon's stdout (visible via `docker logs bitswan-automation-server-daemon`).
+	go stopWorkspaceContainers(workspaceName, os.Stdout)
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "log": buf.String()})
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":      true,
+		"async":   true,
+		"message": "Workspace marked as trashed. Containers are stopping in the background.",
+	})
 }
 
 // handleRestoreWorkspace removes the trash marker and brings the

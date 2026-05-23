@@ -62,9 +62,12 @@ func composeProjectsForWorkspace(workspaceName string) []string {
 	}
 }
 
-// TrashWorkspace stops all containers belonging to the workspace
-// without deleting any data, then writes the trash marker. Idempotent.
-func TrashWorkspace(workspaceName string, writer io.Writer) error {
+// MarkWorkspaceTrashed writes the .trashed marker synchronously.
+// Listing calls see the workspace as trashed the instant this returns.
+// The actual container teardown is handled separately by
+// stopWorkspaceContainers (typically in a background goroutine spawned
+// by the HTTP handler) so the frontend doesn't wait on docker compose.
+func MarkWorkspaceTrashed(workspaceName string) error {
 	homeDir, err := config.GetRealUserHomeDir()
 	if err != nil {
 		homeDir = os.Getenv("HOME")
@@ -73,10 +76,26 @@ func TrashWorkspace(workspaceName string, writer io.Writer) error {
 	if _, err := os.Stat(wsDir); os.IsNotExist(err) {
 		return fmt.Errorf("workspace %q not found", workspaceName)
 	}
+	marker, _ := trashMarkerPath(workspaceName)
+	if err := os.WriteFile(marker, []byte("trashed\n"), 0o644); err != nil {
+		return fmt.Errorf("write trash marker: %w", err)
+	}
+	return nil
+}
 
-	fmt.Fprintf(writer, "Trashing workspace %s — stopping containers, keeping data on disk.\n", workspaceName)
-
+// stopWorkspaceContainers runs `docker compose down` (no --volumes)
+// on every compose project name we know is associated with this
+// workspace. Best-effort — projects that don't exist are silent
+// no-ops. Safe to call concurrently or repeatedly.
+func stopWorkspaceContainers(workspaceName string, writer io.Writer) {
+	homeDir, err := config.GetRealUserHomeDir()
+	if err != nil {
+		homeDir = os.Getenv("HOME")
+	}
+	wsDir := filepath.Join(homeDir, ".config", "bitswan", "workspaces", workspaceName)
 	deploymentDir := filepath.Join(wsDir, "deployment")
+
+	fmt.Fprintf(writer, "Stopping containers for %s…\n", workspaceName)
 	for _, project := range composeProjectsForWorkspace(workspaceName) {
 		// `docker compose down` (no --volumes) leaves volumes + networks
 		// alone so a restore can bring them back without losing state.
@@ -88,12 +107,20 @@ func TrashWorkspace(workspaceName string, writer io.Writer) error {
 		cmd.Stderr = writer
 		_ = cmd.Run()
 	}
+	fmt.Fprintf(writer, "Containers for %s stopped.\n", workspaceName)
+}
 
-	marker, _ := trashMarkerPath(workspaceName)
-	if err := os.WriteFile(marker, []byte("trashed\n"), 0o644); err != nil {
-		return fmt.Errorf("write trash marker: %w", err)
+// TrashWorkspace is the synchronous trash flow: mark trashed, then
+// stop containers in the same goroutine. Used by call sites that
+// genuinely want a blocking call (CLI, empty-trash via
+// RunWorkspaceRemove). For the bailey UI, prefer marking + spawning
+// stopWorkspaceContainers in a goroutine so the user doesn't wait.
+func TrashWorkspace(workspaceName string, writer io.Writer) error {
+	if err := MarkWorkspaceTrashed(workspaceName); err != nil {
+		return err
 	}
-	fmt.Fprintln(writer, "Workspace moved to trash.")
+	fmt.Fprintf(writer, "Workspace %s marked as trashed.\n", workspaceName)
+	stopWorkspaceContainers(workspaceName, writer)
 	return nil
 }
 

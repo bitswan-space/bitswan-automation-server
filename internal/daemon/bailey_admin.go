@@ -826,8 +826,12 @@ function loadList() {
       trashSection.style.display = 'none';
     }
 
-    // Wire up trash / restore buttons. Delegating on the container so we
-    // don't have to re-bind after every loadList() re-render.
+    // Wire up trash / restore buttons. Trash is optimistic — the card
+    // moves to the trash section the moment the button is clicked,
+    // before the POST returns. The backend writes the .trashed marker
+    // synchronously and spawns "docker compose down" in a goroutine,
+    // so the next loadList() (fired when the POST settles) sees the
+    // workspace already trashed and the user perceives no wait.
     document.querySelectorAll('[data-action="trash"], [data-action="restore"]').forEach(function(btn){
       btn.addEventListener('click', function(){
         var action = btn.getAttribute('data-action');
@@ -835,12 +839,36 @@ function loadList() {
         if (!confirm(action === 'trash'
           ? 'Move "' + ws + '" to trash? Containers will stop but data is preserved.'
           : 'Restore "' + ws + '"? Containers will start back up.')) return;
-        btn.disabled = true;
-        btn.textContent = action === 'trash' ? 'Trashing…' : 'Restoring…';
+
+        if (action === 'trash') {
+          // Optimistic update: re-render this single card as trashed and
+          // move it into the trash section right away. If the POST
+          // ultimately fails, loadList() in the catch handler snaps the
+          // UI back to truth.
+          var card = btn.closest('.ws-card');
+          if (card) {
+            card.classList.add('trashed');
+            // Disable links / buttons on the card so the user doesn't
+            // click into a 502 (containers are shutting down).
+            card.querySelectorAll('a, button').forEach(function(el){
+              el.style.pointerEvents = 'none';
+              el.style.opacity = '0.5';
+            });
+            // Move into the trash section if it's already visible,
+            // otherwise reveal the section first.
+            trashSection.style.display = '';
+            trashBox.appendChild(card);
+            document.getElementById('trash-empty-wrap').style.display = '';
+          }
+        } else {
+          btn.disabled = true;
+          btn.textContent = 'Restoring…';
+        }
+
         fetch('/bailey/api/workspaces/' + encodeURIComponent(ws) + '/' + action, {
           method:'POST', credentials:'same-origin'
-        }).then(function(r){ return r.json(); }).then(function(d){
-          if (!d.ok) {
+        }).then(function(r){ return r.json().catch(function(){ return {ok:r.ok}; }); }).then(function(d){
+          if (d.ok === false) {
             alert('Failed: ' + (d.error || 'unknown error'));
           }
           loadList();
