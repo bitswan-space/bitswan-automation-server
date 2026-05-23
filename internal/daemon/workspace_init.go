@@ -722,22 +722,15 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 			}
 			fmt.Println("Workspace registered successfully!")
 
-			// Automatically fetch OAuth configuration when AOC is configured
-			if !*noOauth {
-				fmt.Println("Fetching OAuth configuration from AOC...")
-				oauthConfig, err = aocClient.GetOAuthConfig(workspaceId)
-				if err != nil {
-					return fmt.Errorf("failed to get OAuth config from AOC: %w", err)
-				}
-				fmt.Println("OAuth configuration fetched successfully!")
-
-				// Save OAuth config to disk
-				if err := oauth.SaveOauthConfig(workspaceName, oauthConfig); err != nil {
-					return fmt.Errorf("failed to save OAuth config: %w", err)
-				}
-			} else {
-				fmt.Println("OAuth disabled, using password authentication")
-			}
+			// Per-workspace Keycloak client fetch is gone. Bailey now
+			// front-doors every workspace endpoint through one shared
+			// bitswan-protected-client, with per-host callback URIs
+			// registered via registerProtectedRedirectURI. The --no-oauth
+			// flag is kept as a silent no-op for CLI compat. Callers who
+			// genuinely want a per-workspace OAuth config can still pass
+			// --oauth-config <file> explicitly (handled earlier in this
+			// function); we just stop auto-fetching from AOC.
+			_ = noOauth
 
 			aocEnvVars = aocClient.GetAOCEnvironmentVariables(workspaceId, automationServerToken)
 
