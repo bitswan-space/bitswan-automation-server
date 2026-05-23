@@ -864,7 +864,16 @@ func addRouteTraefik(req IngressAddRouteRequest, workspaceName string) error {
 		}
 	}
 
-	if workspaceName != "" && isWorkspaceTraefikRunning(workspaceName) {
+	// The two-tier wrap (platform-traefik → bitswan-protected-proxy →
+	// workspace-traefik) only works when the protected-proxy container
+	// is actually running. In bare environments (CI without `bailey
+	// init`, dev hosts before the wrap is set up, etc.) the wrap
+	// upstream is unreachable and platform-traefik returns 502 on every
+	// request. Fall back to the single-tier route in that case — the
+	// inner subdomain still resolves directly, which is what the user
+	// would see anyway with no wrap to layer on top.
+	wrapAvailable := containerRunning("bitswan-protected-proxy")
+	if wrapAvailable && workspaceName != "" && isWorkspaceTraefikRunning(workspaceName) {
 		// INNER hostname carries the actual app content. Route lives only
 		// in the workspace's own traefik now (and in platform-traefik for
 		// public ingress) — the daemon's MFA gate forwards directly to
@@ -882,12 +891,20 @@ func addRouteTraefik(req IngressAddRouteRequest, workspaceName string) error {
 			return fmt.Errorf("failed to add outer route to platform traefik: %w", err)
 		}
 	} else {
-		// No workspace sub-traefik — single-tier route. Still split outer/inner
-		// so the two-subdomain wrap model holds for non-workspace endpoints.
+		// No workspace sub-traefik, or no wrap available — single-tier route.
+		// Inner still goes directly to the upstream. Outer goes to the wrap
+		// when it's available, otherwise to the same upstream so callers can
+		// reach the service at the canonical hostname without an auth layer
+		// (matches what addRouteCaddy already does — see that function for
+		// rationale).
 		if err := traefikapi.AddRouteWithTraefik(inner, req.Upstream, "", certResolver); err != nil {
 			return fmt.Errorf("failed to add inner route: %w", err)
 		}
-		if err := traefikapi.AddRouteWithTraefik(outer, "bitswan-protected-proxy:80", "", certResolver); err != nil {
+		outerUpstream := req.Upstream
+		if wrapAvailable {
+			outerUpstream = "bitswan-protected-proxy:80"
+		}
+		if err := traefikapi.AddRouteWithTraefik(outer, outerUpstream, "", certResolver); err != nil {
 			return fmt.Errorf("failed to add outer route: %w", err)
 		}
 	}
