@@ -84,12 +84,15 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 		return fmt.Errorf("failed to create daemon client: %w", err)
 	}
 
-	// Use local flags for workspace init (no editor, no oauth for faster initialization)
+	// Use local flags for workspace init (no editor, no oauth for faster initialization).
+	// --owner is required since the bailey ACL work — pick a stable placeholder
+	// so the test doesn't depend on a real user existing.
 	initArgs := []string{
 		"workspace", "init",
 		"--local",
 		"--no-ide",
 		"--no-oauth",
+		"--owner", "ci-test@example.com",
 	}
 	if gitopsImage != "" {
 		initArgs = append(initArgs, "--gitops-image", gitopsImage)

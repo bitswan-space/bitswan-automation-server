@@ -39,6 +39,7 @@ type WorkspaceCreateRequest struct {
 	SshPort                string `json:"ssh-port,omitempty"`
 	Staging                bool   `json:"staging,omitempty"`
 	EnableWorkspaceBackups bool   `json:"enableWorkspaceBackups,omitempty"`
+	Owner                  string `json:"owner,omitempty"`
 }
 
 // WorkspaceDeleteRequest represents a workspace delete request from MQTT
@@ -142,6 +143,9 @@ func (p *MQTTPublisher) handleWorkspaceCreate(client mqtt.Client, msg mqtt.Messa
 	}
 	if req.Staging {
 		args = append(args, "--staging")
+	}
+	if req.Owner != "" {
+		args = append(args, "--owner", req.Owner)
 	}
 	args = append(args, req.Name)
 

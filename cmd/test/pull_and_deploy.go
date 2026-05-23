@@ -75,6 +75,7 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		"--local",
 		"--no-ide",
 		"--no-oauth",
+		"--owner", "ci-test@example.com",
 	}
 	if gitopsImage != "" {
 		initArgs1 = append(initArgs1, "--gitops-image", gitopsImage)
@@ -234,6 +235,7 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		"--local",
 		"--no-ide",
 		"--no-oauth",
+		"--owner", "ci-test@example.com",
 		"--remote", containerRepoPath,
 		"--branch", branchName,
 	}

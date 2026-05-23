@@ -98,6 +98,7 @@ func runTestUpdate(noRemove bool, customGitopsImage, customEditorImage string) e
 		"workspace", "init",
 		"--local",
 		"--no-oauth",
+		"--owner", "ci-test@example.com",
 		"--gitops-image", initGitopsImage,
 		"--editor-image", initEditorImage,
 	}

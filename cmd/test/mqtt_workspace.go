@@ -322,6 +322,7 @@ func runTestMqttWorkspace() error {
 		"local":      true,
 		"no-ide":     true,
 		"no-oauth":   true,
+		"owner":      "ci-test@example.com",
 	}
 
 	requestJSON, err := json.Marshal(createRequest)
