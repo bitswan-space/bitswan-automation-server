@@ -68,6 +68,10 @@ func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 		return fmt.Errorf("failed to create daemon client: %w", err)
 	}
 
+	if err := ensureContainerManagerImage(); err != nil {
+		return fmt.Errorf("failed to build container-manager image: %w", err)
+	}
+
 	// Step 1: Initialize workspace 1
 	fmt.Println("\n[1/9] Initializing workspace 1...")
 	initArgs1 := []string{

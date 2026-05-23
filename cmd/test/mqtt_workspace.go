@@ -31,6 +31,14 @@ func runTestMqttWorkspace() error {
 	fmt.Println("=== BitSwan Test Suite: MQTT Workspace ===")
 	fmt.Println()
 
+	// Build the container-manager image up-front. The MQTT path lands in
+	// the same workspace_init code as the CLI path, and that compose
+	// template references bitswan/container-manager:latest which has no
+	// published image (see ensureContainerManagerImage).
+	if err := ensureContainerManagerImage(); err != nil {
+		return fmt.Errorf("failed to build container-manager image: %w", err)
+	}
+
 	// Step 1: Get AOC client and automation server info
 	fmt.Println("[1/6] Getting AOC client and automation server info...")
 	aocClient, err := aoc.NewAOCClient()

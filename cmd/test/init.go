@@ -77,6 +77,15 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	workspaceName := fmt.Sprintf("test-workspace-%d", time.Now().Unix())
 	fmt.Printf("Test workspace name: %s\n", workspaceName)
 
+	// The container-manager image is referenced by the gitops compose
+	// template but has no published Docker Hub repository (bitswan/
+	// container-manager 404s). Build it from this repo so docker
+	// compose up -d --pull missing can find it locally. No-op on
+	// re-runs since the image stays cached.
+	if err := ensureContainerManagerImage(); err != nil {
+		return fmt.Errorf("failed to build container-manager image: %w", err)
+	}
+
 	// Step 1: Initialize workspace
 	fmt.Println("\n[1/8] Initializing workspace...")
 	client, err := daemon.NewClient()

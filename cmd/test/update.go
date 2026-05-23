@@ -94,6 +94,10 @@ func runTestUpdate(noRemove bool, customGitopsImage, customEditorImage string) e
 		initEditorImage = fmt.Sprintf("bitswan/bitswan-editor:%s", latestEditorVersion)
 	}
 
+	if err := ensureContainerManagerImage(); err != nil {
+		return fmt.Errorf("failed to build container-manager image: %w", err)
+	}
+
 	initArgs := []string{
 		"workspace", "init",
 		"--local",
