@@ -45,10 +45,19 @@ type IngressAddRouteRequest struct {
 	CertsDir      string `json:"certs_dir,omitempty"`
 	Secret        string `json:"secret,omitempty"`
 	WorkspaceName string `json:"workspace_name,omitempty"`
-	// IngressTarget controls which ingress receives the route when VPN is enabled.
-	// "external" = internet-facing Traefik only
-	// "internal" = VPN Traefik only
-	// "both" or "" = both (default, backward compatible)
+	// OwnerEmail is the deployer's email — the user whose action caused this
+	// route to be registered. When set, the daemon registers the hostname
+	// on bailey's ACL with this user as the original owner, so it shows up
+	// on their bailey workspaces page immediately. Optional; empty means the
+	// caller doesn't know who the deployer is (e.g. server-internal routes
+	// registered at boot) and bailey's auto-claim path applies instead.
+	OwnerEmail string `json:"owner_email,omitempty"`
+	// DisplayName is a friendly label for the endpoint shown in bailey
+	// UIs. If empty, the hostname is used.
+	DisplayName string `json:"display_name,omitempty"`
+	// IngressTarget is kept for backward compat with callers that haven't
+	// been updated. The traefik-protected hop is gone; addRouteToIngress
+	// ignores this field.
 	IngressTarget string `json:"ingress_target,omitempty"`
 }
 
@@ -687,12 +696,43 @@ func addRouteToIngress(req IngressAddRouteRequest, jwtToken string) error {
 	_ = req.IngressTarget
 	switch ingressType {
 	case IngressCaddy:
-		return addRouteCaddy(req)
+		if err := addRouteCaddy(req); err != nil {
+			return err
+		}
 	case IngressTraefik:
 		workspaceName := resolveWorkspaceName(req, jwtToken)
-		return addRouteTraefik(req, workspaceName)
+		if err := addRouteTraefik(req, workspaceName); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("no ingress proxy detected")
 	}
-	return fmt.Errorf("no ingress proxy detected")
+
+	// When the caller supplied an owner email (gitops deploying an
+	// exposed automation, workspace_init registering a workspace
+	// service, etc.), register the hostname on bailey's ACL so it
+	// shows up in /bailey/api/endpoints + /bailey/workspaces. Default
+	// state is owner-only; further grants are managed on the bailey
+	// share UI. Best-effort — a failure here doesn't unwind the route
+	// registration above; the operator will see the endpoint when the
+	// auto-claim path runs.
+	if req.OwnerEmail != "" {
+		outer := req.Hostname
+		if isInnerHost(outer) {
+			outer = toOuterHost(outer)
+		}
+		display := req.DisplayName
+		if display == "" {
+			display = outer
+		}
+		if _, err := registerEndpoint(outer, req.OwnerEmail, display); err != nil {
+			fmt.Printf("Warning: failed to register bailey endpoint for %s: %v\n", outer, err)
+		}
+		if err := registerProtectedRedirectURI(outer); err != nil {
+			fmt.Printf("Warning: AOC didn't accept protected-client redirect URI for %s: %v\n", outer, err)
+		}
+	}
+	return nil
 }
 
 // addRouteVPNTraefik adds a route to the VPN-internal Traefik instance.
