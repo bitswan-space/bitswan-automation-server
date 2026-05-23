@@ -128,9 +128,16 @@ func runTestMqttWorkspace() error {
 		}
 		fmt.Printf("  Extracted hostname: %s\n", hostname)
 
-		// Replace any localhost or aoc-emqx with mqtt.bitswan.localhost for ingress
+		// Replace any localhost or aoc-emqx with the *inner* mqtt hostname for ingress.
+		// The CLI 'ingress add-route mqtt.bitswan.localhost ...' that the workflow
+		// runs now registers two traefik routes:
+		//   mqtt.bitswan.localhost          -> bitswan-protected-proxy:80 (OAuth wrap)
+		//   mqtt--inner.bitswan.localhost   -> aoc-emqx:8084 (direct)
+		// MQTT clients can't follow OAuth redirects, so we have to hit the inner
+		// hostname which traefik routes straight to the broker — same trick we use
+		// for the gitops health check.
 		if hostname == "aoc-emqx" || strings.Contains(hostname, "localhost") {
-			hostname = "mqtt.bitswan.localhost"
+			hostname = "mqtt--inner.bitswan.localhost"
 			fmt.Printf("  Replaced hostname with: %s\n", hostname)
 		}
 
@@ -149,8 +156,8 @@ func runTestMqttWorkspace() error {
 	fmt.Printf("\n  Debug - Environment checks:\n")
 
 	// Check if we can resolve the hostname
-	fmt.Printf("    Checking DNS resolution for mqtt.bitswan.localhost...\n")
-	if err := checkDNSResolution("mqtt.bitswan.localhost"); err != nil {
+	fmt.Printf("    Checking DNS resolution for mqtt--inner.bitswan.localhost...\n")
+	if err := checkDNSResolution("mqtt--inner.bitswan.localhost"); err != nil {
 		fmt.Printf("    ⚠️  DNS resolution failed: %v\n", err)
 	} else {
 		fmt.Printf("    ✓ DNS resolution OK\n")
@@ -165,8 +172,8 @@ func runTestMqttWorkspace() error {
 	}
 
 	// Check if we can reach the endpoint via HTTPS
-	fmt.Printf("    Checking HTTPS connectivity to mqtt.bitswan.localhost:443...\n")
-	if err := checkHTTPSConnectivity("mqtt.bitswan.localhost:443"); err != nil {
+	fmt.Printf("    Checking HTTPS connectivity to mqtt--inner.bitswan.localhost:443...\n")
+	if err := checkHTTPSConnectivity("mqtt--inner.bitswan.localhost:443"); err != nil {
 		fmt.Printf("    ⚠️  HTTPS connectivity failed: %v\n", err)
 	} else {
 		fmt.Printf("    ✓ HTTPS connectivity OK\n")
