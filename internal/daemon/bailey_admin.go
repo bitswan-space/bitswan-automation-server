@@ -97,7 +97,7 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "devices", false))
+		fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "devices", false))
 		return
 	}
 
@@ -124,7 +124,7 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case "/bailey/devices", "/bailey/devices/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "devices", admin))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "devices", admin))
 			return
 		}
 	case "/bailey/recovery", "/bailey/recovery/":
@@ -141,13 +141,13 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case "/bailey/approvals", "/bailey/approvals/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "approvals", admin))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "approvals", admin))
 			return
 		}
 	case "/bailey/notifications", "/bailey/notifications/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "notifications", admin))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "notifications", admin))
 			return
 		}
 	case "/bailey/api/notifications-count":
@@ -193,7 +193,7 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case "/bailey/workspaces", "/bailey/workspaces/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "workspaces", admin))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "workspaces", admin))
 			return
 		}
 	case "/bailey/api/workspaces":
@@ -262,27 +262,27 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/bailey/map" || r.URL.Path == "/bailey/map/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "map", true))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "map", true))
 			return
 		}
 	case r.URL.Path == "/bailey/siem" || r.URL.Path == "/bailey/siem/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "siem", true))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "siem", true))
 			return
 		}
 
 	case r.URL.Path == "/bailey/certs" || r.URL.Path == "/bailey/certs/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "certs", true))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "certs", true))
 			return
 		}
 
 	case r.URL.Path == "/bailey/updates" || r.URL.Path == "/bailey/updates/":
 		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "updates", true))
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "updates", true))
 			return
 		}
 
@@ -560,7 +560,7 @@ body { max-width: none; padding: 0; display: flex; min-height: 100vh; }
 .main table { white-space: nowrap; }
 `
 
-func vpnInternalPage(email string, groups []string, page string, admin bool) string {
+func vpnInternalPage(w http.ResponseWriter, r *http.Request, email string, groups []string, page string, admin bool) string {
 	cfgSlug := config.NewAutomationServerConfig()
 	scSlug, _ := cfgSlug.LoadConfig()
 	serverName := "BitSwan"
@@ -603,9 +603,6 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
   .ws-card-head {
     display:flex; align-items:center; gap:14px; margin-bottom:14px;
     border-bottom:1px solid #F4F4F5; padding-bottom:12px;
-    /* Reserve corner space for the absolutely-positioned .ws-menu so
-       the inline Open button never sits underneath it. */
-    padding-right:40px;
   }
   .ws-card-head h2 {
     margin:0; font-size:16px; font-weight:600; color:#18181B; flex:1;
@@ -650,13 +647,10 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
     margin-left:8px;
   }
   .ws-trash-btn:hover { border-color:#FCA5A5; color:#B91C1C; background:#FEF2F2; }
-  /* Kebab menu lives in the card's top-right corner, NOT in the
-     header flex row — keeps it visually clear of the Open button.
-     The dropdown right-aligns under the kebab so it never extends
-     past the card edge. */
-  .ws-menu {
-    position:absolute; top:12px; right:12px; z-index:5;
-  }
+  /* Kebab menu sits inline in the card-head row, immediately to the
+     left of the primary Open button (so the dropdown drops down
+     without overlapping the Open click target). */
+  .ws-menu { position:relative; display:inline-block; }
   .ws-menu-btn {
     background:transparent; border:1px solid transparent; color:#71717A;
     width:28px; height:28px; padding:0; border-radius:6px; cursor:pointer;
@@ -871,15 +865,12 @@ function loadList() {
           +   '</div>'
           + '</div>';
       }
-      // menuHTML is rendered as a SIBLING of .ws-card-head (not
-      // inside it) — the kebab is absolutely positioned in the card
-      // corner, so keeping it out of the header flex row makes the
-      // intent obvious in the markup too.
+      // Menu sits in the header row just before the Open button.
       return '<div class="ws-card ' + (opts.trashed ? 'trashed' : '') + '" data-ws="' + escapeHTML(w.name) + '">' +
-        menuHTML +
         '<div class="ws-card-head">' +
           '<h2>' + escapeHTML(w.name) + '</h2>' +
           '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
+          menuHTML +
           actionBtn +
         '</div>' +
         appsHTML +
@@ -1273,6 +1264,14 @@ loadList();`
 		// split across /devices and /recovery before but they're all
 		// the same task from the user's perspective — manage how I
 		// sign in.
+		//
+		// The TOTP section is rendered inline (no iframe) by calling
+		// renderTOTPInlineHTML, which may set the candidate-secret
+		// cookie on first GET — that's why this case needs w/r in
+		// scope. The form action still posts to /2fa-gate/account/2fa,
+		// just with a return_to hidden field so the user lands back
+		// here after enrol/disable instead of the standalone page.
+		totpSection := renderTOTPInlineHTML(w, r, email, admin, "/bailey/devices")
 		pageContent = fmt.Sprintf(`
 <div class="card" style="margin-top:0;">
   <h2>Pair a new browser</h2>
@@ -1293,8 +1292,8 @@ loadList();`
 <div class="card">
   <h2>Authenticator app (TOTP)</h2>
   <p class="note">TOTP is required for admins. Optional (but recommended) for regular users — lets you re-pair a fresh browser without bothering an admin.</p>
-  <iframe src="/2fa-gate/account/2fa?_bailey_iframe=1" style="width:100%%;min-height:380px;border:0;"></iframe>
-</div>`, html.EscapeString(email))
+  %s
+</div>`, html.EscapeString(email), totpSection)
 		pageScript = `
 function loadDevices() {
   fetch('/bailey/api/devices', {credentials:'same-origin'}).then(r => r.json()).then(d => {

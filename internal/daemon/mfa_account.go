@@ -108,7 +108,7 @@ func accountTOTPHandler(w http.ResponseWriter, r *http.Request, email string) {
 				return
 			}
 			http.SetCookie(w, &http.Cookie{Name: accountEnrolCookieName, Value: "", Path: mfaGatePathPrefix + "/account/2fa", MaxAge: -1})
-			http.Redirect(w, r, mfaGatePathPrefix+"/account/2fa", http.StatusSeeOther)
+			http.Redirect(w, r, safeReturnTo(r.FormValue("return_to"), mfaGatePathPrefix+"/account/2fa"), http.StatusSeeOther)
 		case "disable":
 			if !admin {
 				http.Error(w, "admins only", http.StatusForbidden)
@@ -118,7 +118,7 @@ func accountTOTPHandler(w http.ResponseWriter, r *http.Request, email string) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			http.Redirect(w, r, mfaGatePathPrefix+"/account/2fa", http.StatusSeeOther)
+			http.Redirect(w, r, safeReturnTo(r.FormValue("return_to"), mfaGatePathPrefix+"/account/2fa"), http.StatusSeeOther)
 		default:
 			http.Error(w, "unknown action", http.StatusBadRequest)
 		}
@@ -159,6 +159,101 @@ func candidateSecretForAccount(w http.ResponseWriter, r *http.Request, email str
 func init() {
 	handleAccountDevices = accountDevicesHandler
 	handleAccountTOTP = accountTOTPHandler
+}
+
+// safeReturnTo restricts open-redirect risk: only allow same-origin
+// paths that start with a single '/' (no '//', no scheme). Anything
+// else falls back to fallback. Used by the TOTP flow's return_to
+// param so the inlined section on /bailey/devices can be redirected
+// back there after enrol/disable.
+func safeReturnTo(candidate, fallback string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return fallback
+	}
+	if !strings.HasPrefix(candidate, "/") || strings.HasPrefix(candidate, "//") {
+		return fallback
+	}
+	return candidate
+}
+
+// renderTOTPInlineHTML returns just the inner section markup for the
+// TOTP enrol / status flow, suitable for splicing into another page
+// (specifically the merged /bailey/devices). When called during a GET
+// it may set the candidate-secret cookie via w, same as
+// accountTOTPHandler does — keep the call site at the route handler
+// where (w, r) are in scope, NOT inside vpnInternalPage's render.
+//
+// returnTo is appended to the form POST as ?return_to=<path> so
+// accountTOTPHandler can land the user back on the inlined page
+// after enrol/disable instead of the standalone /2fa-gate page.
+func renderTOTPInlineHTML(w http.ResponseWriter, r *http.Request, email string, admin bool, returnTo string) string {
+	rec, _ := loadTOTPRecord(email)
+	if rec != nil {
+		return inlineTOTPStatusHTML(email, admin, returnTo)
+	}
+	secret := candidateSecretForAccount(w, r, email)
+	return inlineTOTPEnrollHTML(email, secret, "", returnTo)
+}
+
+func inlineTOTPStatusHTML(email string, admin bool, returnTo string) string {
+	cta := ""
+	if admin {
+		rt := ""
+		if returnTo != "" {
+			rt = fmt.Sprintf(`<input type="hidden" name="return_to" value="%s">`, html.EscapeString(returnTo))
+		}
+		cta = fmt.Sprintf(`<form method="POST" action="%s/account/2fa" onsubmit="return confirm('Disable TOTP? You will lose authenticator-based recovery.');" style="margin-top:8px;">
+  <input type="hidden" name="action" value="disable">
+  %s
+  <button type="submit" style="color:#b00020;background:none;border:1px solid #b00020;padding:6px 12px;border-radius:4px;cursor:pointer;">Disable TOTP</button>
+</form>`, html.EscapeString(mfaGatePathPrefix), rt)
+	}
+	return fmt.Sprintf(`<p>Your account has TOTP enabled. You can use your authenticator app to recover a device on a fresh browser.</p>%s`, cta)
+}
+
+func inlineTOTPEnrollHTML(email, secret, errMsg, returnTo string) string {
+	errBlock := ""
+	if errMsg != "" {
+		errBlock = `<p class="note" style="color:#b00020;"><b>` + html.EscapeString(errMsg) + `</b></p>`
+	}
+	qrDataURL := ""
+	raw, _ := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if key, kerr := totp.Generate(totp.GenerateOpts{
+		Issuer:      totpIssuerName(),
+		AccountName: email,
+		Secret:      raw,
+	}); kerr == nil {
+		if img, ierr := key.Image(220, 220); ierr == nil {
+			var buf bytes.Buffer
+			if png.Encode(&buf, img) == nil {
+				qrDataURL = "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+			}
+		}
+	}
+	rt := ""
+	if returnTo != "" {
+		rt = fmt.Sprintf(`<input type="hidden" name="return_to" value="%s">`, html.EscapeString(returnTo))
+	}
+	return fmt.Sprintf(`
+<p>Scan with an authenticator app and enter the 6-digit code:</p>
+<div style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;">
+  <img alt="TOTP QR" src="%s" style="width:220px;height:220px;border:1px solid #eee;">
+  <div>
+    <p><b>Account:</b> <code>%s</code></p>
+    <p><b>Secret:</b> <code style="font-size:14px;letter-spacing:1px;">%s</code></p>
+  </div>
+</div>
+%s
+<form method="POST" action="%s/account/2fa" style="margin-top:16px;">
+  <input type="hidden" name="action" value="enroll">
+  %s
+  <label>Code: <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required style="font-size:18px;letter-spacing:4px;padding:6px 8px;width:120px;"></label>
+  <button type="submit" style="background:#093DF5;color:white;border:0;padding:8px 16px;margin-left:8px;border-radius:4px;font-size:14px;cursor:pointer;">Enrol</button>
+</form>`,
+		html.EscapeString(qrDataURL),
+		html.EscapeString(email), html.EscapeString(secret),
+		errBlock, html.EscapeString(mfaGatePathPrefix), rt)
 }
 
 // --- HTML ---
