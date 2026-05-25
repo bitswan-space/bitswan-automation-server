@@ -644,6 +644,28 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
     margin-left:8px;
   }
   .ws-trash-btn:hover { border-color:#FCA5A5; color:#B91C1C; background:#FEF2F2; }
+  .ws-menu { position:relative; margin-left:8px; display:inline-block; }
+  .ws-menu-btn {
+    background:transparent; border:1px solid #E4E4E7; color:#52525B;
+    padding:6px 10px; border-radius:6px; cursor:pointer; font-size:14px;
+    line-height:1; font-weight:600;
+  }
+  .ws-menu-btn:hover { border-color:#A1A1AA; background:#FAFAFA; }
+  .ws-menu-list {
+    position:absolute; right:0; top:calc(100% + 4px); z-index:50;
+    min-width:180px; background:#fff; border:1px solid #E4E4E7;
+    border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.08);
+    padding:4px 0; display:none;
+  }
+  .ws-menu.open .ws-menu-list { display:block; }
+  .ws-menu-item {
+    display:block; width:100%; text-align:left; background:transparent;
+    border:0; padding:8px 14px; font-size:13px; color:#3F3F46;
+    cursor:pointer; font-family:inherit;
+  }
+  .ws-menu-item:hover { background:#F4F4F5; }
+  .ws-menu-item.danger { color:#B91C1C; }
+  .ws-menu-item.danger:hover { background:#FEF2F2; }
   .ws-card.trashed { opacity:0.65; background:#FAFAFA; border-style:dashed; }
   .ws-card.trashed .ws-card-head h2::after {
     content:' (trashed)'; color:#A1A1AA; font-weight:normal; font-size:13px;
@@ -817,19 +839,27 @@ function loadList() {
           ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.dashboard.hostname) + '/" target="_blank" rel="noopener">Open ↗</a>'
           : '<span class="note">Dashboard not deployed.</span>';
       }
-      var trashBtn = (w.is_owner && !opts.trashed)
-        ? '<button class="ws-trash-btn" data-action="trash" data-ws="' + escapeHTML(w.name) + '" title="Move to trash (stops all containers, keeps data)">🗑 Trash</button>'
-        : '';
-      var updateBtn = (w.is_owner && !opts.trashed)
-        ? '<button class="ws-trash-btn" data-action="update" data-ws="' + escapeHTML(w.name) + '" title="Pull current default images and recreate containers">↻ Update</button>'
-        : '';
+      // Trash + Update used to render as standalone buttons on the
+      // card head, which got busy fast on workspaces the user owns.
+      // Roll them into a kebab menu — primary action (Open / Restore)
+      // stays prominent, secondary actions hide behind … until needed.
+      var menuHTML = '';
+      if (w.is_owner && !opts.trashed) {
+        menuHTML = ''
+          + '<div class="ws-menu">'
+          +   '<button class="ws-menu-btn" data-menu-toggle aria-haspopup="true" aria-expanded="false" title="More actions">⋯</button>'
+          +   '<div class="ws-menu-list" role="menu">'
+          +     '<button class="ws-menu-item" data-action="update" data-ws="' + escapeHTML(w.name) + '" role="menuitem">↻ Update images</button>'
+          +     '<button class="ws-menu-item danger" data-action="trash" data-ws="' + escapeHTML(w.name) + '" role="menuitem">🗑 Move to trash</button>'
+          +   '</div>'
+          + '</div>';
+      }
       return '<div class="ws-card ' + (opts.trashed ? 'trashed' : '') + '" data-ws="' + escapeHTML(w.name) + '">' +
         '<div class="ws-card-head">' +
           '<h2>' + escapeHTML(w.name) + '</h2>' +
           '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
           actionBtn +
-          updateBtn +
-          trashBtn +
+          menuHTML +
         '</div>' +
         appsHTML +
         '</div>';
@@ -852,6 +882,49 @@ function loadList() {
     } else {
       trashSection.style.display = 'none';
     }
+
+    // Wire up kebab menus. Click toggle opens, click outside or on
+    // any menu item closes. One global click handler hung off
+    // document; per-button toggles delegate to it. Multiple menus on
+    // the page are mutually exclusive — opening one closes any other
+    // already open.
+    document.querySelectorAll('[data-menu-toggle]').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        var menu = btn.closest('.ws-menu');
+        var alreadyOpen = menu.classList.contains('open');
+        document.querySelectorAll('.ws-menu.open').forEach(function(m){ m.classList.remove('open'); m.querySelector('[data-menu-toggle]').setAttribute('aria-expanded','false'); });
+        if (!alreadyOpen) {
+          menu.classList.add('open');
+          btn.setAttribute('aria-expanded','true');
+        }
+      });
+    });
+    // Close any open menu on outside click. Hung off the rendered
+    // box rather than document so it gets torn down + re-attached
+    // implicitly the next time loadList() rerenders the workspaces.
+    if (!box._menuDismissBound) {
+      document.addEventListener('click', function(){
+        document.querySelectorAll('.ws-menu.open').forEach(function(m){
+          m.classList.remove('open');
+          var t = m.querySelector('[data-menu-toggle]');
+          if (t) t.setAttribute('aria-expanded','false');
+        });
+      });
+      box._menuDismissBound = true;
+    }
+    // Menu items: clicking one should close the menu (the existing
+    // action wireup below will fire the actual POST).
+    document.querySelectorAll('.ws-menu-item').forEach(function(item){
+      item.addEventListener('click', function(){
+        var menu = item.closest('.ws-menu');
+        if (menu) {
+          menu.classList.remove('open');
+          var t = menu.querySelector('[data-menu-toggle]');
+          if (t) t.setAttribute('aria-expanded','false');
+        }
+      });
+    });
 
     // Wire up update buttons. POST streams NDJSON progress events
     // (pull + recreate); render them in a small log row below the
