@@ -140,6 +140,9 @@ func shareModalHTML() string {
 
     <div class="bailey-share-error" id="bailey-share-error"></div>
 
+    <div class="bailey-share-section-title" id="bailey-share-requests-title" style="display:none;">Pending access requests</div>
+    <div class="bailey-share-list" id="bailey-share-requests" style="display:none;"></div>
+
     <div class="bailey-share-section-title">People with access</div>
     <div class="bailey-share-list" id="bailey-share-list">
       <p class="bailey-share-empty">Loading…</p>
@@ -205,6 +208,73 @@ func shareModalJS(host, callerEmail, apiURL string) string {
       p.textContent = 'No additional people or groups yet.';
       list.appendChild(p);
     }
+    // Pending requests: people who hit the endpoint without a grant
+    // and clicked "Request access" on the denied page. Render them
+    // ABOVE the access list with Approve / Deny buttons. The backend
+    // emits these with Go-default capitalised field names (Email,
+    // RequestedAt) because the underlying anonymous struct has no
+    // json tags — match that on the read side.
+    var requests = data.requests || [];
+    var reqBox = $('bailey-share-requests');
+    var reqTitle = $('bailey-share-requests-title');
+    reqBox.innerHTML = '';
+    if (requests.length) {
+      requests.forEach(function(r) {
+        reqBox.appendChild(requestRowFor({
+          email: r.Email || r.email,
+          requested_at: r.RequestedAt || r.requested_at,
+        }));
+      });
+      reqBox.style.display = '';
+      reqTitle.style.display = '';
+    } else {
+      reqBox.style.display = 'none';
+      reqTitle.style.display = 'none';
+    }
+  }
+  function requestRowFor(req) {
+    var avatar = el('div', {class: 'bailey-share-avatar', text: initials(req.email)});
+    var meta = el('div', {class:'bailey-share-meta'}, [
+      el('div', {class:'name', text: req.email}),
+      el('div', {class:'sub',  text: 'Requested ' + (req.requested_at || '')})
+    ]);
+    var approve = el('button', {
+      class:'bailey-share-remove',
+      text:'Approve',
+      onclick: function(){ approveRequest(req.email); }
+    });
+    // Re-use the Remove styling for Approve too — same visual weight.
+    // Override colour so Approve reads as positive, not destructive.
+    approve.style.color = '#0a7d24';
+    approve.style.borderColor = '#86EFAC';
+    var deny = el('button', {
+      class:'bailey-share-remove',
+      text:'Deny',
+      onclick: function(){ denyRequest(req.email); }
+    });
+    return el('div', {class:'bailey-share-row'}, [avatar, meta, approve, deny]);
+  }
+  function approveRequest(email) {
+    showError('');
+    var body = new URLSearchParams();
+    body.append('principal_type', 'email');
+    body.append('principal_value', email);
+    body.append('role', 'access');
+    fetch(apiURL, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
+      .then(function(r){ if(!r.ok) return r.json().then(function(d){ throw new Error(d.error||'HTTP '+r.status); }); return r.json(); })
+      .then(render)
+      .catch(function(e){ showError('Could not approve: '+e.message); });
+  }
+  function denyRequest(email) {
+    showError('');
+    if (!confirm('Deny access request from ' + email + '? They\'ll need to request again.')) return;
+    var body = new URLSearchParams();
+    body.append('action', 'deny-request');
+    body.append('email', email);
+    fetch(apiURL, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body.toString()})
+      .then(function(r){ if(!r.ok) return r.json().then(function(d){ throw new Error(d.error||'HTTP '+r.status); }); return r.json(); })
+      .then(render)
+      .catch(function(e){ showError('Could not deny: '+e.message); });
   }
   function rowFor(g) {
     var isGroup = g.principal_type === 'group';

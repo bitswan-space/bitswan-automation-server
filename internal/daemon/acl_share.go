@@ -179,6 +179,23 @@ func handleShareAPI(w http.ResponseWriter, r *http.Request, email string, groups
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
 			return
 		}
+		// Special case: action=deny-request rejects a pending access
+		// request without granting. The frontend uses this for the
+		// "Deny" button on a request row. Only valid on POST; takes
+		// just the email of the requester.
+		if r.Method == http.MethodPost && strings.TrimSpace(r.FormValue("action")) == "deny-request" {
+			target := strings.TrimSpace(r.FormValue("email"))
+			if target == "" {
+				http.Error(w, `{"error":"email required to deny request"}`, http.StatusBadRequest)
+				return
+			}
+			if err := removeAccessRequest(host, target); err != nil {
+				http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			writeListing()
+			return
+		}
 		pType := strings.TrimSpace(r.FormValue("principal_type"))
 		pVal := strings.TrimSpace(r.FormValue("principal_value"))
 		roleVal := strings.TrimSpace(r.FormValue("role"))
