@@ -851,12 +851,26 @@ func (s *Server) runWorkspaceInit(args []string, confirmCh <-chan struct{}) erro
 
 		dashboardHostname := fmt.Sprintf("%s-dashboard.%s", workspaceName, *domain)
 		dashboardUpstream := fmt.Sprintf("%s-dashboard:8080", workspaceName)
+		// Register the dashboard as a bailey-tracked endpoint (matches
+		// what gitops gets above). Without this, /bailey/api/endpoints
+		// never returns the dashboard hostname and the workspaces page
+		// renders "Dashboard not deployed" on a workspace that just
+		// finished bringing the dashboard up.
+		if _, err := registerEndpoint(dashboardHostname, *ownerEmail,
+			fmt.Sprintf("%s", workspaceName)); err != nil {
+			fmt.Printf("Warning: failed to register endpoint ACL row for %s: %v\n", dashboardHostname, err)
+		}
+		if err := registerProtectedRedirectURI(dashboardHostname); err != nil {
+			fmt.Printf("Warning: AOC didn't accept the protected-client redirect URI for %s: %v\n", dashboardHostname, err)
+		}
 		if err := addRouteToIngress(IngressAddRouteRequest{
 			Hostname:      dashboardHostname,
 			Upstream:      dashboardUpstream,
 			Mkcert:        *mkCerts,
 			CertsDir:      *certsDir,
 			WorkspaceName: workspaceName,
+			OwnerEmail:    *ownerEmail,
+			DisplayName:   workspaceName,
 		}, ""); err != nil {
 			return fmt.Errorf("failed to register Dashboard service: %w", err)
 		}

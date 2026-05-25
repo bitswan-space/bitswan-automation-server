@@ -814,7 +814,7 @@ function loadList() {
           : '<span class="note">Trashed by owner.</span>';
       } else {
         actionBtn = bucket.dashboard
-          ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.dashboard.hostname) + '/" target="_blank" rel="noopener">Open dashboard ↗</a>'
+          ? '<a class="ws-editor-btn" href="https://' + escapeHTML(bucket.dashboard.hostname) + '/" target="_blank" rel="noopener">Open ↗</a>'
           : '<span class="note">Dashboard not deployed.</span>';
       }
       var trashBtn = (w.is_owner && !opts.trashed)
