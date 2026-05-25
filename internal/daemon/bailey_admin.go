@@ -128,11 +128,11 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "/bailey/recovery", "/bailey/recovery/":
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, vpnInternalPage(email, identityGroups(r), "recovery", admin))
-			return
-		}
+		// Legacy URL — devices and recovery were merged into one
+		// 'Sign-in & devices' page. 301 so any saved bookmark / nav
+		// link from an older session lands on the new page.
+		http.Redirect(w, r, "/bailey/devices", http.StatusMovedPermanently)
+		return
 	case "/bailey/endpoints", "/bailey/endpoints/":
 		// Legacy URL — kept as a redirect to the merged workspaces page
 		// for anyone with a bookmark. Plain 301 so browsers update.
@@ -1267,7 +1267,12 @@ document.getElementById('empty-trash-form').addEventListener('submit', function(
 loadList();`
 
 	case "devices":
-		pageTitle = "Devices"
+		pageTitle = "Sign-in & devices"
+		// Single page for everything access-related: pair a new
+		// browser, manage paired browsers, set up TOTP. They were
+		// split across /devices and /recovery before but they're all
+		// the same task from the user's perspective — manage how I
+		// sign in.
 		pageContent = fmt.Sprintf(`
 <div class="card" style="margin-top:0;">
   <h2>Pair a new browser</h2>
@@ -1281,8 +1286,14 @@ loadList();`
 
 <div class="card">
   <h2>Paired devices</h2>
-  <p class="note">Browsers you've trusted to access this server. Removing a device immediately invalidates its session.</p>
+  <p class="note">Browsers you've trusted to access this server. Trust is permanent until you remove the device here — there is no automatic expiry.</p>
   <div id="device-list"><p class="note">Loading…</p></div>
+</div>
+
+<div class="card">
+  <h2>Authenticator app (TOTP)</h2>
+  <p class="note">TOTP is required for admins. Optional (but recommended) for regular users — lets you re-pair a fresh browser without bothering an admin.</p>
+  <iframe src="/2fa-gate/account/2fa?_bailey_iframe=1" style="width:100%%;min-height:380px;border:0;"></iframe>
 </div>`, html.EscapeString(email))
 		pageScript = `
 function loadDevices() {
@@ -1481,15 +1492,6 @@ setInterval(renderTree, 8000);`
 		pageTitle = "Notifications"
 		pageContent = notificationsPageHTML(email, groups, admin)
 
-	case "recovery":
-		pageTitle = "Recovery (TOTP)"
-		pageContent = `
-<div class="card" style="margin-top:0;">
-  <h2>Authenticator-based recovery</h2>
-  <p class="note">TOTP is required for admins. Optional (but recommended) for regular users — lets you re-pair a fresh browser without bothering an admin.</p>
-  <iframe src="/2fa-gate/account/2fa?_bailey_iframe=1" style="width:100%;min-height:380px;border:0;"></iframe>
-</div>`
-
 	case "map":
 		pageTitle = "Network map"
 		pageContent = fmt.Sprintf(`
@@ -1622,8 +1624,7 @@ function showTab(groupId, tabId) {
   <nav class="sidebar-nav">
     <a href="/bailey/workspaces" class="%s">Workspaces</a>
     <a href="/bailey/notifications" class="%s" id="nav-notifications">Notifications<span id="nav-notifications-badge" style="display:none;background:#DC2626;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:6px;"></span></a>
-    <a href="/bailey/devices" class="%s">Devices</a>
-    <a href="/bailey/recovery" class="%s">Recovery (TOTP)</a>
+    <a href="/bailey/devices" class="%s">Sign-in &amp; devices</a>
     <div class="sidebar-section">Admin</div>
     <a href="/bailey/approvals" class="%s">Users &amp; devices</a>
     <a href="/bailey/updates" class="%s">Updates</a>
@@ -1658,7 +1659,7 @@ function showTab(groupId, tabId) {
 </body></html>`,
 		pageTitle, serverName,
 		active("workspaces"), active("notifications"),
-		active("devices"), active("recovery"),
+		active("devices"),
 		active("approvals"), active("updates"), active("map"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)
 }
