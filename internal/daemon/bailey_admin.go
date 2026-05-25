@@ -594,12 +594,18 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
   .ws-new-btn:hover { background:#0731C4; }
 
   .ws-card {
+    /* position:relative so the absolutely-positioned .ws-menu in the
+       corner stays inside the card instead of escaping to the document. */
+    position:relative;
     background:#fff; border:1px solid #E4E4E7; border-radius:10px;
     padding:18px 20px; margin-bottom:18px;
   }
   .ws-card-head {
     display:flex; align-items:center; gap:14px; margin-bottom:14px;
     border-bottom:1px solid #F4F4F5; padding-bottom:12px;
+    /* Reserve corner space for the absolutely-positioned .ws-menu so
+       the inline Open button never sits underneath it. */
+    padding-right:40px;
   }
   .ws-card-head h2 {
     margin:0; font-size:16px; font-weight:600; color:#18181B; flex:1;
@@ -644,16 +650,23 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
     margin-left:8px;
   }
   .ws-trash-btn:hover { border-color:#FCA5A5; color:#B91C1C; background:#FEF2F2; }
-  .ws-menu { position:relative; margin-left:8px; display:inline-block; }
-  .ws-menu-btn {
-    background:transparent; border:1px solid #E4E4E7; color:#52525B;
-    padding:6px 10px; border-radius:6px; cursor:pointer; font-size:14px;
-    line-height:1; font-weight:600;
+  /* Kebab menu lives in the card's top-right corner, NOT in the
+     header flex row — keeps it visually clear of the Open button.
+     The dropdown right-aligns under the kebab so it never extends
+     past the card edge. */
+  .ws-menu {
+    position:absolute; top:12px; right:12px; z-index:5;
   }
-  .ws-menu-btn:hover { border-color:#A1A1AA; background:#FAFAFA; }
+  .ws-menu-btn {
+    background:transparent; border:1px solid transparent; color:#71717A;
+    width:28px; height:28px; padding:0; border-radius:6px; cursor:pointer;
+    font-size:16px; line-height:1; font-weight:700;
+    display:inline-flex; align-items:center; justify-content:center;
+  }
+  .ws-menu-btn:hover { border-color:#E4E4E7; background:#FAFAFA; color:#3F3F46; }
   .ws-menu-list {
     position:absolute; right:0; top:calc(100% + 4px); z-index:50;
-    min-width:180px; background:#fff; border:1px solid #E4E4E7;
+    min-width:190px; background:#fff; border:1px solid #E4E4E7;
     border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.08);
     padding:4px 0; display:none;
   }
@@ -663,9 +676,13 @@ func vpnInternalPage(email string, groups []string, page string, admin bool) str
     border:0; padding:8px 14px; font-size:13px; color:#3F3F46;
     cursor:pointer; font-family:inherit;
   }
-  .ws-menu-item:hover { background:#F4F4F5; }
-  .ws-menu-item.danger { color:#B91C1C; }
-  .ws-menu-item.danger:hover { background:#FEF2F2; }
+  .ws-menu-item:hover { background:#F4F4F5; color:#18181B; }
+  /* Danger item: keep the text in the readable default grey, signal
+     the destructive nature only via the trash emoji and a subtle
+     left-edge accent. Previous version used dark-red text + pale-red
+     hover bg which was hard to read on some monitors. */
+  .ws-menu-item.danger { border-left:3px solid transparent; padding-left:11px; }
+  .ws-menu-item.danger:hover { background:#FEF2F2; color:#3F3F46; border-left-color:#DC2626; }
   .ws-card.trashed { opacity:0.65; background:#FAFAFA; border-style:dashed; }
   .ws-card.trashed .ws-card-head h2::after {
     content:' (trashed)'; color:#A1A1AA; font-weight:normal; font-size:13px;
@@ -854,12 +871,16 @@ function loadList() {
           +   '</div>'
           + '</div>';
       }
+      // menuHTML is rendered as a SIBLING of .ws-card-head (not
+      // inside it) — the kebab is absolutely positioned in the card
+      // corner, so keeping it out of the header flex row makes the
+      // intent obvious in the markup too.
       return '<div class="ws-card ' + (opts.trashed ? 'trashed' : '') + '" data-ws="' + escapeHTML(w.name) + '">' +
+        menuHTML +
         '<div class="ws-card-head">' +
           '<h2>' + escapeHTML(w.name) + '</h2>' +
           '<span class="role ' + (role === 'owner' ? 'owner' : '') + '">' + escapeHTML(role) + '</span>' +
           actionBtn +
-          menuHTML +
         '</div>' +
         appsHTML +
         '</div>';
