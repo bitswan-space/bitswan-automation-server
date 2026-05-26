@@ -3,6 +3,7 @@ package oauth
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -204,5 +205,31 @@ func CreateOAuthEnvVars(config *Config, serviceName, workspaceName, domain strin
 	}
 
 	return oauthEnvVars
+}
+
+// BuildExtraHosts returns docker-compose `extra_hosts` entries needed for
+// oauth2-proxy's server-side token exchange to reach the OIDC issuer.
+//
+// libc resolves any `*.localhost` name to loopback per RFC 6761, so a
+// container can't reach `https://keycloak.bitswan.localhost/` directly even
+// though the host's Caddy routes it just fine for browser traffic. The
+// `host-gateway` mapping makes the container resolve the public hostname to
+// the host's gateway IP, where Caddy then routes the request to keycloak.
+//
+// Returns nil for non-`.localhost` issuers — real deployments use public DNS
+// and don't need the workaround.
+func BuildExtraHosts(config *Config) []string {
+	if config == nil || config.IssuerUrl == "" {
+		return nil
+	}
+	u, err := url.Parse(config.IssuerUrl)
+	if err != nil {
+		return nil
+	}
+	host := u.Hostname()
+	if host == "" || !strings.HasSuffix(host, ".localhost") {
+		return nil
+	}
+	return []string{host + ":host-gateway"}
 }
 

@@ -101,6 +101,9 @@ func (e *EditorService) CreateDockerComposeWithDevMode(gitopsSecretToken, bitswa
 	if oauthConfig != nil {
 		oauthEnvVars := oauth.CreateOAuthEnvVars(oauthConfig, "editor", workspaceName, domain)
 		bitswanEditor["environment"] = append(bitswanEditor["environment"].([]string), oauthEnvVars...)
+		if extraHosts := oauth.BuildExtraHosts(oauthConfig); len(extraHosts) > 0 {
+			bitswanEditor["extra_hosts"] = extraHosts
+		}
 	}
 
 	// Append MQTT env variables when workspace is connected to AOC
