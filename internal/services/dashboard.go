@@ -89,18 +89,22 @@ func (d *DashboardService) CreateDockerComposeWithDevMode(gitopsSecretToken, bit
 			// written by the coding-agent wrapper, for the dashboard's
 			// session list + asciinema playback.
 			gitopsPath + "/coding-agent-sessions:/workspace/agent-sessions:ro",
-			// Claude's per-project JSONL conversation history. The agent
-			// writes here as user `agent` (its $HOME is the coding-agent-home
-			// volume); the dashboard reads it to extract human-readable
-			// session titles (first user prompt) without round-tripping
-			// through the agent container.
-			gitopsPath + "/coding-agent-home/.claude:/workspace/.claude:ro",
+			// Read-only view of the coding-agent's $HOME so the dashboard can
+			// resolve per-user Claude transcripts (`.claude_<slug>/projects/...`)
+			// as well as the legacy shared `.claude/projects/...` for session
+			// titles. Mounting the whole home rather than just `.claude` lets
+			// the dashboard see every user's config dir without us hard-coding
+			// the slug set.
+			gitopsPath + "/coding-agent-home:/workspace/agent-home:ro",
 		},
 	}
 
 	if oauthConfig != nil {
 		dashboardOAuthEnvVars := oauth.CreateOAuthEnvVars(oauthConfig, "dashboard", workspaceName, domain)
 		bitswanDashboard["environment"] = append(bitswanDashboard["environment"].([]string), dashboardOAuthEnvVars...)
+		if extraHosts := oauth.BuildExtraHosts(oauthConfig); len(extraHosts) > 0 {
+			bitswanDashboard["extra_hosts"] = extraHosts
+		}
 	}
 
 	if len(mqttEnvVars) > 0 {
