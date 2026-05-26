@@ -286,6 +286,20 @@ func (s *Server) handleBailey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+	case r.URL.Path == "/bailey/domain-setup" || r.URL.Path == "/bailey/domain-setup/":
+		// Manual DNS / TLS instructions for operators whose server is
+		// NOT on a *.bswn.io domain (those get the records set up
+		// automatically by the AOC on registration — see PR #318).
+		// Nav link is conditionally hidden under the same rule, so a
+		// direct visit shouldn't render anything useful but isn't a
+		// hard 404 either (lets users bookmark it if they're
+		// mid-migration to or from a managed domain).
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, vpnInternalPage(w, r, email, identityGroups(r), "domain-setup", true))
+			return
+		}
+
 	case r.URL.Path == "/bailey/api/admin/default-images":
 		switch r.Method {
 		case http.MethodGet:
@@ -1608,11 +1622,26 @@ function showTab(groupId, tabId) {
 		pageTitle = "Updates"
 		pageContent = updatesPageHTML
 		pageScript = updatesPageJS
+
+	case "domain-setup":
+		pageTitle = "Custom domain setup"
+		pageContent = customDomainSetupHTML(scSlug)
 	}
 
 	// admin is always true for the internal admin (handler gates non-admins),
 	// but we keep the parameter so future shared layouts can vary the nav.
 	_ = admin
+
+	// The 'Custom domain' nav link only renders when the AOC isn't
+	// managing this server's DNS. The flag is set on the local
+	// config at register time from the AOC-reported
+	// dns_managed_by_aoc field — robust against the parent zone
+	// changing (we don't hardcode bswn.io here). Absent or false →
+	// operator needs the manual setup page.
+	domainSetupNav := ""
+	if scSlug != nil && !scSlug.AutomationOperationsCenter.DNSManagedByAOC {
+		domainSetupNav = fmt.Sprintf(`<a href="/bailey/domain-setup" class="%s">Custom domain</a>`, active("domain-setup"))
+	}
 
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html><head><meta charset="utf-8">`+bitswanFavicon+`<title>%s — %s VPN</title>
@@ -1627,6 +1656,7 @@ function showTab(groupId, tabId) {
     <div class="sidebar-section">Admin</div>
     <a href="/bailey/approvals" class="%s">Users &amp; devices</a>
     <a href="/bailey/updates" class="%s">Updates</a>
+    %s
     <a href="/bailey/map" class="%s">Network map</a>
     <a href="/bailey/certs" class="%s">Certificates</a>
     <a href="/bailey/siem" class="%s">SIEM</a>
@@ -1659,6 +1689,7 @@ function showTab(groupId, tabId) {
 		pageTitle, serverName,
 		active("workspaces"), active("notifications"),
 		active("devices"),
-		active("approvals"), active("updates"), active("map"), active("certs"), active("siem"),
+		active("approvals"), active("updates"), domainSetupNav,
+		active("map"), active("certs"), active("siem"),
 		email, pageTitle, pageContent, pageScript)
 }

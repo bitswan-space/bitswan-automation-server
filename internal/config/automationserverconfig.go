@@ -84,6 +84,15 @@ type AutomationOperationsCenterSettings struct {
 	AutomationServerId string `toml:"automation_server_id"`
 	AccessToken        string `toml:"access_token"`
 	ExpiresAt          string `toml:"expires_at,omitempty"`
+	// DNSManagedByAOC records whether the AOC provisions DNS for this
+	// server's domain (set on registration when the AOC-side flag of
+	// the same name on AutomationServerSerializer is true — typically
+	// for domains under a parent zone the AOC has a Route53 key for,
+	// today *.bswn.io). When true the bailey UI hides DIY-DNS
+	// instructions; when false (or absent — older AOCs, custom-domain
+	// BYOS, disconnected operation) the operator gets the manual
+	// setup page.
+	DNSManagedByAOC bool `toml:"dns_managed_by_aoc,omitempty"`
 }
 
 // GetRealUserHomeDir returns the home directory of the actual user,

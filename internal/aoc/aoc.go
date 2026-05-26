@@ -39,6 +39,15 @@ type AutomationServerInfo struct {
 	AutomationServerId string `json:"automation_server_id"`
 	KeycloakOrgId      string `json:"keycloak_org_id"`
 	IsConnected        bool   `json:"is_connected"`
+	Domain             string `json:"domain,omitempty"`
+	// DNSManagedByAOC mirrors the AOC-side field: true when the AOC
+	// will publish DNS records for this server's domain (typically
+	// because the AOC has Route53 authority over the parent zone).
+	// The CLI persists this on the local config at register-time so
+	// the bailey can decide whether to show DIY-DNS setup pages —
+	// see config.AutomationOperationsCenterSettings.DNSManagedByAOC.
+	// Absent on older AOCs → defaults to false (treat as custom domain).
+	DNSManagedByAOC    bool   `json:"dns_managed_by_aoc,omitempty"`
 	CreatedAt          string `json:"created_at"`
 	UpdatedAt          string `json:"updated_at"`
 }
@@ -771,6 +780,14 @@ func GetMQTTEnvironmentVariables(creds *MQTTCredentials) []string {
 // SaveConfig saves the current configuration to the automation server config file
 func (c *AOCClient) SaveConfig() error {
 	return c.config.UpdateAutomationServer(*c.settings)
+}
+
+// SetDNSManagedByAOC stages the AOC-reported dns_managed_by_aoc flag
+// on the client's pending settings. The next SaveConfig() persists it
+// to the local toml. Used by `bitswan register` so the bailey can
+// decide whether to show the manual-DNS-setup admin page.
+func (c *AOCClient) SetDNSManagedByAOC(v bool) {
+	c.settings.DNSManagedByAOC = v
 }
 
 // createHTTPClient creates an HTTP client that trusts mkcert certificates

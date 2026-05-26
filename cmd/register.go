@@ -60,6 +60,13 @@ func newRegisterCmd() *cobra.Command {
 				return fmt.Errorf("failed to get automation server info: %w", err)
 			}
 
+			// Persist whether the AOC manages DNS for this server's
+			// domain. The bailey reads this flag to decide whether to
+			// surface the Custom-domain setup admin page — see
+			// internal/daemon/bailey_domain_setup_page.go. Older AOCs
+			// omit the field; default is false (treat as custom).
+			aocClient.SetDNSManagedByAOC(serverInfo.DNSManagedByAOC)
+
 			// Save the configuration
 			if err := aocClient.SaveConfig(); err != nil {
 				return fmt.Errorf("failed to save configuration: %w", err)
