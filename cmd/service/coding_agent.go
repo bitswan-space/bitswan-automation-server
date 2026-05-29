@@ -37,6 +37,7 @@ func newCodingAgentEnableCmd() *cobra.Command {
 	var workspace string
 	var devMode bool
 	var sourceDir string
+	var staging bool
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -61,6 +62,9 @@ func newCodingAgentEnableCmd() *cobra.Command {
 			options := make(map[string]interface{})
 			if codingAgentImage != "" {
 				options["coding_agent_image"] = codingAgentImage
+			}
+			if staging {
+				options["staging"] = true
 			}
 
 			if devMode {
@@ -90,6 +94,7 @@ func newCodingAgentEnableCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&devMode, "dev-mode", false, "Mount source files from bitswan-agent for live development")
 	cmd.Flags().StringVar(&sourceDir, "source-dir", "", "Path to bitswan-agent source (default: workspace/AOC/bitswan-agent)")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().BoolVar(&staging, "staging", false, "Use the staging coding-agent image")
 
 	return cmd
 }
@@ -270,6 +275,7 @@ func newCodingAgentStopCmd() *cobra.Command {
 func newCodingAgentUpdateCmd() *cobra.Command {
 	var codingAgentImage string
 	var workspace string
+	var staging bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -295,6 +301,9 @@ func newCodingAgentUpdateCmd() *cobra.Command {
 			if codingAgentImage != "" {
 				options["coding_agent_image"] = codingAgentImage
 			}
+			if staging {
+				options["staging"] = true
+			}
 
 			result, err := client.UpdateService("coding-agent", workspace, options)
 			if err != nil {
@@ -309,6 +318,7 @@ func newCodingAgentUpdateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&codingAgentImage, "coding-agent-image", "", "Custom image for the coding agent")
 	cmd.Flags().StringVarP(&workspace, "workspace", "w", "", "Workspace name (uses active workspace if not specified)")
+	cmd.Flags().BoolVar(&staging, "staging", false, "Update to the latest staging coding-agent image")
 
 	return cmd
 }

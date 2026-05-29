@@ -144,3 +144,29 @@ func ResolveEditorImage(staging bool) (string, error) {
 	}
 	return "bitswan/bitswan-editor:" + version, nil
 }
+
+// GetLatestCodingAgentVersion gets the latest version of the coding-agent image
+func GetLatestCodingAgentVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/coding-agent/tags/")
+}
+
+// GetLatestCodingAgentStagingVersion gets the latest version of the coding-agent-staging image
+func GetLatestCodingAgentStagingVersion() (string, error) {
+	return GetLatestDockerHubVersion("https://hub.docker.com/v2/repositories/bitswan/coding-agent-staging/tags/")
+}
+
+// ResolveCodingAgentImage returns the full coding-agent image string based on the staging flag.
+func ResolveCodingAgentImage(staging bool) (string, error) {
+	if staging {
+		version, err := GetLatestCodingAgentStagingVersion()
+		if err != nil {
+			return "", err
+		}
+		return "bitswan/coding-agent-staging:" + version, nil
+	}
+	version, err := GetLatestCodingAgentVersion()
+	if err != nil {
+		return "", err
+	}
+	return "bitswan/coding-agent:" + version, nil
+}

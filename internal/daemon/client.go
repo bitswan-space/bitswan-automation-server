@@ -904,6 +904,9 @@ func (c *Client) EnableService(serviceType, workspace string, options map[string
 	if sourceDir, ok := options["source_dir"].(string); ok {
 		reqBody.SourceDir = sourceDir
 	}
+	if staging, ok := options["staging"].(bool); ok {
+		reqBody.Staging = staging
+	}
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
@@ -1590,6 +1593,9 @@ func (c *Client) UpdateService(serviceType, workspace string, options map[string
 	}
 	if codingAgentImage, ok := options["coding_agent_image"].(string); ok {
 		reqBody.CodingAgentImage = codingAgentImage
+	}
+	if staging, ok := options["staging"].(bool); ok {
+		reqBody.Staging = staging
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

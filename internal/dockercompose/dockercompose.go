@@ -34,6 +34,7 @@ type DockerComposeConfig struct {
 	LocalRemotePath    string // Host path to local repository (if using local remote)
 	LocalRemoteName    string // Mount name for local repository (used for mount point path)
 	KeycloakURL        string // Keycloak base URL for authentication
+	CodingAgentSecret  string // Bearer token gitops uses to verify coding-agent requests
 }
 
 // CreateDockerComposeFile creates a docker-compose YAML content and returns it along with the generated secret token
@@ -102,6 +103,17 @@ func (config *DockerComposeConfig) CreateDockerComposeFileWithSecret(existingSec
 			"BITSWAN_WORKSPACE_NAME=" + config.WorkspaceName,
 			"BITSWAN_CERTS_DIR=" + homeDir + "/.config/bitswan/certauthorities",
 		},
+	}
+
+	// Authoritative coding-agent secret. With this set in gitops' env,
+	// verify_agent_token resolves directly from os.environ instead of
+	// falling back to `docker inspect` on the agent container — which
+	// would otherwise cache the first secret seen for the lifetime of
+	// the gitops process and reject any subsequent re-issued secret.
+	if config.CodingAgentSecret != "" {
+		gitopsService["environment"] = append(gitopsService["environment"].([]string),
+			"BITSWAN_GITOPS_AGENT_SECRET="+config.CodingAgentSecret,
+		)
 	}
 
 	// Add Keycloak URL if configured

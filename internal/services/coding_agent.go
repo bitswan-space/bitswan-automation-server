@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"gopkg.in/yaml.v3"
 )
 
@@ -151,7 +152,7 @@ func (c *CodingAgentService) SaveDockerCompose(content string) error {
 }
 
 // Enable enables the Coding Agent service for the workspace
-func (c *CodingAgentService) Enable(gitopsAgentSecret, codingAgentImage, domain string) error {
+func (c *CodingAgentService) Enable(gitopsAgentSecret, codingAgentImage, domain string, devConfig *CodingAgentDevConfig) error {
 	// Check if already enabled
 	if c.IsEnabled() {
 		return fmt.Errorf("Coding Agent service is already enabled for workspace '%s'", c.WorkspaceName)
@@ -202,7 +203,7 @@ func (c *CodingAgentService) Enable(gitopsAgentSecret, codingAgentImage, domain 
 	}
 
 	// Generate docker-compose content
-	dockerComposeContent, err := c.CreateDockerCompose(gitopsAgentSecret, codingAgentImage, domain)
+	dockerComposeContent, err := c.CreateDockerComposeWithDevMode(gitopsAgentSecret, codingAgentImage, domain, devConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create docker-compose content: %w", err)
 	}
@@ -342,4 +343,21 @@ func (c *CodingAgentService) UpdateImage(newImage string) error {
 	}
 
 	return nil
+}
+
+// UpdateToLatest updates the coding-agent service to the latest version from DockerHub
+func (c *CodingAgentService) UpdateToLatest() error {
+	return c.UpdateImage("")
+}
+
+// UpdateToLatestWithStaging updates the coding-agent service to the latest version from DockerHub, optionally using staging
+func (c *CodingAgentService) UpdateToLatestWithStaging(staging bool) error {
+	if staging {
+		version, err := dockerhub.GetLatestCodingAgentStagingVersion()
+		if err != nil {
+			return fmt.Errorf("failed to get latest staging version: %w", err)
+		}
+		return c.UpdateImage("bitswan/coding-agent-staging:" + version)
+	}
+	return c.UpdateToLatest()
 }

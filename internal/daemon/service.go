@@ -12,8 +12,10 @@ import (
 
 	"github.com/bitswan-space/bitswan-workspaces/internal/automations"
 	"github.com/bitswan-space/bitswan-workspaces/internal/config"
+	"github.com/bitswan-space/bitswan-workspaces/internal/dockerhub"
 	"github.com/bitswan-space/bitswan-workspaces/internal/oauth"
 	"github.com/bitswan-space/bitswan-workspaces/internal/services"
+	"github.com/google/uuid"
 )
 
 // stdoutMutex protects stdout redirection from concurrent requests
@@ -36,6 +38,7 @@ type ServiceEnableRequest struct {
 	PgAdminImage   string                 `json:"pgadmin_image,omitempty"`
 	MinioImage       string                 `json:"minio_image,omitempty"`
 	CodingAgentImage string                 `json:"coding_agent_image,omitempty"`
+	Staging          bool                   `json:"staging,omitempty"`
 	DevMode          bool                   `json:"dev_mode,omitempty"`
 	SourceDir        string                 `json:"source_dir,omitempty"`
 }
@@ -84,6 +87,7 @@ type ServiceUpdateRequest struct {
 	PgAdminImage     string `json:"pgadmin_image,omitempty"`
 	MinioImage       string `json:"minio_image,omitempty"`
 	CodingAgentImage string `json:"coding_agent_image,omitempty"`
+	Staging          bool   `json:"staging,omitempty"`
 }
 
 // ServiceBackupRequest represents the request to backup CouchDB
@@ -1053,50 +1057,52 @@ func (s *Server) handleCodingAgentEnableLocal(w http.ResponseWriter, req Service
 }
 
 func (s *Server) enableCodingAgentService(req ServiceEnableRequest) error {
+	agentService, err := services.NewCodingAgentService(req.Workspace)
+	if err != nil {
+		return fmt.Errorf("failed to create Coding Agent service: %w", err)
+	}
+
+	if agentService.IsEnabled() {
+		return fmt.Errorf("Coding Agent service is already enabled for workspace '%s'", req.Workspace)
+	}
+
 	metadata, err := config.GetWorkspaceMetadata(req.Workspace)
 	if err != nil {
 		return fmt.Errorf("failed to read workspace metadata: %w", err)
 	}
 
-	gitopsURL := fmt.Sprintf("http://%s-gitops:8079", req.Workspace)
-	ensureURL := gitopsURL + "/worktrees/coding-agent/ensure"
-
-	// Build request body with options
-	bodyMap := map[string]interface{}{}
-	if req.CodingAgentImage != "" {
-		bodyMap["image"] = req.CodingAgentImage
+	secret := metadata.CodingAgentSecret
+	if secret == "" {
+		secret = uuid.NewString()
+		metadata.CodingAgentSecret = secret
 	}
-	if req.DevMode {
-		bodyMap["dev_mode"] = true
-	}
-	if req.SourceDir != "" {
-		bodyMap["source_dir"] = req.SourceDir
+	metadata.CodingAgentEnabled = true
+	if err := config.SaveWorkspaceMetadata(req.Workspace, metadata); err != nil {
+		return fmt.Errorf("failed to save workspace metadata: %w", err)
 	}
 
-	bodyBytes, err := json.Marshal(bodyMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+	image := req.CodingAgentImage
+	if image == "" {
+		resolved, err := dockerhub.ResolveCodingAgentImage(req.Staging)
+		if err != nil {
+			return fmt.Errorf("failed to resolve coding-agent image: %w", err)
+		}
+		image = resolved
 	}
 
-	httpReq, err := http.NewRequest("POST", ensureURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+metadata.GitopsSecret)
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("failed to call gitops ensure endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("gitops ensure failed (HTTP %d): %s", resp.StatusCode, string(body))
+	var devConfig *services.CodingAgentDevConfig
+	if req.DevMode || req.SourceDir != "" {
+		devConfig = &services.CodingAgentDevConfig{
+			DevMode:   req.DevMode,
+			SourceDir: req.SourceDir,
+		}
 	}
 
-	return nil
+	if err := agentService.Enable(secret, image, metadata.Domain, devConfig); err != nil {
+		return err
+	}
+
+	return agentService.StartContainer()
 }
 
 func (s *Server) disableCodingAgentService(workspace string) error {
@@ -1177,6 +1183,10 @@ func (s *Server) updateCodingAgentService(req ServiceUpdateRequest) error {
 	if req.CodingAgentImage != "" {
 		if err := agentService.UpdateImage(req.CodingAgentImage); err != nil {
 			return fmt.Errorf("failed to update coding-agent image: %w", err)
+		}
+	} else {
+		if err := agentService.UpdateToLatestWithStaging(req.Staging); err != nil {
+			return fmt.Errorf("failed to update coding-agent to latest: %w", err)
 		}
 	}
 

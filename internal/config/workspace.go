@@ -45,6 +45,12 @@ func GetWorkspaceMetadata(workspaceName string) (WorkspaceMetadata, error) {
 	return metadata, nil
 }
 
+// SaveWorkspaceMetadata persists workspace metadata to its canonical location.
+func SaveWorkspaceMetadata(workspaceName string, metadata WorkspaceMetadata) error {
+	metadataPath := os.Getenv("HOME") + "/.config/bitswan/" + "workspaces/" + workspaceName + "/metadata.yaml"
+	return metadata.SaveToFile(metadataPath)
+}
+
 // SaveToFile saves the WorkspaceMetadata to a YAML file at the specified path
 func (wm *WorkspaceMetadata) SaveToFile(filePath string) error {
 	// Ensure the parent directory exists
