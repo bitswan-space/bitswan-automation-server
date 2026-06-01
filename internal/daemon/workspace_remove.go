@@ -78,10 +78,31 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	// Docker compose project names must be lowercase
 	projectName := strings.ToLower(workspaceName)
 
+	// Tear down the automations + infra (database) containers that gitops
+	// deployed at runtime. This runs regardless of whether the gitops API
+	// automation removal above succeeded, so it also covers the case where
+	// gitops is unreachable. gitops launches these under
+	// COMPOSE_PROJECT_NAME=<workspace> (Docker lowercases it) from
+	// <workspace>/gitops/docker-compose.yaml; the infra/DB services carry no
+	// gitops.* labels, so a compose-file down is the only reliable way to
+	// remove them.
+	gitopsDir := filepath.Join(workspacesFolder, workspaceName, "gitops")
+	gitopsCompose := filepath.Join(gitopsDir, "docker-compose.yaml")
+	if _, err := os.Stat(gitopsCompose); err == nil {
+		fmt.Fprintln(writer, "Removing automations and infra (database) containers deployed by gitops...")
+		cmd := exec.Command("docker", "compose", "-f", "docker-compose.yaml", "-p", projectName, "down", "--volumes")
+		cmd.Dir = gitopsDir
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(writer, "Warning: Failed to remove gitops-deployed containers/volumes: %v\n", err)
+		}
+	}
+
 	if _, err := os.Stat(dockerComposePath); os.IsNotExist(err) {
 		fmt.Fprintf(writer, "Warning: Deployment directory %s does not exist, skipping docker compose down.\n", dockerComposePath)
 		// Still try to remove containers by project name in case they exist
-		for _, projSuffix := range []string{"-site", "-editor"} {
+		for _, projSuffix := range []string{"-site", "-editor", "-dashboard", "-coding-agent"} {
 			cmd := exec.Command("docker", "compose", "-p", projectName+projSuffix, "down", "--volumes")
 			cmd.Stdout = writer
 			cmd.Stderr = writer
@@ -93,9 +114,16 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 		composeArgs := [][]string{
 			{"-p", projectName + "-site", "down", "--volumes"},
 		}
-		editorComposePath := filepath.Join(dockerComposePath, "docker-compose-editor.yml")
-		if _, err := os.Stat(editorComposePath); err == nil {
-			composeArgs = append(composeArgs, []string{"-f", "docker-compose-editor.yml", "-p", projectName + "-editor", "down", "--volumes"})
+		// Editor, dashboard, and coding-agent each have their own compose file
+		// and project; tear down whichever are present.
+		for _, svc := range []struct{ file, suffix string }{
+			{"docker-compose-editor.yml", "-editor"},
+			{"docker-compose-dashboard.yml", "-dashboard"},
+			{"docker-compose-coding-agent.yml", "-coding-agent"},
+		} {
+			if _, err := os.Stat(filepath.Join(dockerComposePath, svc.file)); err == nil {
+				composeArgs = append(composeArgs, []string{"-f", svc.file, "-p", projectName + svc.suffix, "down", "--volumes"})
+			}
 		}
 		for _, args := range composeArgs {
 			cmd := exec.Command("docker", append([]string{"compose"}, args...)...)
@@ -112,9 +140,10 @@ func RunWorkspaceRemove(workspaceName string, writer io.Writer) error {
 	// 4. Remove images used by docker-compose
 	fmt.Fprintln(writer, "Removing images used by docker-compose...")
 	composeFiles := []string{"docker-compose.yml"}
-	editorComposePath := filepath.Join(dockerComposePath, "docker-compose-editor.yml")
-	if _, err := os.Stat(editorComposePath); err == nil {
-		composeFiles = append(composeFiles, "docker-compose-editor.yml")
+	for _, f := range []string{"docker-compose-editor.yml", "docker-compose-dashboard.yml", "docker-compose-coding-agent.yml"} {
+		if _, err := os.Stat(filepath.Join(dockerComposePath, f)); err == nil {
+			composeFiles = append(composeFiles, f)
+		}
 	}
 	for _, composeFile := range composeFiles {
 		removeImagesFromComposeFile(filepath.Join(dockerComposePath, composeFile), writer)
