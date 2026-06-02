@@ -306,10 +306,11 @@ func startDeploy(gitopsURL, secret, workspaceName, relativePath, stage string) (
 // waitForDeployTask polls gitops' GET /automations/deploy-status/{task_id}
 // endpoint until the background deploy pipeline reaches a terminal state.
 // Returns nil on "completed" and an error (carrying the server-side detail) on
-// "failed" or timeout. Image builds in CI can be slow, so the deadline is
-// generous (20 minutes).
+// "failed" or timeout. This only covers the background deploy pipeline (compose
+// up, cert install, oauth proxy) — the image build already ran synchronously
+// inside the start-deploy call — so a few minutes is plenty.
 func waitForDeployTask(gitopsURL, secret, workspaceName, taskID string) error {
-	maxAttempts := 600 // 20 minutes (600 * 2 seconds)
+	maxAttempts := 150 // 5 minutes (150 * 2 seconds)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		reqURL := fmt.Sprintf("%s/automations/deploy-status/%s", gitopsURL, taskID)
@@ -657,8 +658,9 @@ func calculateGitBlobHash(filePath string) (string, error) {
 }
 
 func waitForGitopsReady(gitopsURL, secret, workspaceName string) error {
-	// Increase timeout for CI environments where services may take longer to start
-	maxAttempts := 120 // 4 minutes total (120 * 2 seconds)
+	// gitops boots quickly (its image is already built locally), so 3 minutes is
+	// a generous margin for CI.
+	maxAttempts := 90 // 3 minutes total (90 * 2 seconds)
 	attempt := 0
 
 	// First, wait for container to be running
@@ -1124,9 +1126,9 @@ func deployAutomation(gitopsURL, secret, workspaceName, deploymentID, checksum s
 }
 
 func waitForDeployment(gitopsURL, secret, workspaceName, deploymentID string) (string, error) {
-	// Increase timeout to 10 minutes (300 attempts * 2 seconds) for CI environments
-	// where deployments may take longer to become ready
-	maxAttempts := 300
+	// The container should reach "running" within seconds of the deploy task
+	// completing; 3 minutes is a generous margin for CI.
+	maxAttempts := 90 // 3 minutes (90 * 2 seconds)
 	attempt := 0
 
 	fmt.Printf("Waiting for deployment '%s' to be ready (timeout: %d minutes)...\n", deploymentID, maxAttempts*2/60)

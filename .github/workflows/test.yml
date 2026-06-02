@@ -134,14 +134,14 @@ jobs:
           ./bitswan automation-server-daemon status || exit 1
 
       - name: "Test 1: Init with Traefik (default)"
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: |
           echo "=== Testing with Traefik (default ingress) ==="
           ./bitswan _test init --gitops-image bitswan/gitops-local:latest --no-remove || exit 1
           ./bitswan _test cleanup || true
 
       - name: "Test 2: Init with Caddy (backward compat)"
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: |
           echo "=== Testing with Caddy (backward compatibility) ==="
           # Rebuild gitops image (previous test cleanup deletes it)
@@ -159,7 +159,7 @@ jobs:
           ./bitswan _test cleanup || true
 
       - name: "Test 3: Migrate Caddy to Traefik and re-test"
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: |
           echo "=== Testing migration from Caddy to Traefik ==="
           # Rebuild gitops image (previous test cleanup deletes it)
