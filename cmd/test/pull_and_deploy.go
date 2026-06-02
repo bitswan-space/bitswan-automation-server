@@ -31,6 +31,16 @@ func newPullAndDeployCmd() *cobra.Command {
 	return cmd
 }
 
+// TODO: Migrate this test to the workspace-mounted deploy flow.
+//
+// It deploys FastAPI to workspace 1 via gitops' asset-upload endpoints
+// (uploadAsset -> POST /automations/assets/upload, buildAutomationImage ->
+// POST /images/{name}, deployAutomation -> POST /automations/{id}/deploy), which
+// gitops removed in favour of building and deploying directly from the
+// bind-mounted workspace repo — so this test currently fails at the upload step.
+// Re-implement the initial deploy with createAutomationFromTemplate + startDeploy
+// + waitForDeployTask (see init.go), then exercise client.PullAndDeploy on
+// workspace 2. Not wired into CI (see .github/workflows/test.yml).
 func runTestPullAndDeploy(gitopsImage, editorImage string) error {
 	fmt.Println("=== BitSwan Test Suite: Pull and Deploy ===")
 	fmt.Println()

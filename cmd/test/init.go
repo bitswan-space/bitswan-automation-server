@@ -78,7 +78,7 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	fmt.Printf("Test workspace name: %s\n", workspaceName)
 
 	// Step 1: Initialize workspace
-	fmt.Println("\n[1/8] Initializing workspace...")
+	fmt.Println("\n[1/6] Initializing workspace...")
 	client, err := daemon.NewClient()
 	if err != nil {
 		return fmt.Errorf("failed to create daemon client: %w", err)
@@ -89,6 +89,7 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 		"workspace", "init",
 		"--local",
 		"--no-ide",
+		"--no-dashboard",
 		"--no-oauth",
 	}
 	if gitopsImage != "" {
@@ -110,67 +111,51 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 		return fmt.Errorf("failed to get workspace metadata: %w", err)
 	}
 
-	// Wait for gitops service to be ready
-	fmt.Println("\n[1.5/7] Waiting for gitops service to be ready...")
+	// Step 2: Wait for gitops service to be ready
+	fmt.Println("\n[2/6] Waiting for gitops service to be ready...")
 	if err := waitForGitopsReady(metadata.GitopsURL, metadata.GitopsSecret, workspaceName); err != nil {
 		cleanupWorkspace(workspaceName)
 		return fmt.Errorf("gitops service did not become ready: %w", err)
 	}
 	fmt.Println("✓ Gitops service ready")
 
-	// Step 2: Create ZIP from FastAPI example and calculate checksum
-	// First, compute the image directory hash so we can write a correct automation.toml
-	// into the ZIP. The upstream example may have a stale image tag in automation.toml
-	// if the image/ directory contents changed without updating the config.
-	fmt.Println("\n[2/8] Creating ZIP from FastAPI example...")
-	imageHash, err := computeImageDirHash()
-	if err != nil {
-		fmt.Printf("Note: Could not compute image hash (image dir may not exist): %v\n", err)
-	}
-	zipPath, checksum, err := createFastAPIZip(imageHash)
-	if err != nil {
-		cleanupWorkspace(workspaceName)
-		return fmt.Errorf("failed to create ZIP: %w", err)
-	}
-	defer os.Remove(zipPath)
-	fmt.Printf("✓ ZIP created: %s (checksum: %s)\n", zipPath, checksum)
-
-	// Step 3: Upload asset
-	fmt.Println("\n[3/8] Uploading asset to gitops...")
-	if err := uploadAsset(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, zipPath, checksum); err != nil {
-		cleanupWorkspace(workspaceName)
-		return fmt.Errorf("failed to upload asset: %w", err)
-	}
-	fmt.Println("✓ Asset uploaded")
-
-	// Step 3.5: Build image if needed
-	fmt.Println("\n[3.5/8] Building automation image...")
-	deploymentID := "test-fastapi"
-	// Extract image name from automation.toml - it expects "fastapi" not "test-fastapi"
-	imageName := "fastapi"
-	imageTag, err := buildAutomationImage(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, imageName, checksum)
+	// Step 3: Scaffold the FastAPI automation from the built-in template gallery.
+	// The examples tree is bind-mounted read-only into the gitops container at
+	// /workspace/examples; gitops copies the chosen template into the workspace
+	// repo (/workspace-repo) under <bp>/<name> and commits it. This replaces the
+	// old upload-asset flow — gitops is now the sole writer to the workspace repo.
+	fmt.Println("\n[3/6] Creating FastAPI automation from template...")
+	const (
+		templateID = "FastAPIApp"
+		bp         = "test"
+		automation = "fastapi"
+	)
+	relativePath, err := createAutomationFromTemplate(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, templateID, bp, automation)
 	if err != nil {
 		cleanupWorkspace(workspaceName)
-		return fmt.Errorf("failed to build image: %w", err)
+		return fmt.Errorf("failed to create automation from template: %w", err)
 	}
-	if imageTag != "" {
-		fmt.Printf("✓ Image built: %s\n", imageTag)
-	} else {
-		fmt.Println("✓ Image already exists or not needed")
-	}
+	fmt.Printf("✓ Automation created at: %s\n", relativePath)
 
-	// Step 4: Deploy automation
-	fmt.Println("\n[4/8] Deploying automation...")
-	if err := deployAutomation(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID, checksum); err != nil {
+	// Step 4: Deploy the automation directly from the workspace. gitops reads the
+	// source from /workspace-repo, builds the per-automation image from its image/
+	// Dockerfile, materializes the merged tree, and runs the deploy pipeline. No
+	// client-side ZIP/image build/upload is required anymore.
+	fmt.Println("\n[4/6] Deploying automation...")
+	taskID, deploymentID, _, err := startDeploy(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, relativePath, "dev")
+	if err != nil {
 		cleanupWorkspace(workspaceName)
-		return fmt.Errorf("failed to deploy automation: %w", err)
+		return fmt.Errorf("failed to start deploy: %w", err)
+	}
+	fmt.Printf("  Deploy started: task=%s deployment=%s\n", taskID, deploymentID)
+	if err := waitForDeployTask(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, taskID); err != nil {
+		cleanupWorkspace(workspaceName)
+		return fmt.Errorf("deploy did not complete: %w", err)
 	}
 	fmt.Println("✓ Automation deployed")
-	// Give deployment a moment to start
-	time.Sleep(5 * time.Second)
 
-	// Step 5: Wait for deployment and test endpoint
-	fmt.Println("\n[5/8] Waiting for deployment to be ready...")
+	// Step 5: Wait for the deployment to be running and test the endpoint
+	fmt.Println("\n[5/6] Waiting for deployment to be ready...")
 	endpointURL, err := waitForDeployment(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID)
 	if err != nil {
 		cleanupWorkspace(workspaceName)
@@ -182,7 +167,7 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	}
 	fmt.Printf("✓ Deployment ready at: %s\n", endpointURL)
 
-	fmt.Println("\n[6/8] Testing endpoint...")
+	fmt.Println("\nTesting endpoint...")
 	if err := testEndpoint(endpointURL, workspaceName); err != nil {
 		if !noRemove {
 			cleanupWorkspace(workspaceName)
@@ -192,22 +177,21 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 	fmt.Println("✓ Endpoint test passed")
 
 	if noRemove {
-		fmt.Println("\n[7/8] Skipping cleanup (--no-remove flag set)...")
+		fmt.Println("\n[6/6] Skipping cleanup (--no-remove flag set)...")
 		fmt.Printf("Workspace '%s' is still running\n", workspaceName)
 		fmt.Printf("Endpoint: %s\n", endpointURL)
 		fmt.Println("\n=== Test Suite: SUCCESS (workspace left running) ===")
 		return nil
 	}
 
-	// Step 6: Remove deployment
-	fmt.Println("\n[7/8] Cleaning up...")
+	// Step 6: Remove deployment and workspace
+	fmt.Println("\n[6/6] Cleaning up...")
 	if err := removeAutomation(metadata.GitopsURL, metadata.GitopsSecret, workspaceName, deploymentID); err != nil {
 		fmt.Printf("Warning: Failed to remove automation: %v\n", err)
 	} else {
 		fmt.Println("✓ Automation removed")
 	}
 
-	// Step 7: Remove workspace
 	if err := cleanupWorkspace(workspaceName); err != nil {
 		return fmt.Errorf("failed to cleanup workspace: %w", err)
 	}
@@ -215,6 +199,166 @@ func runTestInit(noRemove bool, gitopsImage, editorImage string) error {
 
 	fmt.Println("\n=== Test Suite: SUCCESS ===")
 	return nil
+}
+
+// createAutomationFromTemplate scaffolds an automation from a built-in template
+// (e.g. "FastAPIApp") into the workspace repo via gitops' POST
+// /automations/from-template endpoint. gitops copies the template — sourced from
+// the read-only examples tree mounted at /workspace/examples — into
+// /workspace-repo/<bp>/<name>, injects a deployment id, and commits it. Returns
+// the workspace-relative path of the created automation (e.g. "test/fastapi").
+func createAutomationFromTemplate(gitopsURL, secret, workspaceName, templateID, bp, name string) (string, error) {
+	payload := map[string]string{
+		"template_id": templateID,
+		"bp":          bp,
+		"name":        name,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	url := fmt.Sprintf("%s/automations/from-template", gitopsURL)
+	url = automations.TransformURLForDaemon(url, workspaceName)
+	req, err := httpReq.NewRequest("POST", url, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+secret)
+
+	resp, err := httpReq.ExecuteRequestWithLocalhostResolution(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("from-template failed with status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var result struct {
+		Created []struct {
+			Name         string `json:"name"`
+			RelativePath string `json:"relative_path"`
+		} `json:"created"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return "", fmt.Errorf("failed to parse from-template response: %w (body: %s)", err, string(respBytes))
+	}
+	if len(result.Created) == 0 {
+		return "", fmt.Errorf("from-template created no automations (body: %s)", string(respBytes))
+	}
+	return result.Created[0].RelativePath, nil
+}
+
+// startDeploy kicks off a deploy of a workspace-resident automation via gitops'
+// POST /automations/start-deploy endpoint. gitops reads the source from
+// /workspace-repo, builds the image (if the automation ships an image/Dockerfile),
+// computes the merged-tree checksum, and runs the deploy pipeline in the
+// background. The endpoint returns 202 immediately; use waitForDeployTask to
+// block until the background pipeline finishes. Returns the task id, deployment
+// id, and the (possibly empty) exposed URL gitops constructed.
+func startDeploy(gitopsURL, secret, workspaceName, relativePath, stage string) (taskID, deploymentID, url string, err error) {
+	payload := map[string]interface{}{
+		"relative_path": relativePath,
+		"stage":         stage,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	reqURL := fmt.Sprintf("%s/automations/start-deploy", gitopsURL)
+	reqURL = automations.TransformURLForDaemon(reqURL, workspaceName)
+	req, err := httpReq.NewRequest("POST", reqURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", "", "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+secret)
+
+	resp, err := httpReq.ExecuteRequestWithLocalhostResolution(req)
+	if err != nil {
+		return "", "", "", err
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return "", "", "", fmt.Errorf("start-deploy failed with status %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	var result struct {
+		TaskID       string `json:"task_id"`
+		DeploymentID string `json:"deployment_id"`
+		Checksum     string `json:"checksum"`
+		URL          string `json:"url"`
+		Status       string `json:"status"`
+	}
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return "", "", "", fmt.Errorf("failed to parse start-deploy response: %w (body: %s)", err, string(respBytes))
+	}
+	return result.TaskID, result.DeploymentID, result.URL, nil
+}
+
+// waitForDeployTask polls gitops' GET /automations/deploy-status/{task_id}
+// endpoint until the background deploy pipeline reaches a terminal state.
+// Returns nil on "completed" and an error (carrying the server-side detail) on
+// "failed" or timeout. Image builds in CI can be slow, so the deadline is
+// generous (20 minutes).
+func waitForDeployTask(gitopsURL, secret, workspaceName, taskID string) error {
+	maxAttempts := 600 // 20 minutes (600 * 2 seconds)
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		reqURL := fmt.Sprintf("%s/automations/deploy-status/%s", gitopsURL, taskID)
+		reqURL = automations.TransformURLForDaemon(reqURL, workspaceName)
+		req, err := httpReq.NewRequest("GET", reqURL, nil)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+secret)
+
+		resp, err := httpReq.ExecuteRequestWithLocalhostResolution(req)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			var task struct {
+				Status  string `json:"status"`
+				Step    string `json:"step"`
+				Message string `json:"message"`
+				Error   string `json:"error"`
+			}
+			if err := json.Unmarshal(bodyBytes, &task); err == nil {
+				switch task.Status {
+				case "completed":
+					return nil
+				case "failed":
+					if task.Error != "" {
+						return fmt.Errorf("deploy task failed: %s", task.Error)
+					}
+					return fmt.Errorf("deploy task failed: %s", task.Message)
+				default:
+					if attempt%10 == 0 {
+						fmt.Printf("  Deploy in progress (status=%s, step=%s): %s (attempt %d/%d)\n", task.Status, task.Step, task.Message, attempt+1, maxAttempts)
+					}
+				}
+			}
+		} else if attempt%30 == 0 {
+			fmt.Printf("  deploy-status returned %d (attempt %d/%d): %s\n", resp.StatusCode, attempt+1, maxAttempts, string(bodyBytes))
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("deploy task did not complete within timeout")
 }
 
 // computeImageDirHash calculates the git tree hash of the FastAPI image/ directory.
@@ -233,6 +377,10 @@ func computeImageDirHash() (string, error) {
 	return calculateGitTreeHash(imageDir)
 }
 
+// NOTE: No longer used by the init test, which now deploys via the
+// workspace-mounted flow (createAutomationFromTemplate + startDeploy). Retained
+// only for the legacy pull-and-deploy test, which still targets gitops' removed
+// upload endpoints and is pending migration (see TODO in pull_and_deploy.go).
 func createFastAPIZip(imageHash string) (string, string, error) {
 	// Find the FastAPI example directory in bitswan-src
 	homeDir := os.Getenv("HOME")
@@ -358,6 +506,10 @@ func createFastAPIZip(imageHash string) (string, string, error) {
 	return zipPath, checksum, nil
 }
 
+// NOTE: No longer used by the init test. The workspace-mounted deploy flow lets
+// gitops compute checksums itself, so this is retained only for the legacy
+// pull-and-deploy test, which is pending migration (see TODO in pull_and_deploy.go).
+//
 // calculateGitTreeHash calculates the git tree hash of a directory
 // This implements git's tree object format
 func calculateGitTreeHash(dirPath string) (string, error) {
@@ -365,51 +517,51 @@ func calculateGitTreeHash(dirPath string) (string, error) {
 	if gitPath, err := exec.LookPath("git"); err == nil {
 		cmd := exec.Command(gitPath, "hash-object", "-t", "tree", "--stdin")
 		cmd.Dir = dirPath
-		
+
 		// Create a temporary git index
 		tmpDir, err := os.MkdirTemp("", "git-tree-hash-*")
 		if err != nil {
 			return "", err
 		}
 		defer os.RemoveAll(tmpDir)
-		
+
 		// Copy directory to temp location and use git
 		// Actually, let's use a simpler approach: use git hash-object on the directory
 		// But git hash-object doesn't work on directories directly
 		// So we need to implement it ourselves or use git write-tree
-		
+
 		// For now, let's implement a basic version
 	}
-	
+
 	// Implement git tree hash calculation
 	return calculateGitTreeHashRecursive(dirPath)
 }
 
 func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 	type entry struct {
-		mode string
-		name string
-		hash string
+		mode  string
+		name  string
+		hash  string
 		isDir bool
 	}
-	
+
 	var entries []entry
-	
+
 	// Read directory
 	files, err := os.ReadDir(dirPath)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Process each file/directory
 	for _, file := range files {
 		// Skip .git and hidden files
 		if strings.HasPrefix(file.Name(), ".") {
 			continue
 		}
-		
+
 		filePath := filepath.Join(dirPath, file.Name())
-		
+
 		if file.IsDir() {
 			// Recursively calculate tree hash for subdirectory
 			subHash, err := calculateGitTreeHashRecursive(filePath)
@@ -417,9 +569,9 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 				return "", err
 			}
 			entries = append(entries, entry{
-				mode: "040000",
-				name: file.Name(),
-				hash: subHash,
+				mode:  "040000",
+				name:  file.Name(),
+				hash:  subHash,
 				isDir: true,
 			})
 		} else {
@@ -428,7 +580,7 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			
+
 			// Determine file mode (executable or regular)
 			info, err := os.Stat(filePath)
 			if err != nil {
@@ -438,16 +590,16 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 			if info.Mode().Perm()&0111 != 0 {
 				mode = "100755" // executable
 			}
-			
+
 			entries = append(entries, entry{
-				mode: mode,
-				name: file.Name(),
-				hash: blobHash,
+				mode:  mode,
+				name:  file.Name(),
+				hash:  blobHash,
 				isDir: false,
 			})
 		}
 	}
-	
+
 	// Sort entries: directories first, then alphabetically
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].isDir != entries[j].isDir {
@@ -455,7 +607,7 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 		}
 		return entries[i].name < entries[j].name
 	})
-	
+
 	// Build tree object: "tree <size>\0<entries>"
 	var treeContent []byte
 	for _, e := range entries {
@@ -464,40 +616,43 @@ func calculateGitTreeHashRecursive(dirPath string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid hash: %w", err)
 		}
-		
+
 		entryStr := fmt.Sprintf("%s %s\000", e.mode, e.name)
 		treeContent = append(treeContent, []byte(entryStr)...)
 		treeContent = append(treeContent, hashBytes...)
 	}
-	
+
 	// Create tree header: "tree <size>\0"
 	treeHeader := fmt.Sprintf("tree %d\000", len(treeContent))
 	treeObject := append([]byte(treeHeader), treeContent...)
-	
+
 	// Calculate SHA1 hash
 	hasher := sha1.New()
 	hasher.Write(treeObject)
 	hash := hex.EncodeToString(hasher.Sum(nil))
-	
+
 	return hash, nil
 }
 
+// NOTE: No longer used by the init test; only reached via calculateGitTreeHash
+// from the legacy pull-and-deploy test (pending migration — see TODO in
+// pull_and_deploy.go).
 func calculateGitBlobHash(filePath string) (string, error) {
 	// Read file content
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Create blob: "blob <size>\0<content>"
 	blobHeader := fmt.Sprintf("blob %d\000", len(content))
 	blob := append([]byte(blobHeader), content...)
-	
+
 	// Calculate SHA1 hash
 	hasher := sha1.New()
 	hasher.Write(blob)
 	hash := hex.EncodeToString(hasher.Sum(nil))
-	
+
 	return hash, nil
 }
 
@@ -549,7 +704,7 @@ func waitForGitopsReady(gitopsURL, secret, workspaceName string) error {
 					// Use docker exec to curl from within the network
 					if attempt > 30 { // After 60 seconds, try direct connection
 						// Try to curl from within the container's network
-						curlCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", 
+						curlCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
 							"-H", fmt.Sprintf("Authorization: Bearer %s", secret),
 							"http://localhost:8079/automations")
 						if curlOutput, curlErr := curlCmd.Output(); curlErr == nil {
@@ -600,7 +755,7 @@ func waitForGitopsReady(gitopsURL, secret, workspaceName string) error {
 				// After many attempts, check if service is actually running but Caddy can't reach it
 				if attempt > 60 {
 					// Try direct connection to container
-					curlCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", 
+					curlCmd := exec.Command("docker", "exec", containerName, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
 						"-H", fmt.Sprintf("Authorization: Bearer %s", secret),
 						"http://localhost:8079/automations")
 					if curlOutput, curlErr := curlCmd.Output(); curlErr == nil {
@@ -695,9 +850,9 @@ func buildAutomationImage(gitopsURL, secret, workspaceName, imageName, checksum 
 	if homeDir == "" {
 		return "", fmt.Errorf("HOME environment variable not set")
 	}
-	
+
 	fastAPIDir := filepath.Join(homeDir, ".config", "bitswan", "bitswan-src", "examples", "FastAPIApp")
-	
+
 	// Check if directory exists
 	if _, err := os.Stat(fastAPIDir); os.IsNotExist(err) {
 		return "", fmt.Errorf("FastAPI example directory not found at %s. Ensure workspace init has created bitswan-src", fastAPIDir)
@@ -981,12 +1136,12 @@ func waitForDeployment(gitopsURL, secret, workspaceName, deploymentID string) (s
 		// Use /automations/ with trailing slash to avoid 307 redirect that loses Authorization header
 		reqURL := fmt.Sprintf("%s/automations/", gitopsURL)
 		reqURL = automations.TransformURLForDaemon(reqURL, workspaceName)
-		
+
 		// Log the request details
 		if attempt%5 == 0 || attempt < 3 {
 			fmt.Printf("  [Attempt %d/%d] GET %s\n", attempt+1, maxAttempts, reqURL)
 		}
-		
+
 		req, err := httpReq.NewRequest("GET", reqURL, nil)
 		if err != nil {
 			if attempt%5 == 0 || attempt < 3 {
@@ -1097,17 +1252,17 @@ func waitForDeployment(gitopsURL, secret, workspaceName, deploymentID string) (s
 						fmt.Printf("  Automation '%s' not found in list (attempt %d/%d, found %d automations)\n", deploymentID, attempt+1, maxAttempts, len(automations))
 					}
 				}
-				} else {
-					// Log parse errors more frequently
-					if attempt%10 == 0 {
-						fmt.Printf("  Failed to parse automations response (attempt %d/%d): %v\n", attempt+1, maxAttempts, err)
-						bodyPreview := string(bodyBytes)
-						if len(bodyPreview) > 500 {
-							bodyPreview = bodyPreview[:500]
-						}
-						fmt.Printf("  Response body (first 500 chars): %s\n", bodyPreview)
+			} else {
+				// Log parse errors more frequently
+				if attempt%10 == 0 {
+					fmt.Printf("  Failed to parse automations response (attempt %d/%d): %v\n", attempt+1, maxAttempts, err)
+					bodyPreview := string(bodyBytes)
+					if len(bodyPreview) > 500 {
+						bodyPreview = bodyPreview[:500]
 					}
+					fmt.Printf("  Response body (first 500 chars): %s\n", bodyPreview)
 				}
+			}
 		} else {
 			// Log non-200 responses
 			bodyBytes, _ := io.ReadAll(resp.Body)
@@ -1194,4 +1349,3 @@ func cleanupWorkspace(workspaceName string) error {
 
 	return client.WorkspaceRemove(workspaceName)
 }
-
