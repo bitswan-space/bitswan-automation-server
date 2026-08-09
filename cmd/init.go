@@ -22,6 +22,7 @@ type initOptions struct {
 	gitopsImage        string
 	editorImage        string
 	dashboardImage     string
+	codingAgentImage   string
 	gitopsDevSourceDir    string
 	editorDevSourceDir    string
 	dashboardDevSourceDir string
@@ -72,6 +73,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&o.gitopsImage, "gitops-image", "", "Custom image for the gitops")
 	cmd.Flags().StringVar(&o.editorImage, "editor-image", "", "Custom image for the editor")
 	cmd.Flags().StringVar(&o.dashboardImage, "dashboard-image", "", "Custom image for the workspace-dashboard")
+	cmd.Flags().StringVar(&o.codingAgentImage, "coding-agent-image", "", "Custom image for the coding-agent")
 	cmd.Flags().StringVar(&o.gitopsDevSourceDir, "gitops-dev-source-dir", "", "Directory to mount as /src/app in gitops container for development")
 	cmd.Flags().StringVar(&o.editorDevSourceDir, "editor-dev-source-dir", "", "Directory to mount as /opt/bitswan-extension-dev in editor container for development")
 	cmd.Flags().StringVar(&o.dashboardDevSourceDir, "dashboard-dev-source-dir", "", "Directory to mount as /workspace/dashboard-src in the workspace-dashboard container for hot-reload development")
